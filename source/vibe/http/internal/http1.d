@@ -33,7 +33,7 @@ import std.string;
 import std.encoding : sanitize;
 import std.traits : isInstanceOf, ReturnType;
 
-private alias TLSStreamType = ReturnType!(createTLSStreamFL!(InterfaceProxy!Stream)); 
+private alias TLSStreamType = ReturnType!(createTLSStreamFL!(InterfaceProxy!Stream));
 
 void handleHTTP1Connection(ConnectionStream)(ConnectionStream connection, HTTPServerContext context)
 @safe	if (isConnectionStream!ConnectionStream)
@@ -87,10 +87,17 @@ private void handleHTTP1Request(ConnectionStream)(ConnectionStream connection, H
 	// NOTE: this requires that connection has no scoped destruction
 	// Currently vibe-d/vibe-core mantains the destructor,
 	// which prevents the closure from being built
-	connection.waitForDataAsync( (bool st) @safe {
-			if (!st) connection.close;
-			else runTask(&handleHTTP1Request, connection, context);
-		});
+	WaitForDataAsyncStatus async_st;
+	do {
+		async_st = connection.waitForDataAsync( (bool st) @safe {
+				if (!st) connection.close;
+				else runTask(&handleHTTP1Request, connection, context);
+			});
+		if (async_st == WaitForDataAsyncStatus.dataAvailable)
+			runTask(&handleHTTP1Request, connection, context);
+		else if(async_st == WaitForDataAsyncStatus.noMoreData)
+			connection.close;
+	} while (async_st == WaitForDataAsyncStatus.dataAvailable);
 }
 
 /* Previous vibe.http handleRequest
