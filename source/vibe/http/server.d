@@ -74,23 +74,23 @@ else version = HaveNoTLS;
 		used afterwards to start listening again.
 */
 import vibe.http.router;
-HTTPListener listenHTTP(alias Handler)(HTTPServerSettings settings = null)
+HTTPListener listenHTTP(alias Handler)(HTTPServerSettings settings)
 	if (is(typeof(Handler) == URLRouter) || is(typeof(Handler) : HTTPServerRequestHandler))
 {
-	if (!settings)
-		settings = new HTTPServerSettings;
+	//if (!settings)
+		//settings = HTTPServerSettings;
 	return listenHTTPPlain(settings, (req, res) @trusted => Handler.handleRequest(req, res));
 }
 
 import std.traits;
 import std.typetuple;
-HTTPListener listenHTTP(alias Handler)(HTTPServerSettings settings = null)
+HTTPListener listenHTTP(alias Handler)(HTTPServerSettings settings)
 	if ((isCallable!Handler)
 		&& is(ReturnType!Handler == void)
 		&& is(ParameterTypeTuple!Handler == TypeTuple!(HTTPServerRequest, HTTPServerResponse)))
 {
-	if (!settings)
-		settings = new HTTPServerSettings;
+	//if (!settings)
+	//settings = HTTPServerSettings;
 	return listenHTTPPlain(settings, (req, res) @trusted => Handler(req, res));
 }
 
@@ -101,12 +101,12 @@ HTTPListener listenHTTP(H)(HTTPServerSettings settings, H handler)
 
 HTTPListener listenHTTP(H)(string bind_string, H handler)
 {
-	auto settings = new HTTPServerSettings(bind_string);
+	auto settings = HTTPServerSettings(bind_string);
 	return listenHTTP!handler(settings);
 }
 
-
-//HTTPListener listenHTTP(Settings, alias Handler)(Settings settings,
+/* Testing listenHTTP
+ */
 unittest
 {
 	void test()
@@ -128,6 +128,34 @@ unittest
 		//listenHTTP(":8080", (scope req, scope res) {}); // fails on parameter type tuple
 	}
 }
+
+unittest {
+	import vibe.http.router;
+
+	void test()
+	{
+		auto router = new URLRouter;
+		router.get("/old_url", staticRedirect("http://example.org/new_url", HTTPStatus.movedPermanently));
+		HTTPServerSettings settings;
+		listenHTTP!router(settings);
+	}
+}
+
+unittest {
+	// testing a callable as request handler
+	void handleRequest (HTTPServerRequest req, HTTPServerResponse res)
+	@safe {
+		if (req.path == "/")
+		res.writeBody("Hello, World! Delegate");
+	}
+
+	auto settings = HTTPServerSettings();
+	settings.port = 8060;
+	settings.bindAddresses = ["localhost"];
+
+	listenHTTP!handleRequest(settings);
+}
+
 
 
 /**
@@ -155,18 +183,6 @@ HTTPServerRequestDelegate staticRedirect(URL url, HTTPStatus status = HTTPStatus
 }
 
 ///
-unittest {
-	import vibe.http.router;
-
-	void test()
-	{
-		auto router = new URLRouter;
-		router.get("/old_url", staticRedirect("http://example.org/new_url", HTTPStatus.movedPermanently));
-
-		listenHTTP!router(new HTTPServerSettings);
-	}
-}
-
 
 /**
 	Sets a VibeDist host to register with.
@@ -334,7 +350,7 @@ HTTPServerResponse createTestHTTPServerResponse(OutputStream data_sink = null, S
 
 	HTTPServerSettings settings;
 	if (session_store) {
-		settings = new HTTPServerSettings;
+		//settings = HTTPServerSettings;
 		settings.sessionStore = session_store;
 	}
 	if (!data_sink) data_sink = new NullOutputStream;
@@ -364,7 +380,7 @@ alias HTTPServerRequestFunction = void function(HTTPServerRequest req, HTTPServe
 
 
 /// Aggregates all information about an HTTP error status.
-final class HTTPServerErrorInfo {
+struct HTTPServerErrorInfo {
 	/// The HTTP status code
 	int code;
 	/// The error message
@@ -471,7 +487,7 @@ struct HTTPServerOption {
 
 	The defaults are sufficient for most normal uses.
 */
-final class HTTPServerSettings {
+struct HTTPServerSettings {
 	/** The port on which the HTTP server is listening.
 
 		The default value is 80. If you are running a TLS enabled server you may want to set this
@@ -576,7 +592,8 @@ final class HTTPServerSettings {
 	/// Returns a duplicate of the settings object.
 	@property HTTPServerSettings dup()
 	@safe {
-		auto ret = new HTTPServerSettings;
+		//auto ret = HTTPServerSettings;
+		HTTPServerSettings ret;
 		foreach (mem; __traits(allMembers, HTTPServerSettings)) {
 			static if (mem == "sslContext") {}
 			else static if (mem == "bindAddresses") ret.bindAddresses = bindAddresses.dup;
@@ -609,7 +626,7 @@ final class HTTPServerSettings {
 
 	/** Constructs a new settings object with default values.
 	*/
-	this() @safe {}
+	//this() @safe {}
 
 	/** Constructs a new settings object with a custom bind interface and/or port.
 
@@ -622,7 +639,7 @@ final class HTTPServerSettings {
 	*/
 	this(string bind_string)
 	@safe {
-		this();
+		//this();
 
 		if (bind_string.startsWith('[')) {
 			auto idx = bind_string.indexOf(']');
@@ -645,15 +662,15 @@ final class HTTPServerSettings {
 
 	///
 	unittest {
-		auto s = new HTTPServerSettings(":8080");
+		auto s = HTTPServerSettings(":8080");
 		assert(s.bindAddresses == ["::", "0.0.0.0"]); // default bind addresses
 		assert(s.port == 8080);
 
-		s = new HTTPServerSettings("123.123.123.123");
+		s = HTTPServerSettings("123.123.123.123");
 		assert(s.bindAddresses == ["123.123.123.123"]);
 		assert(s.port == 80);
 
-		s = new HTTPServerSettings("[::1]:443");
+		s = HTTPServerSettings("[::1]:443");
 		assert(s.bindAddresses == ["::1"]);
 		assert(s.port == 443);
 	}
@@ -1413,28 +1430,13 @@ unittest{
 		}
 	}
 
-	auto settings = new HTTPServerSettings();
+	auto settings = HTTPServerSettings();
 	settings.port = 8050;
 	settings.bindAddresses = ["localhost"];
 
 	MyReqHandler mrh = new MyReqHandler;
 
 	listenHTTP!mrh(settings);
-}
-
-unittest {
-	// testing a callable as request handler
-	void handleRequest (HTTPServerRequest req, HTTPServerResponse res)
-	@safe {
-		if (req.path == "/")
-		res.writeBody("Hello, World! Delegate");
-	}
-
-	auto settings = new HTTPServerSettings();
-	settings.port = 8060;
-	settings.bindAddresses = ["localhost"];
-
-	listenHTTP!handleRequest(settings);
 }
 
 unittest {
@@ -1445,7 +1447,7 @@ unittest {
 		res.writeBody("Hello, World! Delegate");
 	}
 
-	auto settings = new HTTPServerSettings();
+	auto settings = HTTPServerSettings();
 	settings.port = 8070;
 	settings.bindAddresses = ["localhost"];
 	settings.tlsContext = createTLSContext(TLSContextKind.server);
@@ -2217,7 +2219,8 @@ struct HTTPServerResponseData {
 			{
 				auto router = new URLRouter;
 				router.get("/old_url", &request_handler);
-				listenHTTP!router(new HTTPServerSettings);
+				HTTPServerSettings settings;
+				listenHTTP!router(settings);
 			}
 		}
 

@@ -103,7 +103,7 @@ private void handleHTTP1Request(ConnectionStream)(ConnectionStream connection, H
 /* Previous vibe.http handleRequest
  * Gets called by handleHTTP1Request
  */
-bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnection tcp_connection, HTTPServerContext listen_info, ref HTTPServerSettings settings, ref bool keep_alive, scope IAllocator request_allocator)
+bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnection tcp_connection, HTTPServerContext listen_info, HTTPServerSettings settings, ref bool keep_alive, scope IAllocator request_allocator)
 @safe {
 
 	logInfo ("Old request handler");
@@ -163,8 +163,9 @@ bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnection tcp_
 		debug_msg = sanitizeUTF8(cast(const(ubyte)[])debug_msg);
 
 		res.setStatusCode(code);
-		if (settings && settings.errorPageHandler) {
-			/*scope*/ auto err = new HTTPServerErrorInfo;
+		if (settings.errorPageHandler) {
+			//[>scope<] auto err = new HTTPServerErrorInfo;
+            HTTPServerErrorInfo err;
 			err.code = code;
 			err.message = msg;
 			err.debugMessage = debug_msg;

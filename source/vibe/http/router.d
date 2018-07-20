@@ -313,7 +313,7 @@ final class URLRouter : HTTPServerRequestHandler {
 	//void auth(HTTPServerRequest req, HTTPServerResponse res)
 	//{
 		//// TODO: check req.session to see if a user is logged in and
-		////       write an error page or throw an exception instead.
+		////	   write an error page or throw an exception instead.
 	//}
 
 	//void setup()
@@ -391,7 +391,8 @@ final class URLRouter : HTTPServerRequestHandler {
 		// /component1/users/:user -> showComponentUser
 
 		// Start the HTTP server
-		auto settings = new HTTPServerSettings;
+		//auto settings = HTTPServerSettings;
+		HTTPServerSettings settings;
 		// ...
 		//listenHTTP(settings, mainrouter);
 
@@ -502,7 +503,7 @@ final class URLRouter : HTTPServerRequestHandler {
 
 	assert(ensureMatch("/foo bar/", "/foo%20bar/") is null);   // normalized pattern: "/foo%20bar/"
 	//assert(ensureMatch("/foo%20bar/", "/foo%20bar/") is null); // normalized pattern: "/foo%20bar/"
-	assert(ensureMatch("/foo/bar/", "/foo/bar/") is null);     // normalized pattern: "/foo/bar/"
+	assert(ensureMatch("/foo/bar/", "/foo/bar/") is null);	 // normalized pattern: "/foo/bar/"
 	//assert(ensureMatch("/foo/bar/", "/foo%2fbar/") !is null);
 	//assert(ensureMatch("/foo%2fbar/", "/foo%2fbar/") is null); // normalized pattern: "/foo%2Fbar/"
 	//assert(ensureMatch("/foo%2Fbar/", "/foo%2fbar/") is null); // normalized pattern: "/foo%2Fbar/"
@@ -639,8 +640,8 @@ private struct MatchTree(T) {
 
 			void printRange(uint node, ubyte from, ubyte to)
 			{
-				if (to - from <= 10) logInfo("    %s -> %s", iota(from, cast(uint)to+1).map!(ch => mapChar(cast(ubyte)ch)).join("|"), node);
-				else logInfo("    %s-%s -> %s", mapChar(from), mapChar(to), node);
+				if (to - from <= 10) logInfo("	%s -> %s", iota(from, cast(uint)to+1).map!(ch => mapChar(cast(ubyte)ch)).join("|"), node);
+				else logInfo("	%s-%s -> %s", mapChar(from), mapChar(to), node);
 			}
 
 			auto last_to = NodeIndex.max;
@@ -1055,7 +1056,7 @@ private struct MatchGraphBuilder {
 					foreach (tn; m_edgeEntries.getItems(list))
 						targets ~= format(" %s", tn);
 					if (targets.length > 0)
-						logInfo("    [%s ... %s] -> %s", mapChar(first_char), mapChar(last_char), targets);
+						logInfo("	[%s ... %s] -> %s", mapChar(first_char), mapChar(last_char), targets);
 				}
 			}
 			foreach (ch, tnodes; n.edges) {
@@ -1172,7 +1173,7 @@ struct LinkedSetBacking(T) {
 	size_t getHash(Handle sh)
 	const {
 		// NOTE: the returned hash is order independent, to avoid bogus
-		//       mismatches when comparing lists of different order
+		//	   mismatches when comparing lists of different order
 		size_t ret = 0x72d2da6c;
 		while (sh != Handle.init) {
 			ret ^= (hashOf(m_storage[sh.index].value) ^ 0xb1bdfb8d) * 0x5dbf04a4;
