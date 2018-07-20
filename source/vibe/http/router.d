@@ -247,7 +247,7 @@ final class URLRouter : HTTPServerRequestHandler {
 		static if (
 				is(Handler : HTTPServerRequestDelegate) ||
 				is(Handler : HTTPServerRequestFunction) ||
-				is(Handler : HTTPServerRequestHandler) 
+				is(Handler : HTTPServerRequestHandler)
 				//is(Handler : HTTPServerRequestDelegateS) ||
 				//is(Handler : HTTPServerRequestFunctionS) ||
 				//is(Handler : HTTPServerRequestHandlerS)
@@ -319,7 +319,7 @@ final class URLRouter : HTTPServerRequestHandler {
 	//void setup()
 	//{
 		//auto router = new URLRouter;
-		//// Matches all GET requests for /users[>/groups/* and places
+		//// Matches all GET requests for /users[>/groups[> and places
 		//// the place holders in req.params as 'username' and 'groupname'.
 		//router.get("/users/:username/groups/:groupname", &addGroup);
 

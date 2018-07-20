@@ -94,27 +94,40 @@ HTTPListener listenHTTP(alias Handler)(HTTPServerSettings settings = null)
     return listenHTTPPlain(settings, (req, res) @trusted => Handler(req, res));
 }
 
-//unittest
-//{
-    //void test()
-    //{
-        //static void testSafeFunction(HTTPServerRequest req, HTTPServerResponse res) @safe {}
-        //listenHTTP("0.0.0.0:8080", &testSafeFunction);
-        //listenHTTP(":8080", new class HTTPServerRequestHandler {
-            //void handleRequest(HTTPServerRequest req, HTTPServerResponse res) @safe {}
-        //});
-        //listenHTTP(":8080", (req, res) {});
+HTTPListener listenHTTP(H)(HTTPServerSettings settings, H handler)
+{
+	return listenHTTP!handler(settings);
+}
 
-        //static void testSafeFunctionS(scope HTTPServerRequest req, scope HTTPServerResponse res) @safe {}
-        //listenHTTP(":8080", &testSafeFunctionS);
-        //void testSafeDelegateS(scope HTTPServerRequest req, scope HTTPServerResponse res) @safe {}
-        //listenHTTP(":8080", &testSafeDelegateS);
-        //listenHTTP(":8080", new class HTTPServerRequestHandler {
-            //void handleRequest(scope HTTPServerRequest req, scope HTTPServerResponse res) @safe {}
-        //});
-        //listenHTTP(":8080", (scope req, scope res) {});
-    //}
-//}
+HTTPListener listenHTTP(H)(string bind_string, H handler)
+{
+	auto settings = new HTTPServerSettings(bind_string);
+	return listenHTTP!handler(settings);
+}
+
+
+//HTTPListener listenHTTP(Settings, alias Handler)(Settings settings,
+unittest
+{
+	void test()
+	{
+		static void testSafeFunction(HTTPServerRequest req, HTTPServerResponse res) @safe {}
+		listenHTTP("0.0.0.0:8080", &testSafeFunction);
+		listenHTTP(":8080", new class HTTPServerRequestHandler {
+			void handleRequest(HTTPServerRequest req, HTTPServerResponse res) @safe {}
+		});
+		//listenHTTP(":8080", (req, res) {}); // fails on parameter type tuple
+
+		static void testSafeFunctionS(scope HTTPServerRequest req, scope HTTPServerResponse res) @safe {}
+		listenHTTP(":8080", &testSafeFunctionS);
+		void testSafeDelegateS(scope HTTPServerRequest req, scope HTTPServerResponse res) @safe {}
+		listenHTTP(":8080", &testSafeDelegateS);
+		listenHTTP(":8080", new class HTTPServerRequestHandler {
+			void handleRequest(scope HTTPServerRequest req, scope HTTPServerResponse res) @safe {}
+		});
+		//listenHTTP(":8080", (scope req, scope res) {}); // fails on parameter type tuple
+	}
+}
 
 
 /**
@@ -522,7 +535,7 @@ final class HTTPServerSettings {
 		this.errorPageHandler = (req, res, err) @trusted { del(req, res, err); };
 	}
 
-	void handleErrorPage(HTTPServerRequest req, HTTPServerResponse res, HTTPServerErrorInfo err) 
+	void handleErrorPage(HTTPServerRequest req, HTTPServerResponse res, HTTPServerErrorInfo err)
     @safe {
         errorPageHandler_(req, res, err);
     }
@@ -774,10 +787,10 @@ struct HTTPServerRequest {
         @property void contentType(string ct)
         @safe { m_data.headers["Content-Type"] = ct; }
 
-        @property scope string contentTypeParameters() const 
+        @property scope string contentTypeParameters() const
         @safe { return m_data.contentTypeParameters; }
 
-        @property scope NetworkAddress clientAddress() const 
+        @property scope NetworkAddress clientAddress() const
         @safe { return m_data.clientAddress; }
 
         // ditto
@@ -868,7 +881,7 @@ struct HTTPServerResponse {
 		HTTPServerResponseData *data = new HTTPServerResponseData(conn, raw_connection, settings, req_alloc);
 		this(data);
 	}
-	
+
 	@property scope HTTPVersion httpVersion() { return m_data.httpVersion; }
 	@property void httpVersion(HTTPVersion h) { m_data.httpVersion = h; }
 
@@ -1337,7 +1350,7 @@ private HTTPListener listenHTTPPlain(HTTPServerSettings settings, HTTPServerRequ
 			if(reusePort) options |= TCPListenOptions.reusePort; else options &= ~TCPListenOptions.reusePort;
 			auto ret = listenTCP(listen_info.bindPort, (TCPConnection conn) nothrow @safe {
 					logInfo("ListenHTTP");
-					try { handleHTTP1Connection(conn, listen_info); 
+					try { handleHTTP1Connection(conn, listen_info);
 					} catch (Exception e) {
 						logError("HTTP connection handler has thrown: %s", e.msg);
 						debug logDebug("Full error: %s", () @trusted { return e.toString().sanitize(); } ());
@@ -1475,7 +1488,7 @@ struct HTTPServerRequestData {
 		InterfaceProxy!Stream m_conn;
 
 		/// The HTTP protocol version used for the request
-			
+
 		HTTPVersion httpVersion = HTTPVersion.HTTP_1_1;
 
 		/// The HTTP _method of the request
