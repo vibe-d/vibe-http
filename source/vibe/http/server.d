@@ -43,55 +43,55 @@ else version (Have_openssl) {}
 else version = HaveNoTLS;
 
 /**************************************************************************************************/
-/* Public functions                                                                               */
+/* Public functions																				  */
 /**************************************************************************************************/
 
 /**
-    Starts a HTTP server listening on the specified port.
+	Starts a HTTP server listening on the specified port.
 
-    request_handler will be called for each HTTP request that is made. The
-    res parameter of the callback then has to be filled with the response
-    data.
+	request_handler will be called for each HTTP request that is made. The
+	res parameter of the callback then has to be filled with the response
+	data.
 
-    request_handler can be either HTTPServerRequestDelegate/HTTPServerRequestFunction
-    or a class/struct with a member function 'handleRequest' that has the same
-    signature.
+	request_handler can be either HTTPServerRequestDelegate/HTTPServerRequestFunction
+	or a class/struct with a member function 'handleRequest' that has the same
+	signature.
 
-    Note that if the application has been started with the --disthost command line
-    switch, listenHTTP() will automatically listen on the specified VibeDist host
-    instead of locally. This allows for a seamless switch from single-host to
-    multi-host scenarios without changing the code. If you need to listen locally,
-    use listenHTTPPlain() instead.
+	Note that if the application has been started with the --disthost command line
+	switch, listenHTTP() will automatically listen on the specified VibeDist host
+	instead of locally. This allows for a seamless switch from single-host to
+	multi-host scenarios without changing the code. If you need to listen locally,
+	use listenHTTPPlain() instead.
 
-    Params:
-        settings = Customizes the HTTP servers functionality (host string or HTTPServerSettings object)
-        request_handler = This callback is invoked for each incoming request and is responsible
-            for generating the response.
+	Params:
+		settings = Customizes the HTTP servers functionality (host string or HTTPServerSettings object)
+		request_handler = This callback is invoked for each incoming request and is responsible
+			for generating the response.
 
-    Returns:
-        A handle is returned that can be used to stop listening for further HTTP
-        requests with the supplied settings. Another call to `listenHTTP` can be
-        used afterwards to start listening again.
+	Returns:
+		A handle is returned that can be used to stop listening for further HTTP
+		requests with the supplied settings. Another call to `listenHTTP` can be
+		used afterwards to start listening again.
 */
 import vibe.http.router;
 HTTPListener listenHTTP(alias Handler)(HTTPServerSettings settings = null)
-    if (is(typeof(Handler) == URLRouter) || is(typeof(Handler) : HTTPServerRequestHandler))
+	if (is(typeof(Handler) == URLRouter) || is(typeof(Handler) : HTTPServerRequestHandler))
 {
-    if (!settings)
-    	settings = new HTTPServerSettings;
+	if (!settings)
+		settings = new HTTPServerSettings;
 	return listenHTTPPlain(settings, (req, res) @trusted => Handler.handleRequest(req, res));
 }
 
 import std.traits;
 import std.typetuple;
 HTTPListener listenHTTP(alias Handler)(HTTPServerSettings settings = null)
-    if ((isCallable!Handler)
-        && is(ReturnType!Handler == void)
-        && is(ParameterTypeTuple!Handler == TypeTuple!(HTTPServerRequest, HTTPServerResponse)))
+	if ((isCallable!Handler)
+		&& is(ReturnType!Handler == void)
+		&& is(ParameterTypeTuple!Handler == TypeTuple!(HTTPServerRequest, HTTPServerResponse)))
 {
-    if (!settings)
-        settings = new HTTPServerSettings;
-    return listenHTTPPlain(settings, (req, res) @trusted => Handler(req, res));
+	if (!settings)
+		settings = new HTTPServerSettings;
+	return listenHTTPPlain(settings, (req, res) @trusted => Handler(req, res));
 }
 
 HTTPListener listenHTTP(H)(HTTPServerSettings settings, H handler)
@@ -131,171 +131,171 @@ unittest
 
 
 /**
-    Provides a HTTP request handler that responds with a static redirection to the specified URL.
+	Provides a HTTP request handler that responds with a static redirection to the specified URL.
 
-    Params:
-        url = The URL to redirect to
-        status = Redirection status to use $(LPAREN)by default this is $(D HTTPStatus.found)$(RPAREN).
+	Params:
+		url = The URL to redirect to
+		status = Redirection status to use $(LPAREN)by default this is $(D HTTPStatus.found)$(RPAREN).
 
-    Returns:
-        Returns a $(D HTTPServerRequestDelegate) that performs the redirect
+	Returns:
+		Returns a $(D HTTPServerRequestDelegate) that performs the redirect
 */
 HTTPServerRequestDelegate staticRedirect(string url, HTTPStatus status = HTTPStatus.found)
 @safe {
-    return (HTTPServerRequest req, HTTPServerResponse res){
-        res.redirect(url, status);
-    };
+	return (HTTPServerRequest req, HTTPServerResponse res){
+		res.redirect(url, status);
+	};
 }
 /// ditto
 HTTPServerRequestDelegate staticRedirect(URL url, HTTPStatus status = HTTPStatus.found)
 @safe {
-    return (HTTPServerRequest req, HTTPServerResponse res){
-        res.redirect(url, status);
-    };
+	return (HTTPServerRequest req, HTTPServerResponse res){
+		res.redirect(url, status);
+	};
 }
 
 ///
 unittest {
-    import vibe.http.router;
+	import vibe.http.router;
 
-    void test()
-    {
-        auto router = new URLRouter;
-        router.get("/old_url", staticRedirect("http://example.org/new_url", HTTPStatus.movedPermanently));
+	void test()
+	{
+		auto router = new URLRouter;
+		router.get("/old_url", staticRedirect("http://example.org/new_url", HTTPStatus.movedPermanently));
 
-        listenHTTP!router(new HTTPServerSettings);
-    }
+		listenHTTP!router(new HTTPServerSettings);
+	}
 }
 
 
 /**
-    Sets a VibeDist host to register with.
+	Sets a VibeDist host to register with.
 */
 void setVibeDistHost(string host, ushort port)
 @safe {
-    s_distHost = host;
-    s_distPort = port;
+	s_distHost = host;
+	s_distPort = port;
 }
 
 
 /**
-    Renders the given Diet template and makes all ALIASES available to the template.
+	Renders the given Diet template and makes all ALIASES available to the template.
 
-    You can call this function as a pseudo-member of `HTTPServerResponse` using
-    D's uniform function call syntax.
+	You can call this function as a pseudo-member of `HTTPServerResponse` using
+	D's uniform function call syntax.
 
-    See_also: `diet.html.compileHTMLDietFile`
+	See_also: `diet.html.compileHTMLDietFile`
 
-    Examples:
-        ---
-        string title = "Hello, World!";
-        int pageNumber = 1;
-        res.render!("mytemplate.dt", title, pageNumber);
-        ---
+	Examples:
+		---
+		string title = "Hello, World!";
+		int pageNumber = 1;
+		res.render!("mytemplate.dt", title, pageNumber);
+		---
 */
 @property void render(string template_file, ALIASES...)(HTTPServerResponse res)
 {
-    res.contentType = "text/html; charset=UTF-8";
-    version (VibeUseOldDiet)
-        pragma(msg, "VibeUseOldDiet is not supported anymore. Please undefine in the package recipe.");
-    import vibe.stream.wrapper : streamOutputRange;
-    import diet.html : compileHTMLDietFile;
-    auto output = streamOutputRange!1024(res.bodyWriter);
-    compileHTMLDietFile!(template_file, ALIASES, DefaultDietFilters)(output);
+	res.contentType = "text/html; charset=UTF-8";
+	version (VibeUseOldDiet)
+		pragma(msg, "VibeUseOldDiet is not supported anymore. Please undefine in the package recipe.");
+	import vibe.stream.wrapper : streamOutputRange;
+	import diet.html : compileHTMLDietFile;
+	auto output = streamOutputRange!1024(res.bodyWriter);
+	compileHTMLDietFile!(template_file, ALIASES, DefaultDietFilters)(output);
 }
 
 version (Have_diet_ng)
 {
-    import diet.traits;
+	import diet.traits;
 
-    /**
-        Provides the default `css`, `javascript`, `markdown` and `htmlescape` filters
-     */
-    @dietTraits
-    struct DefaultDietFilters {
-        import diet.html : HTMLOutputStyle;
-        import std.string : splitLines;
+	/**
+		Provides the default `css`, `javascript`, `markdown` and `htmlescape` filters
+	 */
+	@dietTraits
+	struct DefaultDietFilters {
+		import diet.html : HTMLOutputStyle;
+		import std.string : splitLines;
 
-        version (VibeOutputCompactHTML) enum HTMLOutputStyle htmlOutputStyle = HTMLOutputStyle.compact;
-        else enum HTMLOutputStyle htmlOutputStyle = HTMLOutputStyle.pretty;
+		version (VibeOutputCompactHTML) enum HTMLOutputStyle htmlOutputStyle = HTMLOutputStyle.compact;
+		else enum HTMLOutputStyle htmlOutputStyle = HTMLOutputStyle.pretty;
 
-        static string filterCss(I)(I text, size_t indent = 0)
-        {
-            auto lines = splitLines(text);
+		static string filterCss(I)(I text, size_t indent = 0)
+		{
+			auto lines = splitLines(text);
 
-            string indent_string = "\n";
-            while (indent-- > 0) indent_string ~= '\t';
+			string indent_string = "\n";
+			while (indent-- > 0) indent_string ~= '\t';
 
-            string ret = indent_string~"<style type=\"text/css\"><!--";
-            indent_string = indent_string ~ '\t';
-            foreach (ln; lines) ret ~= indent_string ~ ln;
-            indent_string = indent_string[0 .. $-1];
-            ret ~= indent_string ~ "--></style>";
+			string ret = indent_string~"<style type=\"text/css\"><!--";
+			indent_string = indent_string ~ '\t';
+			foreach (ln; lines) ret ~= indent_string ~ ln;
+			indent_string = indent_string[0 .. $-1];
+			ret ~= indent_string ~ "--></style>";
 
-            return ret;
-        }
+			return ret;
+		}
 
 
-        static string filterJavascript(I)(I text, size_t indent = 0)
-        {
-            auto lines = splitLines(text);
+		static string filterJavascript(I)(I text, size_t indent = 0)
+		{
+			auto lines = splitLines(text);
 
-            string indent_string = "\n";
-            while (indent-- > 0) indent_string ~= '\t';
+			string indent_string = "\n";
+			while (indent-- > 0) indent_string ~= '\t';
 
-            string ret = indent_string~"<script type=\"application/javascript\">";
-            ret ~= indent_string~'\t' ~ "//<![CDATA[";
-            foreach (ln; lines) ret ~= indent_string ~ '\t' ~ ln;
-            ret ~= indent_string ~ '\t' ~ "//]]>" ~ indent_string ~ "</script>";
+			string ret = indent_string~"<script type=\"application/javascript\">";
+			ret ~= indent_string~'\t' ~ "//<![CDATA[";
+			foreach (ln; lines) ret ~= indent_string ~ '\t' ~ ln;
+			ret ~= indent_string ~ '\t' ~ "//]]>" ~ indent_string ~ "</script>";
 
-            return ret;
-        }
+			return ret;
+		}
 
-        static string filterMarkdown(I)(I text)
-        {
-            import vibe.textfilter.markdown : markdown = filterMarkdown;
-            // TODO: indent
-            return markdown(text);
-        }
+		static string filterMarkdown(I)(I text)
+		{
+			import vibe.textfilter.markdown : markdown = filterMarkdown;
+			// TODO: indent
+			return markdown(text);
+		}
 
-        static string filterHtmlescape(I)(I text)
-        {
-            import vibe.textfilter.html : htmlEscape;
-            // TODO: indent
-            return htmlEscape(text);
-        }
+		static string filterHtmlescape(I)(I text)
+		{
+			import vibe.textfilter.html : htmlEscape;
+			// TODO: indent
+			return htmlEscape(text);
+		}
 
-        static this()
-        {
-            filters["css"] = (input, scope output) { output(filterCss(input)); };
-            filters["javascript"] = (input, scope output) { output(filterJavascript(input)); };
-            filters["markdown"] = (input, scope output) { output(filterMarkdown(() @trusted { return cast(string)input; } ())); };
-            filters["htmlescape"] = (input, scope output) { output(filterHtmlescape(input)); };
-        }
+		static this()
+		{
+			filters["css"] = (input, scope output) { output(filterCss(input)); };
+			filters["javascript"] = (input, scope output) { output(filterJavascript(input)); };
+			filters["markdown"] = (input, scope output) { output(filterMarkdown(() @trusted { return cast(string)input; } ())); };
+			filters["htmlescape"] = (input, scope output) { output(filterHtmlescape(input)); };
+		}
 
-        static SafeFilterCallback[string] filters;
-    }
+		static SafeFilterCallback[string] filters;
+	}
 
 
 	unittest {
-	    static string compile(string diet)() {
-	    	import std.array : appender;
-	    	import std.string : strip;
-	    	import diet.html : compileHTMLDietString;
-	    	auto dst = appender!string;
-	    	dst.compileHTMLDietString!(diet, DefaultDietFilters);
-	    	return strip(cast(string)(dst.data));
-	    }
+		static string compile(string diet)() {
+			import std.array : appender;
+			import std.string : strip;
+			import diet.html : compileHTMLDietString;
+			auto dst = appender!string;
+			dst.compileHTMLDietString!(diet, DefaultDietFilters);
+			return strip(cast(string)(dst.data));
+		}
 
-	    assert(compile!":css .test" == "<style type=\"text/css\"><!--\n\t.test\n--></style>");
-	    assert(compile!":javascript test();" == "<script type=\"application/javascript\">\n\t//<![CDATA[\n\ttest();\n\t//]]>\n</script>");
-	    assert(compile!":markdown **test**" == "<p><strong>test</strong>\n</p>");
-	    assert(compile!":htmlescape <test>" == "&lt;test&gt;");
-	    assert(compile!":css !{\".test\"}" == "<style type=\"text/css\"><!--\n\t.test\n--></style>");
-	    assert(compile!":javascript !{\"test();\"}" == "<script type=\"application/javascript\">\n\t//<![CDATA[\n\ttest();\n\t//]]>\n</script>");
-	    assert(compile!":markdown !{\"**test**\"}" == "<p><strong>test</strong>\n</p>");
-	    assert(compile!":htmlescape !{\"<test>\"}" == "&lt;test&gt;");
-	    assert(compile!":javascript\n\ttest();" == "<script type=\"application/javascript\">\n\t//<![CDATA[\n\ttest();\n\t//]]>\n</script>");
+		assert(compile!":css .test" == "<style type=\"text/css\"><!--\n\t.test\n--></style>");
+		assert(compile!":javascript test();" == "<script type=\"application/javascript\">\n\t//<![CDATA[\n\ttest();\n\t//]]>\n</script>");
+		assert(compile!":markdown **test**" == "<p><strong>test</strong>\n</p>");
+		assert(compile!":htmlescape <test>" == "&lt;test&gt;");
+		assert(compile!":css !{\".test\"}" == "<style type=\"text/css\"><!--\n\t.test\n--></style>");
+		assert(compile!":javascript !{\"test();\"}" == "<script type=\"application/javascript\">\n\t//<![CDATA[\n\ttest();\n\t//]]>\n</script>");
+		assert(compile!":markdown !{\"**test**\"}" == "<p><strong>test</strong>\n</p>");
+		assert(compile!":htmlescape !{\"<test>\"}" == "&lt;test&gt;");
+		assert(compile!":javascript\n\ttest();" == "<script type=\"application/javascript\">\n\t//<![CDATA[\n\ttest();\n\t//]]>\n</script>");
 	}
 }
 
@@ -326,8 +326,8 @@ HTTPServerRequest createTestHTTPServerRequest(URL url, HTTPMethod method, InetHe
 }
 
 /**
-      Creates a HTTPServerResponse suitable for writing unit tests.
-      */
+	  Creates a HTTPServerResponse suitable for writing unit tests.
+	  */
 HTTPServerResponse createTestHTTPServerResponse(OutputStream data_sink = null, SessionStore session_store = null)
 @safe {
 	import vibe.stream.wrapper;
@@ -345,7 +345,7 @@ HTTPServerResponse createTestHTTPServerResponse(OutputStream data_sink = null, S
 
 
 /**************************************************************************************************/
-/* Public types                                                                                   */
+/* Public types																					  */
 /**************************************************************************************************/
 
 /// Interface for class based request handlers
@@ -381,34 +381,34 @@ alias HTTPServerErrorPageHandler = void delegate(HTTPServerRequest req, HTTPServ
 
 
 private enum HTTPServerOptionImpl {
-	none                      = 0,
-	errorStackTraces          = 1<<7,
-	reusePort                 = 1<<8,
-	distribute                = 1<<9 // deprecated
+	none					  = 0,
+	errorStackTraces		  = 1<<7,
+	reusePort				  = 1<<8,
+	distribute				  = 1<<9 // deprecated
 }
 
 // TODO: Should be turned back into an enum once the deprecated symbols can be removed
 /**
-  	  Specifies optional features of the HTTP server.
+	  Specifies optional features of the HTTP server.
 
-  	  Disabling unneeded features can speed up the server or reduce its memory usage.
+	  Disabling unneeded features can speed up the server or reduce its memory usage.
 
-  	  Note that the options `parseFormBody`, `parseJsonBody` and `parseMultiPartBody`
-  	  will also drain the `HTTPServerRequest.bodyReader` stream whenever a request
-  	  body with form or JSON data is encountered.
+	  Note that the options `parseFormBody`, `parseJsonBody` and `parseMultiPartBody`
+	  will also drain the `HTTPServerRequest.bodyReader` stream whenever a request
+	  body with form or JSON data is encountered.
 */
 struct HTTPServerOption {
-	static enum none                      = HTTPServerOptionImpl.none;
+	static enum none					  = HTTPServerOptionImpl.none;
 	deprecated("This is done lazily. It will be removed in 0.9.")
-	static enum parseURL                  = none;
+	static enum parseURL				  = none;
 	deprecated("This is done lazily. It will be removed in 0.9.")
-	static enum parseQueryString          = none;
+	static enum parseQueryString		  = none;
 	deprecated("This is done lazily. It will be removed in 0.9.")
-	static enum parseFormBody             = none;
+	static enum parseFormBody			  = none;
 	deprecated("This is done lazily. It will be removed in 0.9.")
-	static enum parseJsonBody             = none;
+	static enum parseJsonBody			  = none;
 	deprecated("This is done lazily. It will be removed in 0.9.")
-	static enum parseMultiPartBody        = none;
+	static enum parseMultiPartBody		  = none;
 	/* Deprecated: Distributes request processing among worker threads
 
 		Note that this functionality assumes that the request handler
@@ -426,7 +426,7 @@ struct HTTPServerOption {
 		the same way in this scenario.
 	*/
 	deprecated("Use runWorkerTaskDist or start threads separately. It will be removed in 0.9.")
-	static enum distribute                = HTTPServerOptionImpl.distribute;
+	static enum distribute				  = HTTPServerOptionImpl.distribute;
 	/* Enables stack traces (`HTTPServerErrorInfo.debugMessage`).
 
 		Note that generating the stack traces are generally a costly
@@ -435,9 +435,9 @@ struct HTTPServerOption {
 		the application, such as function addresses, which can
 		help an attacker to abuse possible security holes.
 	*/
-	static enum errorStackTraces          = HTTPServerOptionImpl.errorStackTraces;
+	static enum errorStackTraces		  = HTTPServerOptionImpl.errorStackTraces;
 	/// Enable port reuse in `listenTCP()`
-	static enum reusePort                 = HTTPServerOptionImpl.reusePort;
+	static enum reusePort				  = HTTPServerOptionImpl.reusePort;
 
 	/* The default set of options.
 
@@ -536,14 +536,14 @@ final class HTTPServerSettings {
 	}
 
 	void handleErrorPage(HTTPServerRequest req, HTTPServerResponse res, HTTPServerErrorInfo err)
-    @safe {
-        errorPageHandler_(req, res, err);
-    }
+	@safe {
+		errorPageHandler_(req, res, err);
+	}
 
-    private HTTPServerErrorPageHandler errorPageHandler_ = null;
+	private HTTPServerErrorPageHandler errorPageHandler_ = null;
 
 	/// If set, a HTTPS server will be started instead of plain HTTP.
-    TLSContext tlsContext;
+	TLSContext tlsContext;
 
 	/// Session management is enabled if a session store instance is provided
 	SessionStore sessionStore;
@@ -700,21 +700,21 @@ enum SessionOption {
 
 
 /**
-    Represents a HTTP request as received by the server side.
+	Represents a HTTP request as received by the server side.
  */
 struct HTTPServerRequest {
-    private HTTPServerRequestData* m_data;
+	private HTTPServerRequestData* m_data;
 
-    this (HTTPServerRequestData* data)
-    @safe {
-        m_data = data;
-    }
+	this (HTTPServerRequestData* data)
+	@safe {
+		m_data = data;
+	}
 
-    this (SysTime reqtime, ushort bindPort)
-    @safe {
-        auto data = new HTTPServerRequestData(reqtime, bindPort);
-        () @trusted { m_data = data; } ();
-    }
+	this (SysTime reqtime, ushort bindPort)
+	@safe {
+		auto data = new HTTPServerRequestData(reqtime, bindPort);
+		() @trusted { m_data = data; } ();
+	}
 
 	package {
 		@property scope const(HTTPServerSettings) serverSettings()
@@ -723,137 +723,137 @@ struct HTTPServerRequest {
 		}
 	}
 
-    public {
+	public {
 		import vibe.utils.dictionarylist;
-        DictionaryList!(string, true, 8) params;
+		DictionaryList!(string, true, 8) params;
 
-        @property scope string requestURI() const @safe { return m_data.requestURI; }
+		@property scope string requestURI() const @safe { return m_data.requestURI; }
 
-        // ditto
-        @property void requestURI(string uri) @safe { m_data.requestURI = uri; }
+		// ditto
+		@property void requestURI(string uri) @safe { m_data.requestURI = uri; }
 
-        @property scope string peer() @safe { return m_data.peer; }
+		@property scope string peer() @safe { return m_data.peer; }
 
-        @property scope CookieValueMap cookies() @safe { return  m_data.cookies; }
+		@property scope CookieValueMap cookies() @safe { return	 m_data.cookies; }
 
-        @property scope FormFields query() @safe { return m_data.query; }
+		@property scope FormFields query() @safe { return m_data.query; }
 
-        @property scope Json json() @safe { return m_data.json; }
+		@property scope Json json() @safe { return m_data.json; }
 
-        @property scope FormFields form() @safe { return m_data.form; }
+		@property scope FormFields form() @safe { return m_data.form; }
 
-        @property scope FilePartFormFields files() @safe { return m_data.files; }
+		@property scope FilePartFormFields files() @safe { return m_data.files; }
 
-        @property scope SysTime timeCreated() const @safe { return m_data.timeCreated; }
+		@property scope SysTime timeCreated() const @safe { return m_data.timeCreated; }
 
-        @property scope URL fullURL() const @safe { return m_data.fullURL; }
+		@property scope URL fullURL() const @safe { return m_data.fullURL; }
 
-        @property scope string rootDir() const @safe { return m_data.rootDir; }
+		@property scope string rootDir() const @safe { return m_data.rootDir; }
 
-        @property scope string username() const @safe { return m_data.username; }
+		@property scope string username() const @safe { return m_data.username; }
 
-        // ditto
-        @property void username(string name)
-        @safe { m_data.username = name; }
+		// ditto
+		@property void username(string name)
+		@safe { m_data.username = name; }
 
-        @property scope string path() @safe { return m_data.path; }
+		@property scope string path() @safe { return m_data.path; }
 
-        @property scope InetHeaderMap headers() @safe { return m_data.headers; }
+		@property scope InetHeaderMap headers() @safe { return m_data.headers; }
 
-        @property scope bool persistent() const @safe { return m_data.persistent; }
+		@property scope bool persistent() const @safe { return m_data.persistent; }
 
-        @property scope string queryString() const @safe { return m_data.queryString; }
+		@property scope string queryString() const @safe { return m_data.queryString; }
 
-        // ditto
-        @property void queryString(string qstr)
-        @safe { m_data.queryString = qstr; }
+		// ditto
+		@property void queryString(string qstr)
+		@safe { m_data.queryString = qstr; }
 
-        @property scope string requestURL() const @safe { return m_data.requestURL; }
+		@property scope string requestURL() const @safe { return m_data.requestURL; }
 
-        @property scope HTTPVersion httpVersion() const @safe { return m_data.httpVersion; }
+		@property scope HTTPVersion httpVersion() const @safe { return m_data.httpVersion; }
 
-        // ditto
-        @property void httpVersion(HTTPVersion hver)
-        @safe { m_data.httpVersion = hver; }
+		// ditto
+		@property void httpVersion(HTTPVersion hver)
+		@safe { m_data.httpVersion = hver; }
 
-        @property scope string host() const @safe { return m_data.host; }
+		@property scope string host() const @safe { return m_data.host; }
 
-        // ditto
-        @property void host(string v) @safe { m_data.headers["Host"] = v; }
+		// ditto
+		@property void host(string v) @safe { m_data.headers["Host"] = v; }
 
-        @property scope string contentType() const @safe{ return m_data.contentType; }
+		@property scope string contentType() const @safe{ return m_data.contentType; }
 
-        // ditto
-        @property void contentType(string ct)
-        @safe { m_data.headers["Content-Type"] = ct; }
+		// ditto
+		@property void contentType(string ct)
+		@safe { m_data.headers["Content-Type"] = ct; }
 
-        @property scope string contentTypeParameters() const
-        @safe { return m_data.contentTypeParameters; }
+		@property scope string contentTypeParameters() const
+		@safe { return m_data.contentTypeParameters; }
 
-        @property scope NetworkAddress clientAddress() const
-        @safe { return m_data.clientAddress; }
+		@property scope NetworkAddress clientAddress() const
+		@safe { return m_data.clientAddress; }
 
-        // ditto
-        @property void clientAddress(NetworkAddress naddr)
-        @safe { m_data.clientAddress = naddr; }
+		// ditto
+		@property void clientAddress(NetworkAddress naddr)
+		@safe { m_data.clientAddress = naddr; }
 
-        @property scope bool tls() const @safe { return m_data.tls; }
+		@property scope bool tls() const @safe { return m_data.tls; }
 
-        // ditto
-        @property void tls(bool val)
-        @safe { m_data.tls = val; }
+		// ditto
+		@property void tls(bool val)
+		@safe { m_data.tls = val; }
 
-        @property scope HTTPMethod method() const @safe { return m_data.method; }
+		@property scope HTTPMethod method() const @safe { return m_data.method; }
 
-        // ditto
-        @property void method(HTTPMethod m) @safe { m_data.method = m; }
+		// ditto
+		@property void method(HTTPMethod m) @safe { m_data.method = m; }
 
-        @property scope HTTPServerSettings m_settings()
-        @safe { return m_data.m_settings; }
+		@property scope HTTPServerSettings m_settings()
+		@safe { return m_data.m_settings; }
 
-        // ditto
-        @property void m_settings(HTTPServerSettings settings)
-        @safe { m_data.m_settings = settings; }
+		// ditto
+		@property void m_settings(HTTPServerSettings settings)
+		@safe { m_data.m_settings = settings; }
 
 		@property scope InputStream bodyReader() @safe { return m_data.bodyReader; }
 
-        // ditto
-        @property void bodyReader(InputStream inStr)
-        @safe { m_data.bodyReader = inStr; }
+		// ditto
+		@property void bodyReader(InputStream inStr)
+		@safe { m_data.bodyReader = inStr; }
 
-        @property scope string password() const @safe{ return m_data.password; }
+		@property scope string password() const @safe{ return m_data.password; }
 
-        // ditto
-        @property void password(string pwd)
-        @safe{ m_data.password = pwd; }
+		// ditto
+		@property void password(string pwd)
+		@safe{ m_data.password = pwd; }
 
-        @property scope Session session() @safe { return m_data.session; }
+		@property scope Session session() @safe { return m_data.session; }
 
-        // ditto
-        @property void session(Session session)
-        @safe { m_data.session = session; }
+		// ditto
+		@property void session(Session session)
+		@safe { m_data.session = session; }
 
 
 		@property scope InetPath requestPath() const @safe { return m_data.requestPath; }
 
-        // ditto
+		// ditto
 		@property void requestPath(InetPath reqpath)
-        @safe { m_data.requestPath = reqpath; }
+		@safe { m_data.requestPath = reqpath; }
 
 		@property scope FilePartFormFields _files() @safe { return m_data._files; }
 
-        @property scope bool noLog() const @safe { return m_data.noLog; }
+		@property scope bool noLog() const @safe { return m_data.noLog; }
 
-        @property scope TLSCertificateInformation clientCertificate()
-        @safe {
-            return m_data.clientCertificate;
-        }
+		@property scope TLSCertificateInformation clientCertificate()
+		@safe {
+			return m_data.clientCertificate;
+		}
 
-        @property void clientCertificate(TLSCertificateInformation cert)
-        @safe {
-            m_data.clientCertificate = cert;
-        }
-    }
+		@property void clientCertificate(TLSCertificateInformation cert)
+		@safe {
+			m_data.clientCertificate = cert;
+		}
+	}
 }
 
 /**
@@ -862,12 +862,12 @@ struct HTTPServerRequest {
 struct HTTPServerResponse {
 	@safe:
 
-    private HTTPServerResponseData *m_data;
+	private HTTPServerResponseData *m_data;
 
-    this (HTTPServerResponseData *data)
-    {
-        m_data = data;
-    }
+	this (HTTPServerResponseData *data)
+	{
+		m_data = data;
+	}
 
 	static if (!is(Stream == InterfaceProxy!Stream)) {
 		this(Stream conn, ConnectionStream raw_connection, HTTPServerSettings settings, IAllocator req_alloc)
@@ -1149,7 +1149,7 @@ struct HTTPListener {
 				if (l.removeVirtualHost(vhid)) {
 					if (!l.hasVirtualHosts) {
 						l.stopListening();
-                        logInfo("Stopped to listen for HTTP%s requests on %s:%s", l.tlsContext ? "S": "", l.bindAddress, l.bindPort);
+						logInfo("Stopped to listen for HTTP%s requests on %s:%s", l.tlsContext ? "S": "", l.bindAddress, l.bindPort);
 						logInfo("Stopped to listen for HTTP%s requests on %s:%s", "", l.bindAddress, l.bindPort);
 						s_contexts = s_contexts[0 .. lidx] ~ s_contexts[lidx+1 .. $];
 					}
@@ -1162,13 +1162,13 @@ struct HTTPListener {
 
 /** Represents a single HTTP server port.
 
-    This class defines the incoming interface, port, and TLS configuration of
-    the public server port. The public server port may differ from the local
-    one if a reverse proxy of some kind is facing the public internet and
-    forwards to this HTTP server.
+	This class defines the incoming interface, port, and TLS configuration of
+	the public server port. The public server port may differ from the local
+	one if a reverse proxy of some kind is facing the public internet and
+	forwards to this HTTP server.
 
-    Multiple virtual hosts can be configured to be served from the same port.
-    Their TLS settings must be compatible and each virtual host must have a
+	Multiple virtual hosts can be configured to be served from the same port.
+	Their TLS settings must be compatible and each virtual host must have a
 */
 final class HTTPServerContext {
 	struct VirtualHost {
@@ -1183,7 +1183,7 @@ final class HTTPServerContext {
 		VirtualHost[] m_virtualHosts;
 		string m_bindAddress;
 		ushort m_bindPort;
-        TLSContext m_tlsContext;
+		TLSContext m_tlsContext;
 		static size_t s_vhostIDCounter = 1;
 	}
 
@@ -1203,7 +1203,7 @@ final class HTTPServerContext {
 		returned, which forwards to the individual contexts based on the
 		requested host name.
 	*/
-    @property TLSContext tlsContext() { return m_tlsContext; }
+	@property TLSContext tlsContext() { return m_tlsContext; }
 
 	/// The local network interface IP address associated with this listener
 	@property string bindAddress() const { return m_bindAddress; }
@@ -1214,8 +1214,8 @@ final class HTTPServerContext {
 	/// Determines if any virtual hosts have been addded
 	@property bool hasVirtualHosts() const { return m_virtualHosts.length > 0; }
 
-    /// Make m_virtualhosts visible
-    @property scope VirtualHost[] virtualHosts() { return m_virtualHosts; }
+	/// Make m_virtualhosts visible
+	@property scope VirtualHost[] virtualHosts() { return m_virtualHosts; }
 
 	/** Adds a single virtual host.
 
@@ -1241,18 +1241,18 @@ final class HTTPServerContext {
 		if (settings.accessLogFile.length)
 			vhost.loggers ~= new HTTPFileLogger(settings, settings.accessLogFormat, settings.accessLogFile);
 
-        if (!m_virtualHosts.length) m_tlsContext = settings.tlsContext;
+		if (!m_virtualHosts.length) m_tlsContext = settings.tlsContext;
 
-        enforce((m_tlsContext !is null) == (settings.tlsContext !is null),
-            "Cannot mix HTTP and HTTPS virtual hosts within the same listener.");
+		enforce((m_tlsContext !is null) == (settings.tlsContext !is null),
+			"Cannot mix HTTP and HTTPS virtual hosts within the same listener.");
 
-        if (m_tlsContext) addSNIHost(settings);
+		if (m_tlsContext) addSNIHost(settings);
 
 		m_virtualHosts ~= vhost;
 
 		if (settings.hostName.length) {
-            auto proto = settings.tlsContext ? "https" : "http";
-            auto port = settings.tlsContext && settings.port == 443 || !settings.tlsContext && settings.port == 80 ? "" : ":" ~ settings.port.to!string;
+			auto proto = settings.tlsContext ? "https" : "http";
+			auto port = settings.tlsContext && settings.port == 443 || !settings.tlsContext && settings.port == 80 ? "" : ":" ~ settings.port.to!string;
 			logInfo("Added virtual host %s://%s:%s/ (%s)", proto, settings.hostName, m_bindPort, m_bindAddress);
 		}
 
@@ -1277,37 +1277,37 @@ final class HTTPServerContext {
 		m_listener.stopListening();
 	}
 
-    private void addSNIHost(HTTPServerSettings settings)
-    {
-        if (settings.tlsContext !is m_tlsContext && m_tlsContext.kind != TLSContextKind.serverSNI) {
-            logDebug("Create SNI TLS context for %s, port %s", bindAddress, bindPort);
-            m_tlsContext = createTLSContext(TLSContextKind.serverSNI);
-            m_tlsContext.sniCallback = &onSNI;
-        }
+	private void addSNIHost(HTTPServerSettings settings)
+	{
+		if (settings.tlsContext !is m_tlsContext && m_tlsContext.kind != TLSContextKind.serverSNI) {
+			logDebug("Create SNI TLS context for %s, port %s", bindAddress, bindPort);
+			m_tlsContext = createTLSContext(TLSContextKind.serverSNI);
+			m_tlsContext.sniCallback = &onSNI;
+		}
 
-    }
+	}
 
-    private TLSContext onSNI(string servername)
-    {
-        foreach (vhost; m_virtualHosts)
-            if (vhost.settings.hostName.icmp(servername) == 0) {
-                logDebug("Found context for SNI host '%s'.", servername);
-                return vhost.settings.tlsContext;
-            }
-        logDebug("No context found for SNI host '%s'.", servername);
-        return null;
-    }
+	private TLSContext onSNI(string servername)
+	{
+		foreach (vhost; m_virtualHosts)
+			if (vhost.settings.hostName.icmp(servername) == 0) {
+				logDebug("Found context for SNI host '%s'.", servername);
+				return vhost.settings.tlsContext;
+			}
+		logDebug("No context found for SNI host '%s'.", servername);
+		return null;
+	}
 }
 
 
 /**************************************************************************************************/
-/* Private types                                                                                  */
+/* Private types																				  */
 /**************************************************************************************************/
 
 private enum MaxHTTPHeaderLineLength = 4096;
 
 /**************************************************************************************************/
-/* Private functions                                                                              */
+/* Private functions																			  */
 /**************************************************************************************************/
 
 private {
@@ -1363,7 +1363,7 @@ private HTTPListener listenHTTPPlain(HTTPServerSettings settings, HTTPServerRequ
 			if (listen_info.bindPort == 0)
 				listen_info.m_bindPort = ret.bindAddress.port;
 
-            auto proto = listen_info.tlsContext ? "https" : "http";
+			auto proto = listen_info.tlsContext ? "https" : "http";
 			auto urladdr = listen_info.bindAddress;
 			if (urladdr.canFind(':')) urladdr = "["~urladdr~"]";
 			logInfo("Listening for requests on %s://%s:%s/", proto, urladdr, listen_info.bindPort);
@@ -1402,57 +1402,57 @@ private HTTPListener listenHTTPPlain(HTTPServerSettings settings, HTTPServerRequ
 }
 
 unittest{
-    // testing a class that implements HTTPServerRequestHandler
+	// testing a class that implements HTTPServerRequestHandler
 
-    class MyReqHandler : HTTPServerRequestHandler
-    {
-        override void handleRequest(HTTPServerRequest req, HTTPServerResponse res)
-        @safe {
-            if (req.path == "/")
-            res.writeBody("Hello, World! Interface");
-        }
-    }
+	class MyReqHandler : HTTPServerRequestHandler
+	{
+		override void handleRequest(HTTPServerRequest req, HTTPServerResponse res)
+		@safe {
+			if (req.path == "/")
+			res.writeBody("Hello, World! Interface");
+		}
+	}
 
 	auto settings = new HTTPServerSettings();
 	settings.port = 8050;
 	settings.bindAddresses = ["localhost"];
 
-    MyReqHandler mrh = new MyReqHandler;
+	MyReqHandler mrh = new MyReqHandler;
 
-    listenHTTP!mrh(settings);
+	listenHTTP!mrh(settings);
 }
 
 unittest {
-    // testing a callable as request handler
-    void handleRequest (HTTPServerRequest req, HTTPServerResponse res)
-    @safe {
-        if (req.path == "/")
-        res.writeBody("Hello, World! Delegate");
-    }
+	// testing a callable as request handler
+	void handleRequest (HTTPServerRequest req, HTTPServerResponse res)
+	@safe {
+		if (req.path == "/")
+		res.writeBody("Hello, World! Delegate");
+	}
 
 	auto settings = new HTTPServerSettings();
 	settings.port = 8060;
 	settings.bindAddresses = ["localhost"];
 
-    listenHTTP!handleRequest(settings);
+	listenHTTP!handleRequest(settings);
 }
 
 unittest {
-    // testing HTTPS connections
-    void handleRequest (HTTPServerRequest req, HTTPServerResponse res)
-    @safe {
-        if (req.path == "/")
-        res.writeBody("Hello, World! Delegate");
-    }
+	// testing HTTPS connections
+	void handleRequest (HTTPServerRequest req, HTTPServerResponse res)
+	@safe {
+		if (req.path == "/")
+		res.writeBody("Hello, World! Delegate");
+	}
 
-    auto settings = new HTTPServerSettings();
-    settings.port = 8070;
-    settings.bindAddresses = ["localhost"];
-    settings.tlsContext = createTLSContext(TLSContextKind.server);
-    settings.tlsContext.useCertificateChainFile("test/dummy-server-cert.pem");
-    settings.tlsContext.usePrivateKeyFile("test/dummy-server-key.pem");
+	auto settings = new HTTPServerSettings();
+	settings.port = 8070;
+	settings.bindAddresses = ["localhost"];
+	settings.tlsContext = createTLSContext(TLSContextKind.server);
+	settings.tlsContext.useCertificateChainFile("test/dummy-server-cert.pem");
+	settings.tlsContext.usePrivateKeyFile("test/dummy-server-key.pem");
 
-    listenHTTP!handleRequest(settings);
+	listenHTTP!handleRequest(settings);
 }
 
 //// NOTE: just a possible idea for the low level api
@@ -1536,7 +1536,7 @@ struct HTTPServerRequestData {
 			Remarks: This field is only set if `tls` is true, and the peer
 			presented a client certificate.
 		*/
-        TLSCertificateInformation clientCertificate;
+		TLSCertificateInformation clientCertificate;
 
 		/* Deprecated: The _path part of the URL.
 
@@ -1820,7 +1820,7 @@ struct HTTPServerRequestData {
 			if (url.schema == "https") {
 				if (m_port != 443U) url.port = m_port;
 			} else {
-				if (m_port != 80U)  url.port = m_port;
+				if (m_port != 80U)	url.port = m_port;
 			}
 		}
 
@@ -1998,12 +1998,12 @@ struct HTTPServerResponseData {
 
 		/** Writes the whole response body at once, without doing any further encoding.
 
-		  	  The caller has to make sure that the appropriate headers are set correctly
-		  	  (i.e. Content-Type and Content-Encoding).
+			  The caller has to make sure that the appropriate headers are set correctly
+			  (i.e. Content-Type and Content-Encoding).
 
-		  	  Note that the version taking a RandomAccessStream may perform additional
-		  	  optimizations such as sending a file directly from the disk to the
-		  	  network card using a DMA transfer.
+			  Note that the version taking a RandomAccessStream may perform additional
+			  optimizations such as sending a file directly from the disk to the
+			  network card using a DMA transfer.
 
 		 */
 		void writeRawBody(RandomAccessStream)(RandomAccessStream stream) @safe
@@ -2105,12 +2105,12 @@ struct HTTPServerResponseData {
 		}
 
 		/**
-	 	 * Writes the response with no body.
-	 	 *
-	 	 * This method should be used in situations where no body is
-	 	 * requested, such as a HEAD request. For an empty body, just use writeBody,
-	 	 * as this method causes problems with some keep-alive connections.
-	 	 */
+		 * Writes the response with no body.
+		 *
+		 * This method should be used in situations where no body is
+		 * requested, such as a HEAD request. For an empty body, just use writeBody,
+		 * as this method causes problems with some keep-alive connections.
+		 */
 		void writeVoidBody()
 			@safe {
 				if (!m_isHeadResponse) {
@@ -2124,8 +2124,8 @@ struct HTTPServerResponseData {
 
 		/** A stream for writing the body of the HTTP response.
 
-		  	  Note that after 'bodyWriter' has been accessed for the first time, it
-		  	  is not allowed to change any header or the status code of the response.
+			  Note that after 'bodyWriter' has been accessed for the first time, it
+			  is not allowed to change any header or the status code of the response.
 		 */
 		@property InterfaceProxy!OutputStream bodyWriter()
 			@safe {
@@ -2478,7 +2478,7 @@ private void parseCookies(string str, ref CookieValueMap cookies)
 unittest
 {
 	  auto cvm = CookieValueMap();
-	  parseCookies("foo=bar;; baz=zinga; öö=üü   ;   møøse=was=sacked;    onlyval1; =onlyval2; onlykey=", cvm);
+	  parseCookies("foo=bar;; baz=zinga; öö=üü	 ;	 møøse=was=sacked;	onlyval1; =onlyval2; onlykey=", cvm);
 	  assert(cvm["foo"] == "bar");
 	  assert(cvm["baz"] == "zinga");
 	  assert(cvm["öö"] == "üü");
@@ -2501,7 +2501,7 @@ void parseRequestHeader(InputStream)(HTTPServerRequest reqStruct, InputStream ht
 	if (isInputStream!InputStream)
 {
 	auto stream = FreeListRef!LimitedHTTPInputStream(http_stream, max_header_size);
-    auto req = reqStruct.m_data;
+	auto req = reqStruct.m_data;
 
 	logTrace("HTTP server reading status line");
 	auto reqln = () @trusted { return cast(string)stream.readLine(MaxHTTPHeaderLineLength, "\r\n", alloc); }();
@@ -2536,9 +2536,9 @@ void parseRequestHeader(InputStream)(HTTPServerRequest reqStruct, InputStream ht
 
 string formatRFC822DateAlloc(IAllocator alloc, SysTime time)
 @safe {
-    auto app = AllocAppender!string(alloc);
-    writeRFC822DateTimeString(app, time);
-    return () @trusted { return app.data; } ();
+	auto app = AllocAppender!string(alloc);
+	writeRFC822DateTimeString(app, time);
+	return () @trusted { return app.data; } ();
 }
 
 version (VibeDebugCatchAll) alias UncaughtException = Throwable;

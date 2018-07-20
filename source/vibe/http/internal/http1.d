@@ -41,25 +41,25 @@ void handleHTTP1Connection(ConnectionStream)(ConnectionStream connection, HTTPSe
 	connection.tcpNoDelay = true;
 
 	logInfo("Connection");
-    version(HaveNoTLS) {} else {
-        TLSStreamType tls_stream;
-    }
+	version(HaveNoTLS) {} else {
+		TLSStreamType tls_stream;
+	}
 
 	// If this is a HTTPS server, initiate TLS
-    if (context.tlsContext) {
-        version (HaveNoTLS) assert(false, "No TLS support compiled in.");
-        else {
-            logDebug("Accept TLS connection: %s", context.tlsContext.kind);
+	if (context.tlsContext) {
+		version (HaveNoTLS) assert(false, "No TLS support compiled in.");
+		else {
+			logDebug("Accept TLS connection: %s", context.tlsContext.kind);
 
-            //TODO: determine if there's a better alternative to InterfaceProxy
-            InterfaceProxy!Stream http_stream;
-            http_stream = connection;
+			//TODO: determine if there's a better alternative to InterfaceProxy
+			InterfaceProxy!Stream http_stream;
+			http_stream = connection;
 
-            // TODO: reverse DNS lookup for peer_name of the incoming connection for TLS client certificate verification purposes
-            tls_stream = createTLSStreamFL(http_stream, context.tlsContext, TLSStreamState.accepting, null, connection.remoteAddress);
-            http_stream = tls_stream;
-        }
-    }
+			// TODO: reverse DNS lookup for peer_name of the incoming connection for TLS client certificate verification purposes
+			tls_stream = createTLSStreamFL(http_stream, context.tlsContext, TLSStreamState.accepting, null, connection.remoteAddress);
+			http_stream = tls_stream;
+		}
+	}
 	handleHTTP1Request(connection, context);
 }
 
@@ -113,7 +113,7 @@ bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnection tcp_
 
 	// some instances that live only while the request is running
 	//FreeListRef!HTTPServerRequest req = FreeListRef!HTTPServerRequest(reqtime, listen_info.bindPort);
-    auto req = HTTPServerRequest(reqtime, listen_info.bindPort);
+	auto req = HTTPServerRequest(reqtime, listen_info.bindPort);
 
 	FreeListRef!TimeoutHTTPInputStream timeout_http_input_stream;
 	FreeListRef!LimitedHTTPInputStream limited_http_input_stream;
@@ -139,17 +139,17 @@ bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnection tcp_
 	// Create the response object
 	InterfaceProxy!ConnectionStream cproxy = tcp_connection;
 	auto res = HTTPServerResponse(http_stream, cproxy, settings, request_allocator/*.Scoped_payload*/);
-    auto istls = listen_info.tlsContext !is null;
-    req.tls = istls;
-    res.tls = istls;
+	auto istls = listen_info.tlsContext !is null;
+	req.tls = istls;
+	res.tls = istls;
 
- 	if (req.tls) {
+	if (req.tls) {
 		version (HaveNoTLS) assert(false);
 		else {
 			static if (is(InterfaceProxy!ConnectionStream == ConnectionStream))
 				req.clientCertificate = (cast(TLSStream)http_stream).peerCertificate;
 			else
-                req.clientCertificate = http_stream.extract!TLSStreamType.peerCertificate;
+				req.clientCertificate = http_stream.extract!TLSStreamType.peerCertificate;
 				assert(false);
 		}
 	}
@@ -265,7 +265,7 @@ bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnection tcp_
 			}
 		}
 
-        // eagerly parse the URL as its lightweight and defacto @nogc
+		// eagerly parse the URL as its lightweight and defacto @nogc
 		auto url = URL.parse(req.requestURI);
 		req.queryString = url.queryString;
 		req.username = url.username;
@@ -382,7 +382,7 @@ final class TimeoutHTTPInputStream : InputStream {
 
 	@property bool empty() { enforce(m_in, "InputStream missing"); return m_in.empty(); }
 	@property ulong leastSize() { enforce(m_in, "InputStream missing"); return m_in.leastSize();  }
-	@property bool dataAvailableForRead() {  enforce(m_in, "InputStream missing"); return m_in.dataAvailableForRead; }
+	@property bool dataAvailableForRead() {	 enforce(m_in, "InputStream missing"); return m_in.dataAvailableForRead; }
 	const(ubyte)[] peek() { return m_in.peek(); }
 
 	size_t read(scope ubyte[] dst, IOMode mode)
