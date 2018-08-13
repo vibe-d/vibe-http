@@ -83,23 +83,34 @@ private void handleHTTP1Request(ConnectionStream)(ConnectionStream connection, H
 
 		if (!keep_alive) { connection.close; return; }
 	} ();
-
-	// NOTE: this requires that connection has no scoped destruction
-	// Currently vibe-d/vibe-core mantains the destructor,
-	// which prevents the closure from being built
-	WaitForDataAsyncStatus async_st;
-	do {
-		async_st = connection.waitForDataAsync( (bool st) @safe {
-				if (!st) connection.close;
-				else runTask(&handleHTTP1Request, connection, context);
-			});
-		if (async_st == WaitForDataAsyncStatus.dataAvailable)
-			runTask(&handleHTTP1Request, connection, context);
-		else if(async_st == WaitForDataAsyncStatus.noMoreData)
-			connection.close;
-	} while (async_st == WaitForDataAsyncStatus.dataAvailable);
+    
+    if(!connection.waitForData()) {
+        connection.close;
+        logWarn("Reached end of stream while reading.");
+    }
+    handleHTTP1RequestChain(connection, context);
 }
 
+void handleHTTP1RequestChain(ConnectionStream)(ConnectionStream connection, HTTPContext context)
+@safe
+{
+    while(true) {
+        // NOTE: this requires that connection has no scoped destruction
+        // Currently vibe-d/vibe-core mantains the destructor,
+        // which prevents the closure from being built
+        auto st = connection.waitForDataAsync( (bool st) @safe {
+                if (!st) connection.close;
+                else runTask(&handleHTTP1RequestChain, connection, context);
+            });
+
+        final switch(st) {
+            case WaitForDataAsyncStatus.waiting: return;
+            case WaitForDataAsyncStatus.noMoreData: connection.close; return;
+            case WaitForDataAsyncStatus.dataAvailable: handleHTTP1Request(connection, context); break;
+        }
+    }
+    
+}
 /* Previous vibe.http handleRequest
  * Gets called by handleHTTP1Request
  */
