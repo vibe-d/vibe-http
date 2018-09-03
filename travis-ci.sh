@@ -8,14 +8,14 @@ DUB_FLAGS=${DUB_FLAGS:-}
 grep -nrI --include='*.d' '\s$' . && (echo "Trailing whitespace found"; exit 1)
 
 # test for successful release build
-dub build -b release --compiler=$DC -c $CONFIG $DUB_FLAGS
+dub build -b release --compiler=$DC $DUB_FLAGS
 
 # test for successful 32-bit build
 if [ "$DC" == "dmd" ]; then
-	dub build --arch=x86 -c $CONFIG $DUB_FLAGS
+	dub build --arch=x86 $DUB_FLAGS
 fi
 
-dub test --compiler=$DC -c $CONFIG $DUB_FLAGS
+dub test --compiler=$DC $DUB_FLAGS
 
 if [ ${BUILD_EXAMPLE=1} -eq 1 ]; then
     for ex in $(\ls -1 examples/); do

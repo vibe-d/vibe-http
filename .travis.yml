@@ -1,0 +1,34 @@
+language: d
+
+d:
+  # order: latest DMD, oldest DMD, LDC/GDC, remaining DMD versions
+  # this way the overall test time gets cut down (GDC/LDC are a lot
+  # slower tham DMD, so they should be started early), while still
+  # catching most DMD version related build failures early
+  - dmd-2.082.0
+  - dmd-2.080.1
+  - ldc-1.11.0
+  - ldc-1.10.0
+  - dmd-2.081.2
+  - dmd-beta
+
+matrix:
+  allow_failures:
+    - d: dmd-beta
+  include:
+    - d: dmd
+      env: CONFIG='select' DUB_FLAGS='--build unittest-cov --build-mode=singleFile'
+
+
+before_install:
+  # Use the dub-updating fork of the installer script until https://github.com/dlang/installer/pull/301 is merged
+  - wget https://raw.githubusercontent.com/wilzbach/installer-dub/master/script/install.sh -O ~/dlang/install.dub.sh
+  - . $(bash ~/dlang/install.dub.sh -a dub)
+  - dub --version
+
+script: ./travis-ci.sh
+
+sudo: false
+
+after_success:
+ - bash <(curl -s https://codecov.io/bash)
