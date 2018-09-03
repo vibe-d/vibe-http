@@ -83,33 +83,33 @@ private void handleHTTP1Request(ConnectionStream)(ConnectionStream connection, H
 
 		if (!keep_alive) { connection.close; return; }
 	} ();
-    
-    if(!connection.waitForData()) {
-        connection.close;
-        logWarn("Reached end of stream while reading.");
-    }
-    handleHTTP1RequestChain(connection, context);
+
+	if(!connection.waitForData()) {
+		connection.close;
+		logWarn("Reached end of stream while reading.");
+	}
+	handleHTTP1RequestChain(connection, context);
 }
 
 void handleHTTP1RequestChain(ConnectionStream)(ConnectionStream connection, HTTPContext context)
 @safe
 {
-    while(true) {
-        // NOTE: this requires that connection has no scoped destruction
-        // Currently vibe-d/vibe-core mantains the destructor,
-        // which prevents the closure from being built
-        auto st = connection.waitForDataAsync( (bool st) @safe {
-                if (!st) connection.close;
-                else runTask(&handleHTTP1RequestChain, connection, context);
-            });
+	while(true) {
+		// NOTE: this requires that connection has no scoped destruction
+		// Currently vibe-d/vibe-core mantains the destructor,
+		// which prevents the closure from being built
+		auto st = connection.waitForDataAsync( (bool st) @safe {
+				if (!st) connection.close;
+				else runTask(&handleHTTP1RequestChain, connection, context);
+			});
 
-        final switch(st) {
-            case WaitForDataAsyncStatus.waiting: return;
-            case WaitForDataAsyncStatus.noMoreData: connection.close; return;
-            case WaitForDataAsyncStatus.dataAvailable: handleHTTP1Request(connection, context); break;
-        }
-    }
-    
+		final switch(st) {
+			case WaitForDataAsyncStatus.waiting: return;
+			case WaitForDataAsyncStatus.noMoreData: connection.close; return;
+			case WaitForDataAsyncStatus.dataAvailable: handleHTTP1Request(connection, context); break;
+		}
+	}
+
 }
 /* Previous vibe.http handleRequest
  * Gets called by handleHTTP1Request
@@ -176,7 +176,7 @@ bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnection tcp_
 		res.setStatusCode(code);
 		if (settings.errorPageHandler) {
 			//[>scope<] auto err = new HTTPServerErrorInfo;
-            HTTPServerErrorInfo err;
+			HTTPServerErrorInfo err;
 			err.code = code;
 			err.message = msg;
 			err.debugMessage = debug_msg;
