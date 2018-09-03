@@ -60,7 +60,34 @@ void handleHTTP1Connection(ConnectionStream)(ConnectionStream connection, HTTPSe
 			http_stream = tls_stream;
 		}
 	}
-	handleHTTP1Request(connection, context);
+	handleHTTP1RequestChain(connection, context);
+}
+
+private void handleHTTP1RequestChain(ConnectionStream)(ConnectionStream connection, HTTPContext context)
+@safe
+{
+	// copies connection/context instead of creating a heap closure
+	static struct CB {
+		ConnectionStream connection;
+		HTTPContext context;
+
+		void opCall(bool st)
+		{
+			if (!st) connection.close;
+			else runTask(&handleHTTP1RequestChain, connection, context);
+		}
+	}
+
+	while(true) {
+		CB cb = {connection, context};
+		auto st = connection.waitForDataAsync(cb);
+
+		final switch(st) {
+			case WaitForDataAsyncStatus.waiting: return;
+			case WaitForDataAsyncStatus.noMoreData: connection.close; return;
+			case WaitForDataAsyncStatus.dataAvailable: handleHTTP1Request(connection, context); break;
+		}
+	}
 }
 
 private void handleHTTP1Request(ConnectionStream)(ConnectionStream connection, HTTPContext context)
@@ -88,33 +115,13 @@ private void handleHTTP1Request(ConnectionStream)(ConnectionStream connection, H
 		connection.close;
 		logWarn("Reached end of stream while reading.");
 	}
-	handleHTTP1RequestChain(connection, context);
 }
 
-void handleHTTP1RequestChain(ConnectionStream)(ConnectionStream connection, HTTPContext context)
-@safe
-{
-	while(true) {
-		// NOTE: this requires that connection has no scoped destruction
-		// Currently vibe-d/vibe-core mantains the destructor,
-		// which prevents the closure from being built
-		auto st = connection.waitForDataAsync( (bool st) @safe {
-				if (!st) connection.close;
-				else runTask(&handleHTTP1RequestChain, connection, context);
-			});
 
-		final switch(st) {
-			case WaitForDataAsyncStatus.waiting: return;
-			case WaitForDataAsyncStatus.noMoreData: connection.close; return;
-			case WaitForDataAsyncStatus.dataAvailable: handleHTTP1Request(connection, context); break;
-		}
-	}
-
-}
 /* Previous vibe.http handleRequest
  * Gets called by handleHTTP1Request
  */
-bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnection tcp_connection, HTTPServerContext listen_info, HTTPServerSettings settings, ref bool keep_alive, scope IAllocator request_allocator)
+private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnection tcp_connection, HTTPServerContext listen_info, HTTPServerSettings settings, ref bool keep_alive, scope IAllocator request_allocator)
 @safe {
 
 	logInfo ("Old request handler");
