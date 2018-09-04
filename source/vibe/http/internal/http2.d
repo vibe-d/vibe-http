@@ -129,25 +129,25 @@ struct HTTP2Settings {
 
         @property HTTP2SettingValue enablePush() @safe      { return _enablePush.value; }
 
-        @property HTTP2SettingValue maxConcurrentStreams() @safe
-        {
+        @property HTTP2SettingValue maxConcurrentStreams()
+        @safe {
             return  _maxConcurrentStreams.value;
         }
 
-        @property HTTP2SettingValue initialWindowSize() @safe
-        {
+        @property HTTP2SettingValue initialWindowSize()
+        @safe {
             return _initialWindowSize.value;
         }
 
         @property HTTP2SettingValue maxFrameSize() @safe    { return _maxFrameSize.value; }
 
-        @property HTTP2SettingValue maxHeaderListSize() @safe
-        {
+        @property HTTP2SettingValue maxHeaderListSize()
+        @safe {
             return _maxHeaderListSize.value;
         }
 
-        @property void set(ushort code, uint val) @safe
-        {
+        @property void set(ushort code, uint val)
+        @safe {
             import std.stdio;
             static foreach(c; __traits(allMembers, HTTP2SettingsParameters)) {
                mixin("if (H2Params."~c~" == code) { _"~c~".value = val; }");
@@ -157,7 +157,8 @@ struct HTTP2Settings {
         /**
           * Convert a ushort request code to the corresponding string (see RFC)
           */
-        string toString(ushort code) @safe {
+        string toString(ushort code)
+        @safe {
             switch(code) {
                 case H2Params.headerTableSize:
                     return "SETTINGS_HEADER_TABLE_SIZE";
@@ -183,6 +184,9 @@ struct HTTP2Settings {
 
         settings.set(HTTP2SettingsParameters.headerTableSize, 2048);
         assert(settings.headerTableSize == 2048);
+
+        settings.set(0x4, 1024);
+        assert(settings.initialWindowSize == 1024);
 
         auto s = settings.toString(HTTP2SettingsParameters.enablePush);
         assert(s == "SETTINGS_ENABLE_PUSH");
