@@ -1451,8 +1451,8 @@ unittest {
 	settings.port = 8070;
 	settings.bindAddresses = ["localhost"];
 	settings.tlsContext = createTLSContext(TLSContextKind.server);
-	settings.tlsContext.useCertificateChainFile("test/dummy-server-cert.pem");
-	settings.tlsContext.usePrivateKeyFile("test/dummy-server-key.pem");
+	settings.tlsContext.useCertificateChainFile("tests/server.crt");
+	settings.tlsContext.usePrivateKeyFile("tests/server.key");
 
 	listenHTTP!handleRequest(settings);
 }

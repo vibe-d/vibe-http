@@ -11,4 +11,3 @@ struct HTTPHeaderValueTypes {
 }
 
 alias HTTPHeaderValue = TaggedAlgebraic!HTTPHeaderValueTypes;
-
