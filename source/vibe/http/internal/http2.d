@@ -85,8 +85,8 @@ import vibe.core.stream;
  *   An endpoint that receives a SETTINGS frame with any unknown or
  *   unsupported identifier MUST ignore that setting.
 */
-alias HTTP2SettingsID = ushort;
-alias HTTP2SettingsValue = uint;
+alias HTTP2SettingID = ushort;
+alias HTTP2SettingValue = uint;
 
 enum  HTTP2SettingsParameters {
     headerTableSize                 = 0x1,
@@ -99,52 +99,95 @@ enum  HTTP2SettingsParameters {
 
 
 struct HTTP2Settings {
+    private:
+        alias H2Params = HTTP2SettingsParameters;
 
-    alias H2Params = HTTP2SettingsParameters;
-
-    private struct Setting {
-        HTTP2SettingsID id;
-        HTTP2SettingsValue value;
-    }
-
-    Setting headerTableSize         = {H2Params.headerTableSize, 4096};
-
-    Setting enablePush              = {H2Params.enablePush, 1};
-
-    // UNLIMITED, 100 is the minimum recommended value (TODO discuss)
-    Setting maxConcurrentStreams    = {H2Params.maxConcurrentStreams, 100};
-
-    Setting initialWindowSize       = {H2Params.initialWindowSize, 65535};
-
-    Setting maxFrameSize            = {H2Params.maxFrameSize, 16384};
-
-    // UNLIMITED, (TODO discuss);
-    Setting maxHeaderListSize;
-
-    /**
-      * Convert a ushort request code to the corresponding string (see RFC)
-      */
-    string toString(uint code) {
-        switch(code) {
-            case H2Params.headerTableSize:
-                return "SETTINGS_HEADER_TABLE_SIZE";
-            case H2Params.enablePush:
-                return "SETTINGS_ENABLE_PUSH";
-            case H2Params.maxConcurrentStreams:
-                return "SETTINGS_MAX_CONCURRENT_STREAMS";
-            case H2Params.initialWindowSize:
-                return "SETTINGS_INITIAL_WINDOW_SIZE";
-            case H2Params.maxFrameSize:
-                return "SETTINGS_MAX_FRAME_SIZE";
-            case H2Params.maxHeaderListSize:
-                return "SETTINGS_MAX_HEADER_LIST_SIZE";
-            default:
-                // TODO error codes
-                assert(false, "Unrecognized SETTINGS code (TODO Errors)");
+        struct Setting {
+            HTTP2SettingID id;
+            HTTP2SettingValue value;
         }
+
+        Setting _headerTableSize         = {H2Params.headerTableSize, 4096};
+
+        Setting _enablePush              = {H2Params.enablePush, 1};
+
+        // UNLIMITED, 100 is the minimum recommended value (TODO discuss)
+        Setting _maxConcurrentStreams    = {H2Params.maxConcurrentStreams, 100};
+
+        Setting _initialWindowSize       = {H2Params.initialWindowSize, 65535};
+
+        Setting _maxFrameSize            = {H2Params.maxFrameSize, 16384};
+
+        // UNLIMITED, (TODO discuss);
+        Setting _maxHeaderListSize;
+
+    public:
+        /**
+          * Properties
+          */
+        @property HTTP2SettingValue headerTableSize() @safe { return _headerTableSize.value; }
+
+        @property HTTP2SettingValue enablePush() @safe      { return _enablePush.value; }
+
+        @property HTTP2SettingValue maxConcurrentStreams() @safe
+        {
+            return  _maxConcurrentStreams.value;
+        }
+
+        @property HTTP2SettingValue initialWindowSize() @safe
+        {
+            return _initialWindowSize.value;
+        }
+
+        @property HTTP2SettingValue maxFrameSize() @safe    { return _maxFrameSize.value; }
+
+        @property HTTP2SettingValue maxHeaderListSize() @safe
+        {
+            return _maxHeaderListSize.value;
+        }
+
+        @property void set(ushort code, uint val) @safe
+        {
+            import std.stdio;
+            static foreach(c; __traits(allMembers, HTTP2SettingsParameters)) {
+               mixin("if (H2Params."~c~" == code) { _"~c~".value = val; }");
+            }
+        }
+
+        /**
+          * Convert a ushort request code to the corresponding string (see RFC)
+          */
+        string toString(ushort code) @safe {
+            switch(code) {
+                case H2Params.headerTableSize:
+                    return "SETTINGS_HEADER_TABLE_SIZE";
+                case H2Params.enablePush:
+                    return "SETTINGS_ENABLE_PUSH";
+                case H2Params.maxConcurrentStreams:
+                    return "SETTINGS_MAX_CONCURRENT_STREAMS";
+                case H2Params.initialWindowSize:
+                    return "SETTINGS_INITIAL_WINDOW_SIZE";
+                case H2Params.maxFrameSize:
+                    return "SETTINGS_MAX_FRAME_SIZE";
+                case H2Params.maxHeaderListSize:
+                    return "SETTINGS_MAX_HEADER_LIST_SIZE";
+                default:
+                    // TODO error codes
+                    assert(false, "Unrecognized SETTINGS code (TODO Errors)");
+            }
+        }
+
+    unittest {
+        HTTP2Settings settings;
+        assert(settings.headerTableSize == 4096);
+
+        settings.set(HTTP2SettingsParameters.headerTableSize, 2048);
+        assert(settings.headerTableSize == 2048);
+
+        auto s = settings.toString(HTTP2SettingsParameters.enablePush);
+        assert(s == "SETTINGS_ENABLE_PUSH");
     }
 }
-
 
 
 private void handleHTTP2Connection(ConnectionStream)(ConnectionStream connection)
