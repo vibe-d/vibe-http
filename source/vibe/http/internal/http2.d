@@ -1,6 +1,5 @@
 module vibe.http.internal.http2;
 import vibe.core.stream;
-
 /*
  *  6.5.1.  SETTINGS Format
  *
@@ -9,7 +8,7 @@ import vibe.core.stream;
  *   unsigned 32-bit value.
  *
  *   +-------------------------------+
- *   |       Identifier (16)         |
+ *   |       IDentifier (16)         |
  *   +-------------------------------+-------------------------------+
  *   |                        Value (32)                             |
  *   +---------------------------------------------------------------+
@@ -88,7 +87,11 @@ import vibe.core.stream;
 alias HTTP2SettingID = ushort;
 alias HTTP2SettingValue = uint;
 
-enum  HTTP2SettingsParameters {
+// useful for bound checking
+const HTTP2SettingID minID = 0x1;
+const HTTP2SettingID maxID = 0x6;
+
+enum  HTTP2SettingsParameter {
     headerTableSize                 = 0x1,
     enablePush                      = 0x2,
     maxConcurrentStreams            = 0x3,
@@ -97,100 +100,77 @@ enum  HTTP2SettingsParameters {
     maxHeaderListSize               = 0x6
 }
 
+// UDAs
+struct HTTP2Setting {
+    HTTP2SettingID id;
+    string name;
+}
+
+// UDAs
+HTTP2Setting http2Setting(HTTP2SettingID id, string name) {
+    if (!__ctfe) assert(false, "May only be used as a UDA");
+    return HTTP2Setting(id, name);
+}
 
 struct HTTP2Settings {
-    private:
-        alias H2Params = HTTP2SettingsParameters;
 
-        struct Setting {
-            HTTP2SettingID id;
-            HTTP2SettingValue value;
-        }
+    @http2Setting(0x1, "SETTINGS_HEADER_TABLE_SIZE")
+    HTTP2SettingValue headerTableSize = 4096;
 
-        Setting _headerTableSize         = {H2Params.headerTableSize, 4096};
+    @http2Setting(0x2, "SETTINGS_ENABLE_PUSH")
+    HTTP2SettingValue enablePush = 1;
 
-        Setting _enablePush              = {H2Params.enablePush, 1};
+    // set to the max value (UNLIMITED)
+    @http2Setting(0x3, "SETTINGS_MAX_CONCURRENT_STREAMS")
+    HTTP2SettingValue maxConcurrentStreams = HTTP2SettingValue.max;
 
-        // UNLIMITED, 100 is the minimum recommended value (TODO discuss)
-        Setting _maxConcurrentStreams    = {H2Params.maxConcurrentStreams, 100};
+    @http2Setting(0x4, "SETTINGS_INITIAL_WINDOW_SIZE")
+    HTTP2SettingValue initialWindowSize = 65535;
 
-        Setting _initialWindowSize       = {H2Params.initialWindowSize, 65535};
+    @http2Setting(0x5, "SETTINGS_MAX_FRAME_SIZE")
+    HTTP2SettingValue maxFrameSize = 16384;
 
-        Setting _maxFrameSize            = {H2Params.maxFrameSize, 16384};
+    // set to the max value (UNLIMITED)
+    @http2Setting(0x6, "SETTINGS_MAX_HEADER_LIST_SIZE")
+    HTTP2SettingValue maxHeaderListSize = HTTP2SettingValue.max;
 
-        // UNLIMITED, (TODO discuss);
-        Setting _maxHeaderListSize;
 
-    public:
-        /**
-          * Properties
-          */
-        @property HTTP2SettingValue headerTableSize() @safe { return _headerTableSize.value; }
-
-        @property HTTP2SettingValue enablePush() @safe      { return _enablePush.value; }
-
-        @property HTTP2SettingValue maxConcurrentStreams()
-        @safe {
-            return  _maxConcurrentStreams.value;
-        }
-
-        @property HTTP2SettingValue initialWindowSize()
-        @safe {
-            return _initialWindowSize.value;
-        }
-
-        @property HTTP2SettingValue maxFrameSize() @safe    { return _maxFrameSize.value; }
-
-        @property HTTP2SettingValue maxHeaderListSize()
-        @safe {
-            return _maxHeaderListSize.value;
-        }
-
-        @property void set(ushort code, uint val)
-        @safe {
-            import std.stdio;
-            static foreach(c; __traits(allMembers, HTTP2SettingsParameters)) {
-               mixin("if (H2Params."~c~" == code) { _"~c~".value = val; }");
+    void set(HTTP2SettingID id)(HTTP2SettingValue value) @safe
+        if(id <= maxID && id >= minID)
+    {
+        // must use labeled break w. static foreach
+        assign: switch(id) {
+            default: assert(false, "Unsupported SETTINGS code.");
+            static foreach(c; __traits(allMembers, HTTP2SettingsParameter)) {
+                case __traits(getMember, HTTP2SettingsParameter, c):
+                    __traits(getMember, this, c) = value;
+                    break assign;
             }
         }
-
-        /**
-          * Convert a ushort request code to the corresponding string (see RFC)
-          */
-        string toString(ushort code)
-        @safe {
-            switch(code) {
-                case H2Params.headerTableSize:
-                    return "SETTINGS_HEADER_TABLE_SIZE";
-                case H2Params.enablePush:
-                    return "SETTINGS_ENABLE_PUSH";
-                case H2Params.maxConcurrentStreams:
-                    return "SETTINGS_MAX_CONCURRENT_STREAMS";
-                case H2Params.initialWindowSize:
-                    return "SETTINGS_INITIAL_WINDOW_SIZE";
-                case H2Params.maxFrameSize:
-                    return "SETTINGS_MAX_FRAME_SIZE";
-                case H2Params.maxHeaderListSize:
-                    return "SETTINGS_MAX_HEADER_LIST_SIZE";
-                default:
-                    // TODO error codes
-                    assert(false, "Unrecognized SETTINGS code (TODO Errors)");
-            }
-        }
-
-    unittest {
-        HTTP2Settings settings;
-        assert(settings.headerTableSize == 4096);
-
-        settings.set(HTTP2SettingsParameters.headerTableSize, 2048);
-        assert(settings.headerTableSize == 2048);
-
-        settings.set(0x4, 1024);
-        assert(settings.initialWindowSize == 1024);
-
-        auto s = settings.toString(HTTP2SettingsParameters.enablePush);
-        assert(s == "SETTINGS_ENABLE_PUSH");
     }
+}
+
+unittest {
+
+    HTTP2Settings settings;
+
+    // retrieve a value
+    assert(settings.headerTableSize == 4096);
+
+    //set a SETTINGS value using the enum table
+    settings.set!(HTTP2SettingsParameter.headerTableSize)(2048);
+    assert(settings.headerTableSize == 2048);
+
+    //set a SETTINGS value using the code directly
+    settings.set!0x4(1024);
+    assert(settings.initialWindowSize == 1024);
+
+    // SHOULD NOT COMPILE
+    // settings.set!0x7(1);
+
+    import std.traits : getUDAs;
+    assert(getUDAs!(settings.headerTableSize, HTTP2Setting)[0] == HTTP2Setting(0x1,
+                "SETTINGS_HEADER_TABLE_SIZE"));
 }
 
 
