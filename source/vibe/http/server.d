@@ -1042,6 +1042,11 @@ struct HTTPServerResponse {
 	{
 		m_data.switchProtocol(protocol, del);
 	}
+    /// ditto
+    void switchProtocol(alias connection_handler)(string protocol, HTTP2Settings settings)
+    {
+        m_data.switchProtocol!connection_handler(protocol,settings);
+    }
 
 	/** Special method for handling CONNECT proxy tunnel
 
@@ -2231,9 +2236,14 @@ struct HTTPServerResponseData {
 					ensured that the returned instance doesn't outlive the request
 					handler callback.
 
+                Notice: The overload which accepts a connection_handler alias is used for
+                    HTTP/1 to HTTP/2 switching in cleartext HTTP
+
 				Params:
 					protocol = The protocol set in the "Upgrade" header of the response.
 					Use an empty string to skip setting this field.
+
+
 		 */
 		ConnectionStream switchProtocol(string protocol)
 			@safe {
@@ -2256,6 +2266,21 @@ struct HTTPServerResponseData {
 				if (m_rawConnection && m_rawConnection.connected)
 					m_rawConnection.close(); // connection not reusable after a protocol upgrade
 			}
+        /// ditto
+        void switchProtocol(alias connection_handler)(string protocol, HTTP2Settings settings)
+        @safe {
+            import vibe.http.internal.http2 : HTTP2ConnectionStream;
+            // send SWITCHING_PROTOCOL request
+			statusCode = HTTPStatus.SwitchingProtocols;
+			if (protocol.length) headers["Upgrade"] = protocol;
+            logInfo("sending SWITCHING_PROTOCOL response");
+			writeVoidBody();
+
+            // handle HTTP2 connection
+            HTTP2ConnectionStream h2conn;
+            connection_handler(h2conn, settings);
+        }
+
 
 		/** Special method for handling CONNECT proxy tunnel
 
