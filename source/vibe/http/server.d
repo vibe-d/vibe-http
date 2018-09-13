@@ -2268,17 +2268,26 @@ struct HTTPServerResponseData {
 			}
         /// ditto
         void switchProtocol(alias connection_handler)(string protocol, HTTP2Settings settings)
-        @safe {
-            import vibe.http.internal.http2 : HTTP2ConnectionStream;
-            // send SWITCHING_PROTOCOL request
-			statusCode = HTTPStatus.SwitchingProtocols;
-			if (protocol.length) headers["Upgrade"] = protocol;
-            logInfo("sending SWITCHING_PROTOCOL response");
-			writeVoidBody();
+            @safe {
 
-            // handle HTTP2 connection
-            HTTP2ConnectionStream h2conn;
-            connection_handler(h2conn, settings);
+                // send SWITCHING_PROTOCOL request
+                statusCode = HTTPStatus.SwitchingProtocols;
+                if (protocol.length) headers["Upgrade"] = protocol;
+                logInfo("sending SWITCHING_PROTOCOL response");
+                writeVoidBody();
+
+                // handle HTTP2 connection
+                import vibe.http.internal.http2 : HTTP2ConnectionStream;
+
+                // TODO will be properly initialized once streams are implemented
+                HTTP2ConnectionStream h2conn;
+                connection_handler(h2conn, settings);
+
+                // close the existing connection
+                finalize();
+                if (m_rawConnection && m_rawConnection.connected)
+                    m_rawConnection.close(); // connection not reusable after a protocol upgrade
+
         }
 
 
