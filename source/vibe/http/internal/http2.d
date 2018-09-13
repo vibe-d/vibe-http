@@ -7,7 +7,10 @@ import vibe.core.net;
 
 import std.base64;
 import std.bitmanip; // read from ubyte (decoding)
+import std.traits;
 import std.range : empty;
+import std.exception : enforce;
+import std.conv : to;
 
 /*
  *  6.5.1.  SETTINGS Format
@@ -152,15 +155,44 @@ struct HTTP2Settings {
     HTTP2SettingValue maxHeaderListSize = HTTP2SettingValue.max;
 
     /**
+     * Use Decoder to decode a string and set the corresponding settings
+     * The decoder must follow the base64url encoding
+     * `bool` since the handler must ignore the Upgrade request
+     * if the settings cannot be decoded
+     */
+    bool decode(alias Decoder)(string encodedSettings) @safe
+        if (isInstanceOf!(Base64Impl, Decoder))
+    {
+        ubyte[] uset;
+        try {
+            // the Base64URL decoder throws a Base64exception if it fails
+            uset = Decoder.decode(encodedSettings);
+            enforce!Base64Exception(uset.length % 6 == 0, "Invalid SETTINGS payload length");
+        } catch (Base64Exception) {
+            logWarn("Failed to decode SETTINGS payload");
+            return false;
+        }
+
+        // set values
+        while(!uset.empty) m_set(uset.read!HTTP2SettingID, uset.read!HTTP2SettingValue);
+        return true;
+    }
+
+    /*
      * Set parameter 'id' to 'value'
-     * Overload for local variable assigning (TODO) discuss
+     * private overload for decoded parameters assignment
      */
     void set(HTTP2SettingID id)(HTTP2SettingValue value) @safe
         if(id <= maxID && id >= minID)
     {
+        m_set(id,value);
+    }
+
+    private void m_set(HTTP2SettingID id, HTTP2SettingValue value) @safe
+    {
         // must use labeled break w. static foreach
         assign: switch(id) {
-            default: assert(false, "Unsupported SETTINGS code.");
+            default: logWarn("Unsupported SETTINGS code:" ~ to!string(id));
             static foreach(c; __traits(allMembers, HTTP2SettingsParameter)) {
                 case __traits(getMember, HTTP2SettingsParameter, c):
                     __traits(getMember, this, c) = value;
@@ -169,41 +201,6 @@ struct HTTP2Settings {
         }
     }
 
-    // ditto
-    void set(HTTP2SettingID id, HTTP2SettingValue value) @safe
-    {
-        assert(id <= maxID && id >= minID);
-
-        assign: switch(id) {
-            default: assert(false, "Unsupported SETTINGS code.");
-            static foreach(c; __traits(allMembers, HTTP2SettingsParameter)) {
-                case __traits(getMember, HTTP2SettingsParameter, c):
-                    __traits(getMember, this, c) = value;
-                    break assign;
-            }
-        }
-    }
-
-    /**
-     * Use Decoder to decode a string and set the corresponding settings
-     * The decoder must follow the base64url encoding
-     */
-    bool decode(alias Decoder)(string encodedSettings) @safe
-    {
-        // decode
-        ubyte[] uset;
-        try uset = Decoder.decode(encodedSettings);
-        catch (Base64Exception) {
-            logWarn("Failed to decode SETTINGS payload, refusing upgrade.");
-            return false;
-        }
-
-        assert(uset.length % 6 == 0, "Invalid SETTINGS payload length");
-
-        // set values
-        while(!uset.empty) set(uset.read!HTTP2SettingID, uset.read!HTTP2SettingValue);
-        return true;
-    }
 }
 
 unittest {
@@ -222,7 +219,7 @@ unittest {
     assert(settings.initialWindowSize == 1024);
 
     // SHOULD NOT COMPILE
-    // settings.set!0x7(1);
+    //settings.set!0x7(1);
 
     // get a HTTP2Setting struct containing the code and the parameter name
     import std.traits : getUDAs;
@@ -241,7 +238,7 @@ unittest {
     assert(settings.maxConcurrentStreams == 100);
     assert(settings.initialWindowSize == 1073741824);
 
-    // should throw a Base64Exception error and a logWarn
+    // should throw a Base64Exception error (caught) and a logWarn
     assert(!settings.decode!Base64URL("a|b+*-c"));
 }
 
@@ -352,7 +349,7 @@ unittest {
 
 /*
  * Check if SETTINGS payload is valid by trying to decode it
- * if !valid, close connection and refuse to upgrade (RFC)
+ * if !valid, close connection and refuse to upgrade (RFC) - TODO discuss
  * if valid, send SWITCHING_PROTOCOL response and start an HTTP/2 connection handler
  */
 void startHTTP2Connection(ConnectionStream)(ConnectionStream connection, string h2settings, HTTPServerResponse switchRes) @safe
@@ -360,15 +357,14 @@ void startHTTP2Connection(ConnectionStream)(ConnectionStream connection, string 
 {
     logInfo("Starting HTTP/2 connection");
 
-    // try decoding SETTINGS
+    // init settings
+    // the server should mantain them through the connection
     HTTP2Settings settings;
-    if (!settings.decode!Base64URL(h2settings)) {
-        // TODO discuss the best way of closing connection
-        return;
-    }
 
-    // settings decoded correctly: send SWITCHING_PROTOCOLS request
-    switchRes.switchProtocol!(handleHTTP2Connection!HTTP2ConnectionStream)("h2c", settings);
+    // try decoding settings
+    if (settings.decode!Base64URL(h2settings))
+        switchRes.switchProtocol!(handleHTTP2Connection!HTTP2ConnectionStream)("h2c", settings);
+    else connection.close;
 }
 
 unittest {
@@ -400,34 +396,34 @@ void handleHTTP2Connection(ConnectionStream)(ConnectionStream connection, HTTP2S
 
 // TODO dummy for now
 // should extend ConnectionStream
-// methods for compatibility as TODO
+// added methods for compliance with the Stream class
 struct HTTP2ConnectionStream {
 
-    bool empty() @property @safe { return false; }
+    //bool empty() @property @safe { return false; }
 
-    ulong leastSize() @property @safe { return 0; }
+    //ulong leastSize() @property @safe { return 0; }
 
-    bool dataAvailableForRead() @property @safe { return false; }
+    //bool dataAvailableForRead() @property @safe { return false; }
 
-    const(ubyte)[] peek() @safe  { return []; }
+    //const(ubyte)[] peek() @safe  { return []; }
 
-    ulong read(scope ubyte[] dst, IOMode mode) @safe { return 0; }
+    //ulong read(scope ubyte[] dst, IOMode mode) @safe { return 0; }
 
-    ulong write(const(ubyte[]) bytes, IOMode mode) @safe { return 0; }
+    //ulong write(const(ubyte[]) bytes, IOMode mode) @safe { return 0; }
 
-    void flush() @safe  {}
+    //void flush() @safe  {}
 
-    void finalize() @safe  {}
+    //void finalize() @safe  {}
 
-    bool connected() const @property @safe { return false; }
+    //bool connected() const @property @safe { return false; }
 
-    void close() @safe  {}
+    //void close() @safe  {}
 
-    bool waitForData() @safe { return false; }
+    //bool waitForData() @safe { return false; }
 
-    ulong write(const(ubyte[]) bytes, IOMode mode) @safe { return 0; }
+    //ulong write(const(ubyte[]) bytes, IOMode mode) @safe { return 0; }
 
-    void flush() @safe {}
+    //void flush() @safe {}
 
-    void finalize() @safe  {}
+    //void finalize() @safe  {}
 }

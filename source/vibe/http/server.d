@@ -2242,8 +2242,6 @@ struct HTTPServerResponseData {
 				Params:
 					protocol = The protocol set in the "Upgrade" header of the response.
 					Use an empty string to skip setting this field.
-
-
 		 */
 		ConnectionStream switchProtocol(string protocol)
 			@safe {
@@ -2252,6 +2250,7 @@ struct HTTPServerResponseData {
 				writeVoidBody();
 				return createConnectionProxyStream(m_conn, m_rawConnection);
 			}
+
 		/// ditto
 		void switchProtocol(string protocol, scope void delegate(scope ConnectionStream) @safe del)
 			@safe {
@@ -2266,9 +2265,12 @@ struct HTTPServerResponseData {
 				if (m_rawConnection && m_rawConnection.connected)
 					m_rawConnection.close(); // connection not reusable after a protocol upgrade
 			}
+
         /// ditto
-        void switchProtocol(alias connection_handler)(string protocol, HTTP2Settings settings)
-            @safe {
+        void switchProtocol(alias connection_handler)(string protocol, HTTP2Settings settings) @safe
+            if (isCallable!connection_handler &&
+                is(ReturnType!connection_handler == void))
+            {
 
                 // send SWITCHING_PROTOCOL request
                 statusCode = HTTPStatus.SwitchingProtocols;
@@ -2288,7 +2290,7 @@ struct HTTPServerResponseData {
                 if (m_rawConnection && m_rawConnection.connected)
                     m_rawConnection.close(); // connection not reusable after a protocol upgrade
 
-        }
+            }
 
 
 		/** Special method for handling CONNECT proxy tunnel
