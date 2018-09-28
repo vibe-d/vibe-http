@@ -20,6 +20,7 @@ import vibe.stream.operations;
 import vibe.stream.zlib;
 import vibe.textfilter.urlencode : urlEncode, urlDecode;
 import vibe.stream.tls;
+import vibe.http.internal.http2 : startHTTP2Connection;
 
 import std.datetime;
 import std.typecons;
@@ -318,6 +319,24 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 		logTrace("handle request (body %d)", req.bodyReader.leastSize);
 		res.httpVersion = req.httpVersion;
 		request_task(req, res);
+
+		/**
+		 * UPGRADE TO HTTP/2 for cleartext HTTP/1
+		 * this requires that the "Upgrade" header is set
+		 * with value "h2c" (for cleartext)
+		 * "h2" is ignored since it is used for TLS protocol switching (ALPN)
+		 */
+		if(req.headers.get("Upgrade") == "h2c" ) {
+			auto psettings = "HTTP2-Settings" in req.headers;
+			enforceHTTP(psettings !is null, HTTPStatus.badRequest, "Upgrade request must
+					include HTTP2-Settings");
+			auto h2settings = *psettings;
+
+			logInfo("Switching to HTTP/2");
+			// try to start an HTTP/2 connection
+			// TODO runTask as soon as multiplexing logic is done
+			return startHTTP2Connection(tcp_connection, h2settings, res);
+		}
 
 		// if no one has written anything, return 404
 		if (!res.headerWritten) {

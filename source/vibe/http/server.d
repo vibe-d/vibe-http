@@ -1042,6 +1042,16 @@ struct HTTPServerResponse {
 	{
 		m_data.switchProtocol(protocol, del);
 	}
+	/// ditto
+	package void switchToHTTP2(alias connection_handler)(HTTP2Settings settings)
+	{
+		m_data.switchToHTTP2!connection_handler(settings);
+	}
+
+	// Send a BadRequest and close connection (failed switch to HTTP/2)
+	package void sendBadRequest() {
+		m_data.sendBadRequest();
+	}
 
 	/** Special method for handling CONNECT proxy tunnel
 
@@ -2231,6 +2241,9 @@ struct HTTPServerResponseData {
 					ensured that the returned instance doesn't outlive the request
 					handler callback.
 
+				Notice: The overload which accepts a connection_handler alias is used for
+					HTTP/1 to HTTP/2 switching in cleartext HTTP
+
 				Params:
 					protocol = The protocol set in the "Upgrade" header of the response.
 					Use an empty string to skip setting this field.
@@ -2242,6 +2255,7 @@ struct HTTPServerResponseData {
 				writeVoidBody();
 				return createConnectionProxyStream(m_conn, m_rawConnection);
 			}
+
 		/// ditto
 		void switchProtocol(string protocol, scope void delegate(scope ConnectionStream) @safe del)
 			@safe {
@@ -2256,6 +2270,45 @@ struct HTTPServerResponseData {
 				if (m_rawConnection && m_rawConnection.connected)
 					m_rawConnection.close(); // connection not reusable after a protocol upgrade
 			}
+
+		package void switchToHTTP2(alias connection_handler)(HTTP2Settings settings) @safe
+			if (isCallable!connection_handler &&
+				is(ReturnType!connection_handler == void))
+			{
+
+				// send SWITCHING_PROTOCOL request
+				statusCode = HTTPStatus.switchingProtocols;
+				headers["Upgrade"] = "h2c";
+
+				logInfo("sending SWITCHING_PROTOCOL response");
+				writeVoidBody();
+
+				// handle HTTP2 connection
+				import vibe.http.internal.http2 : HTTP2ConnectionStream;
+
+				// TODO will be properly initialized once streams are implemented
+				HTTP2ConnectionStream h2conn;
+				connection_handler(h2conn, settings);
+
+				// close the existing connection
+				finalize();
+				if (m_rawConnection && m_rawConnection.connected)
+					m_rawConnection.close(); // connection not reusable after a protocol upgrade
+
+			}
+
+		// send a badRequest error response and close the connection
+		package void sendBadRequest() @safe
+		{
+			statusCode = HTTPStatus.badRequest;
+
+			writeVoidBody();
+
+			finalize();
+			if (m_rawConnection && m_rawConnection.connected)
+				m_rawConnection.close(); // connection not reusable after a protocol upgrade
+		}
+
 
 		/** Special method for handling CONNECT proxy tunnel
 
