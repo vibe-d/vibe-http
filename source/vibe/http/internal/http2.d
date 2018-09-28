@@ -363,7 +363,7 @@ void startHTTP2Connection(ConnectionStream)(ConnectionStream connection, string 
 
     // try decoding settings
     if (settings.decode!Base64URL(h2settings))
-        switchRes.switchProtocol!(handleHTTP2Connection!HTTP2ConnectionStream)("h2c", settings);
+        switchRes.switchToHTTP2!(handleHTTP2Connection!HTTP2ConnectionStream)(settings);
     else connection.close;
 }
 

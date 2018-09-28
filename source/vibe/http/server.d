@@ -1042,11 +1042,11 @@ struct HTTPServerResponse {
 	{
 		m_data.switchProtocol(protocol, del);
 	}
-    /// ditto
-    void switchProtocol(alias connection_handler)(string protocol, HTTP2Settings settings)
-    {
-        m_data.switchProtocol!connection_handler(protocol,settings);
-    }
+	/// ditto
+	package void switchToHTTP2(alias connection_handler)(HTTP2Settings settings)
+	{
+		m_data.switchToHTTP2!connection_handler(settings);
+	}
 
 	/** Special method for handling CONNECT proxy tunnel
 
@@ -2236,8 +2236,8 @@ struct HTTPServerResponseData {
 					ensured that the returned instance doesn't outlive the request
 					handler callback.
 
-                Notice: The overload which accepts a connection_handler alias is used for
-                    HTTP/1 to HTTP/2 switching in cleartext HTTP
+				Notice: The overload which accepts a connection_handler alias is used for
+					HTTP/1 to HTTP/2 switching in cleartext HTTP
 
 				Params:
 					protocol = The protocol set in the "Upgrade" header of the response.
@@ -2266,31 +2266,31 @@ struct HTTPServerResponseData {
 					m_rawConnection.close(); // connection not reusable after a protocol upgrade
 			}
 
-        /// ditto
-        void switchProtocol(alias connection_handler)(string protocol, HTTP2Settings settings) @safe
-            if (isCallable!connection_handler &&
-                is(ReturnType!connection_handler == void))
-            {
+		package void switchToHTTP2(alias connection_handler)(HTTP2Settings settings) @safe
+			if (isCallable!connection_handler &&
+				is(ReturnType!connection_handler == void))
+			{
 
-                // send SWITCHING_PROTOCOL request
-                statusCode = HTTPStatus.SwitchingProtocols;
-                if (protocol.length) headers["Upgrade"] = protocol;
-                logInfo("sending SWITCHING_PROTOCOL response");
-                writeVoidBody();
+				// send SWITCHING_PROTOCOL request
+				statusCode = HTTPStatus.switchingProtocols;
+				headers["Upgrade"] = "h2c";
 
-                // handle HTTP2 connection
-                import vibe.http.internal.http2 : HTTP2ConnectionStream;
+				logInfo("sending SWITCHING_PROTOCOL response");
+				writeVoidBody();
 
-                // TODO will be properly initialized once streams are implemented
-                HTTP2ConnectionStream h2conn;
-                connection_handler(h2conn, settings);
+				// handle HTTP2 connection
+				import vibe.http.internal.http2 : HTTP2ConnectionStream;
 
-                // close the existing connection
-                finalize();
-                if (m_rawConnection && m_rawConnection.connected)
-                    m_rawConnection.close(); // connection not reusable after a protocol upgrade
+				// TODO will be properly initialized once streams are implemented
+				HTTP2ConnectionStream h2conn;
+				connection_handler(h2conn, settings);
 
-            }
+				// close the existing connection
+				finalize();
+				if (m_rawConnection && m_rawConnection.connected)
+					m_rawConnection.close(); // connection not reusable after a protocol upgrade
+
+			}
 
 
 		/** Special method for handling CONNECT proxy tunnel
