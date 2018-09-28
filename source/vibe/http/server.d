@@ -1048,6 +1048,11 @@ struct HTTPServerResponse {
 		m_data.switchToHTTP2!connection_handler(settings);
 	}
 
+	// Send a BadRequest and close connection (failed switch to HTTP/2)
+	package void sendBadRequest() {
+		m_data.sendBadRequest();
+	}
+
 	/** Special method for handling CONNECT proxy tunnel
 
 		Notice: For the overload that returns a `ConnectionStream`, it must be
@@ -2291,6 +2296,18 @@ struct HTTPServerResponseData {
 					m_rawConnection.close(); // connection not reusable after a protocol upgrade
 
 			}
+
+		// send a badRequest error response and close the connection
+		package void sendBadRequest() @safe
+		{
+			statusCode = HTTPStatus.badRequest;
+
+			writeVoidBody();
+
+			finalize();
+			if (m_rawConnection && m_rawConnection.connected)
+				m_rawConnection.close(); // connection not reusable after a protocol upgrade
+		}
 
 
 		/** Special method for handling CONNECT proxy tunnel
