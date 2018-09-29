@@ -167,8 +167,9 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 		else {
 			static if (is(InterfaceProxy!ConnectionStream == ConnectionStream))
 				req.clientCertificate = (cast(TLSStream)http_stream).peerCertificate;
-			else
+			else if (is(typeof(http_stream) : TLSStream))
 				req.clientCertificate = http_stream.extract!TLSStreamType.peerCertificate;
+			else
 				assert(false);
 		}
 	}
