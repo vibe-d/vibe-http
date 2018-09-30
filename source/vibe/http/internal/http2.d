@@ -4,6 +4,7 @@ import vibe.http.server;
 import vibe.core.stream;
 import vibe.core.log;
 import vibe.core.net;
+import vibe.stream.tls;
 
 import std.base64;
 import std.bitmanip; // read from ubyte (decoding)
@@ -11,7 +12,7 @@ import std.traits;
 import std.range : empty;
 import std.exception : enforce;
 import std.conv : to;
-
+import std.algorithm : canFind; // alpn callback
 /*
  *  6.5.1.  SETTINGS Format
  *
@@ -390,6 +391,41 @@ unittest {
 	listenHTTP!handleReq(settings);
 	//runApplication();
 }
+
+unittest {
+
+	//import vibe.core.core : runApplication;
+
+	void handleRequest (HTTPServerRequest req, HTTPServerResponse res)
+	@safe {}
+
+
+	HTTPServerSettings settings;
+	settings.port = 8091;
+	settings.bindAddresses = ["127.0.0.1"];
+	settings.tlsContext = createTLSContext(TLSContextKind.server);
+	settings.tlsContext.useCertificateChainFile("tests/server.crt");
+	settings.tlsContext.usePrivateKeyFile("tests/server.key");
+
+	// set alpn callback to support HTTP/2
+	// should accept the 'h2' protocol request
+	settings.tlsContext.alpnCallback(http2Callback);
+
+	// dummy, just for testing
+	listenHTTP!handleRequest(settings);
+	//runApplication();
+}
+
+
+/**
+  * an ALPN callback which can be used to detect the "h2" protocol
+  * must be set before initializing the server with 'listenHTTP'
+  * if the protocol is not set, it replies with HTTP/1.1
+  */
+private TLSALPNCallback http2Callback = (string[] choices) {
+	if (choices.canFind("h2")) return "h2";
+	else return "http/1.1";
+};
 
 
 // TODO dummy for now
