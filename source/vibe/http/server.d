@@ -3,7 +3,7 @@ module vibe.http.server;
 public import vibe.core.net;
 import vibe.core.stream;
 import vibe.http.internal.http1;
-import vibe.http.internal.http2;
+import vibe.http.internal.http2.http2;
 
 public import vibe.http.log;
 public import vibe.http.common;
@@ -2284,8 +2284,6 @@ struct HTTPServerResponseData {
 				writeVoidBody();
 
 				// handle HTTP2 connection
-				import vibe.http.internal.http2 : HTTP2ConnectionStream;
-
 				// TODO will be properly initialized once streams are implemented
 				HTTP2ConnectionStream h2conn;
 				connection_handler(h2conn, settings);
