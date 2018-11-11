@@ -53,28 +53,28 @@ HTTP2FrameHeader unpackHTTP2FrameHeader(R)(ref R src) @safe @nogc
 struct HTTP2FrameHeader
 {
 	private {
-		ubyte[3] length; 	// 24-bit frame payload length
-		HTTP2FrameType type; 		// frame type (stored as ubyte for serialization)
-		ubyte flags; 		// frame flags
-		ubyte[4] streamId;  // stream id, uint (stored as ubyte for serialization)
+		ubyte[3] m_length; 	// 24-bit frame payload length
+		HTTP2FrameType m_type; 		// frame type (stored as ubyte for serialization)
+		ubyte m_flags; 		// frame flags
+		ubyte[4] m_streamId;  // stream id, uint (stored as ubyte for serialization)
 	}
 
 	this(const uint len, const HTTP2FrameType tp, const ubyte flg, const uint sid) @safe @nogc
 	{
 		assert(sid < (cast(ulong)1 << 32), "Invalid stream id");
-		length.putBytes!(3, ubyte)(len);
-		type = tp;
-		flags = flg;
-		streamId.putBytes!(4, ubyte)(sid & ((cast(ulong)1 << 32) - 1)); // reserved bit is 0
+		m_length.putBytes!(3, ubyte)(len);
+		m_type = tp;
+		m_flags = flg;
+		m_streamId.putBytes!(4, ubyte)(sid & ((cast(ulong)1 << 32) - 1)); // reserved bit is 0
 	}
 
 	this(const ubyte[] src) @safe @nogc
 	{
 		assert(src.length >= 9, "Invalid serialized frame header");
-		length = src[0..3];
-		type = cast(HTTP2FrameType)src[3];
-		flags = src[4];
-		streamId = src[5..9];
+		m_length = src[0..3];
+		m_type = cast(HTTP2FrameType)src[3];
+		m_flags = src[4];
+		m_streamId = src[5..9];
 	}
 }
 
@@ -98,7 +98,7 @@ private void serialize(R)(ref R dst, HTTP2FrameHeader header) @safe @nogc
 			static if(isArray!(typeof(__traits(getMember, HTTP2FrameHeader, f)))) {
 				mixin("foreach(b; header."~f~") dst.put(b);");
 			} else {
-				static if(f == "type") mixin("dst.put(cast(ubyte)header."~f~");");
+				static if(f == "m_type") mixin("dst.put(cast(ubyte)header."~f~");");
 				else mixin("dst.put(header."~f~");");
 			}
 		}
