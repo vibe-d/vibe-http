@@ -1,4 +1,6 @@
-module vibe.http.internal.http2;
+module vibe.http.internal.http2.http2;
+
+import vibe.http.internal.http2.frame;
 
 import vibe.http.server;
 import vibe.core.stream;
