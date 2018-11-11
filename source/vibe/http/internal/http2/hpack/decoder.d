@@ -1,6 +1,5 @@
 module hpack.decoder;
 
-import hpack.exception;
 import hpack.huffman;
 import hpack.tables;
 import hpack.util;

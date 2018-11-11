@@ -1,7 +1,5 @@
 module hpack.exception;
 
-public import std.exception;
-
 class HPACKException : Exception
 {
 	this(string msg, string file = __FILE__, size_t line = __LINE__) {
