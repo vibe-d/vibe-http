@@ -1,6 +1,6 @@
-module hpack.huffman;
+module vibe.http.internal.http2.hpack.huffman;
 
-import hpack.exception;
+import vibe.http.internal.http2.hpack.exception;
 
 import std.range;
 

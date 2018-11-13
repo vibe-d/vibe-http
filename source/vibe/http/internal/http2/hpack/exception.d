@@ -1,4 +1,4 @@
-module hpack.exception;
+module vibe.http.internal.http2.hpack.exception;
 
 class HPACKException : Exception
 {

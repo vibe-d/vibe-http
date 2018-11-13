@@ -1,8 +1,8 @@
-module hpack.encoder;
+module vibe.http.internal.http2.hpack.encoder;
 
-import hpack.tables;
-import hpack.huffman;
-import hpack.util;
+import vibe.http.internal.http2.hpack.tables;
+import vibe.http.internal.http2.hpack.huffman;
+import vibe.http.internal.http2.hpack.util;
 
 import std.range;
 import std.typecons;

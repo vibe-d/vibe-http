@@ -1,4 +1,4 @@
-module hpack.util;
+module vibe.http.internal.http2.hpack.util;
 
 import std.range;
 

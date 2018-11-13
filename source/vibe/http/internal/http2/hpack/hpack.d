@@ -1,9 +1,9 @@
 //module vibe.http.internal.hpack.hpack;
-module hpack.hpack;
+module vibe.http.internal.http2.hpack.hpack;
 
-import hpack.encoder;
-import hpack.decoder;
-import hpack.tables;
+import vibe.http.internal.http2.hpack.encoder;
+import vibe.http.internal.http2.hpack.decoder;
+import vibe.http.internal.http2.hpack.tables;
 
 
 import std.range;

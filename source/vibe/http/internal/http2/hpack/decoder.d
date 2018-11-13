@@ -1,8 +1,8 @@
-module hpack.decoder;
+module vibe.http.internal.http2.hpack.decoder;
 
-import hpack.huffman;
-import hpack.tables;
-import hpack.util;
+import vibe.http.internal.http2.hpack.huffman;
+import vibe.http.internal.http2.hpack.tables;
+import vibe.http.internal.http2.hpack.util;
 
 import vibe.internal.array : AllocAppender;
 
