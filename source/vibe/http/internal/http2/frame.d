@@ -136,7 +136,7 @@ HTTP2FrameHeader unpackHTTP2Frame(R,T)(ref R payloadDst, ref T src, ref bool end
 			}
 			sdep.isPushPromise = true;
 			sdep.fill(src);
-			len -= 5;
+			len -= 4;
 			foreach(b; src.takeExactly(len)) {
 				payloadDst.put(b);
 				src.popFront();
@@ -158,6 +158,7 @@ HTTP2FrameHeader unpackHTTP2Frame(R,T)(ref R payloadDst, ref T src, ref bool end
 			break;
 
 		case HTTP2FrameType.GOAWAY: // GOAWAY is used to close connection (in handler)
+			assert(len >= 8, "Invalid GOAWAY Frame (FRAME_SIZE error)");
 			assert(header.streamId == 0, "Invalid streamId for GOAWAY Frame");
 			foreach(b; src.takeExactly(len)) {
 				payloadDst.put(b);
@@ -223,7 +224,42 @@ unittest {
 	payloadDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
 	assert(payloadDst.data == [4, 4, 4, 4]);
 
-	// TODO complete unittest cases
+	// SETTINGS Frame
+	FixedAppender!(ubyte[], 6) settingsDst;
+	data = [0, 0, 6, 4, 0, 0, 0, 0, 0, 0, 1, 2, 2, 2, 2];
+	settingsDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	assert(settingsDst.data == [0, 1, 2, 2, 2, 2]);
+
+	// PUSH_PROMISE Frame
+	payloadDst.clear;
+	data = [0, 0, 8, 5, 0, 0, 0, 0, 5, 0, 0, 0, 2, 4, 4, 4, 4];
+	payloadDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	assert(payloadDst.data == [4, 4, 4, 4]);
+	assert(sdep.weight == 5 &&  sdep.streamId == 2);
+
+	// PING Frame
+	FixedAppender!(ubyte[], 8) pingDst;
+	data = [0, 0, 8, 6, 0, 0, 0, 0, 0, 0, 0, 0, 2, 4, 4, 4, 4];
+	pingDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	assert(pingDst.data == [0, 0, 0, 2, 4, 4, 4, 4]);
+
+	// GOAWAY Frame
+	pingDst.clear;
+	data = [0, 0, 8, 7, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 4];
+	pingDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	assert(pingDst.data == [0, 0, 0, 2, 0, 0, 0, 4]);
+
+	// WINDOW_UPDATE
+	payloadDst.clear;
+	data = [0, 0, 4, 8, 0, 0, 0, 0, 6, 1, 1, 1, 1];
+	payloadDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	assert(payloadDst.data == [1, 1, 1, 1]);
+
+	// CONTINUATION
+	payloadDst.clear;
+	data = [0, 0, 4, 9, 0, 0, 0, 0, 6, 2, 2, 2, 2];
+	payloadDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	assert(payloadDst.data == [2, 2, 2, 2]);
 }
 
 /*** FRAME BUILDING ***/
