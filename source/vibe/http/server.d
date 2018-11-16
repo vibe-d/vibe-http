@@ -1043,9 +1043,9 @@ struct HTTPServerResponse {
 		m_data.switchProtocol(protocol, del);
 	}
 	/// ditto
-	package void switchToHTTP2(alias connection_handler)(HTTP2Settings settings)
-	{
-		m_data.switchToHTTP2!connection_handler(settings);
+	package void switchToHTTP2(HANDLER)(HANDLER handler, HTTP2Settings settings, HTTPServerContext context)
+	@safe {
+		m_data.switchToHTTP2(handler, settings, context);
 	}
 
 	// Send a BadRequest and close connection (failed switch to HTTP/2)
@@ -2271,25 +2271,24 @@ struct HTTPServerResponseData {
 					m_rawConnection.close(); // connection not reusable after a protocol upgrade
 			}
 
-		package void switchToHTTP2(alias connection_handler)(HTTP2Settings settings) @safe
-			if (isCallable!connection_handler &&
-				is(ReturnType!connection_handler == void))
-			{
+		package void switchToHTTP2(HANDLER)(HANDLER handler, const HTTP2Settings settings,
+				HTTPServerContext context)
+			@safe {
+				import vibe.http.internal.http2.frame;
+				import vibe.http.internal.http2.http2;
 
 				// send SWITCHING_PROTOCOL request
 				statusCode = HTTPStatus.switchingProtocols;
 				headers["Upgrade"] = "h2c";
+				writeHeader();
 
 				logInfo("sending SWITCHING_PROTOCOL response");
-				writeVoidBody();
 
 				// handle HTTP2 connection
-				// TODO will be properly initialized once streams are implemented
-				HTTP2ConnectionStream h2conn;
-				connection_handler(h2conn, settings);
+				handler(m_rawConnection.extract!TCPConnection, settings, context);
 
-				// close the existing connection
 				finalize();
+				// close the existing connection
 				if (m_rawConnection && m_rawConnection.connected)
 					m_rawConnection.close(); // connection not reusable after a protocol upgrade
 

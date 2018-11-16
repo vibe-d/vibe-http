@@ -358,6 +358,7 @@ unittest {
 bool startHTTP2Connection(ConnectionStream)(ConnectionStream connection, string h2settings, HTTPServerResponse switchRes) @safe
 	if (isConnectionStream!ConnectionStream)
 {
+
 	logInfo("Starting HTTP/2 connection");
 
 	// init settings
@@ -366,7 +367,7 @@ bool startHTTP2Connection(ConnectionStream)(ConnectionStream connection, string 
 
 	// try decoding settings
 	if (settings.decode!Base64URL(h2settings)) {
-		switchRes.switchToHTTP2!(handleHTTP2Connection!HTTP2ConnectionStream)(settings);
+		switchRes.switchToHTTP2!handleHTTP2Connection(settings);
 		return true;
 	} else {
 		// reply with a 400 (bad request) header
@@ -395,7 +396,6 @@ unittest {
 }
 
 unittest {
-
 	//import vibe.core.core : runApplication;
 
 	void handleRequest (HTTPServerRequest req, HTTPServerResponse res)
@@ -418,7 +418,6 @@ unittest {
 	//runApplication();
 }
 
-
 /**
   * an ALPN callback which can be used to detect the "h2" protocol
   * must be set before initializing the server with 'listenHTTP'
@@ -429,47 +428,49 @@ private TLSALPNCallback http2Callback = (string[] choices) {
 	else return "http/1.1";
 };
 
-
 // TODO dummy for now
-void handleHTTP2Connection(ConnectionStream)(ConnectionStream connection, HTTP2Settings settings)
-	if (is(ConnectionStream == HTTP2ConnectionStream))
+void handleHTTP2Connection(Connection)(Connection connection, HTTP2Settings settings)
+	if (isConnectionStream!Connection)
 {
-	// start sending frames
 	// the HTTP/1 UPGRADE should initialize a stream with ID 1
+	auto h2 = HTTP2ConnectionStream!Connection(connection, 1);
 	// server & client should send a connection preface
 	// before starting HTTP/2 communication
 }
 
 // TODO dummy for now
-// should extend ConnectionStream
+// based on TCPConnection
 // added methods for compliance with the Stream class
-struct HTTP2ConnectionStream {
+struct HTTP2ConnectionStream(CS)
+{
+	private {
+		CS m_conn;
+		const uint m_streamId;
+	}
 
-	//bool empty() @property @safe { return false; }
+	alias m_conn this;
+	static assert(isConnectionStream!CS);
 
-	//ulong leastSize() @property @safe { return 0; }
+	this(CS)(ref CS conn, uint sid) @safe
+	{
+		m_conn = conn;
+		m_streamId = sid;
+	}
 
-	//bool dataAvailableForRead() @property @safe { return false; }
+	this(CS)(ref CS conn) @safe
+	{
+		m_conn = conn;
+		m_streamId = 0;
+	}
 
-	//const(ubyte)[] peek() @safe  { return []; }
+	@property uint streamId() @safe @nogc { return m_streamId; }
+}
 
-	//ulong read(scope ubyte[] dst, IOMode mode) @safe { return 0; }
+unittest {
+	import std.stdio;
+	TCPConnection c;
+	auto h2 = HTTP2ConnectionStream!TCPConnection(c, 1);
 
-	//ulong write(const(ubyte[]) bytes, IOMode mode) @safe { return 0; }
-
-	//void flush() @safe  {}
-
-	//void finalize() @safe  {}
-
-	//bool connected() const @property @safe { return false; }
-
-	//void close() @safe  {}
-
-	//bool waitForData() @safe { return false; }
-
-	//ulong write(const(ubyte[]) bytes, IOMode mode) @safe { return 0; }
-
-	//void flush() @safe {}
-
-	//void finalize() @safe  {}
+	assert(h2.empty);
+	assert(h2.streamId == 1);
 }

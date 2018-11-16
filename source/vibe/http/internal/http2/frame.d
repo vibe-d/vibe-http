@@ -19,6 +19,8 @@ import std.algorithm.mutation;
   * https://tools.ietf.org/html/rfc7540#section-6
 */
 
+enum uint HTTP2HeaderLength = 9;
+
 enum HTTP2FrameType {
 	DATA 			= 0x0,
 	HEADERS 		= 0x1,
@@ -58,16 +60,24 @@ struct HTTP2FrameStreamDependency {
 	}
 }
 
+/// DITTO
+HTTP2FrameHeader unpackHTTP2Frame(R,T)(ref R payloadDst, T src, ref bool endStream, ref bool needsCont, ref bool ack, ref HTTP2FrameStreamDependency sdep) @safe
+{
+	auto header = unpackHTTP2FrameHeader(src);
+	unpackHTTP2Frame(payloadDst, src, header, endStream, needsCont, ack, sdep);
+	return header;
+}
+
 /** unpacks a frame putting the payload in `payloadDst` and returning the header
   * implements the checks required for each frame type (Section 6 of HTTP/2 RFC)
   *
   * Invoked by a possible HTTP/2 request handler, the payload is meant to be handled by
   * the caller.
+  *
+  * Note: @nogc-compatible as long as payloadDst.put is @nogc (AllocAppender.put isn't)
   */
-HTTP2FrameHeader unpackHTTP2Frame(R,T)(ref R payloadDst, ref T src, ref bool endStream, ref bool needsCont, ref bool ack, ref HTTP2FrameStreamDependency sdep) @safe @nogc
-	if(is(ElementType!T : ubyte))
+void unpackHTTP2Frame(R,T)(ref R payloadDst, ref T src, HTTP2FrameHeader header, ref bool endStream, ref bool needsCont, ref bool ack, ref HTTP2FrameStreamDependency sdep) @safe
 {
-	auto header = unpackHTTP2FrameHeader(src);
 	size_t len = header.payloadLength;
 
 	switch(header.type) {
@@ -99,7 +109,7 @@ HTTP2FrameHeader unpackHTTP2Frame(R,T)(ref R payloadDst, ref T src, ref bool end
 			}
 			src.popFrontN(header.payloadLength - len); // remove padding
 			if(header.flags & 0x1) endStream = true;
-			if(header.flags & 0x4) needsCont = true;
+			if(!(header.flags & 0x4)) needsCont = true;
 			break;
 
 		case HTTP2FrameType.PRIORITY:
@@ -142,7 +152,7 @@ HTTP2FrameHeader unpackHTTP2Frame(R,T)(ref R payloadDst, ref T src, ref bool end
 				src.popFront();
 			}
 			src.popFrontN(header.payloadLength - len); // remove padding
-			if(header.flags & 0x4) needsCont = true;
+			if(!(header.flags & 0x4)) needsCont = true;
 			break;
 
 		case HTTP2FrameType.PING:
@@ -180,14 +190,12 @@ HTTP2FrameHeader unpackHTTP2Frame(R,T)(ref R payloadDst, ref T src, ref bool end
 				payloadDst.put(b);
 				src.popFront();
 			}
-			if(header.flags & 0x4) needsCont = true;
+			if(!(header.flags & 0x4)) needsCont = true;
 			break;
 
 		default:
 			assert(false, "Invalid frame header unpacked");
 	}
-
-	return header;
 }
 
 unittest {
@@ -263,6 +271,7 @@ unittest {
 }
 
 /*** FRAME BUILDING ***/
+
 /// concatenates a Frame header with a Frame payload
 void buildHTTP2Frame(R,H,T)(ref R dst, ref H header, ref T payload) @safe @nogc
 	if(is(ElementType!R : ubyte) && is(ElementType!T : ubyte))
@@ -278,6 +287,14 @@ void buildHTTP2Frame(R,H,T)(ref R dst, ref H header, ref T payload) @safe @nogc
 		foreach(b; header) dst.put(b);
 	}
 
+	// put payload
+	foreach(b; payload) dst.put(b);
+}
+
+/// DITTO
+/// @nogc-compatible if dst.put is @nogc
+void buildHTTP2Frame(R,T)(ref R dst, T payload) @safe
+{
 	// put payload
 	foreach(b; payload) dst.put(b);
 }
@@ -302,7 +319,8 @@ unittest {
 
 /*** FRAME HEADER ***/
 /// header packing
-void createHTTP2FrameHeader(R)(ref R dst, const uint len, const HTTP2FrameType type, const ubyte flags, const uint sid) @safe @nogc
+/// @nogc-compatible if dst.put is @nogc
+void createHTTP2FrameHeader(R)(ref R dst, const uint len, const HTTP2FrameType type, const ubyte flags, const uint sid) @safe
 {
 	dst.serialize(HTTP2FrameHeader(len, type, flags, sid));
 }
@@ -315,9 +333,17 @@ void serializeHTTP2FrameHeader(R)(ref R dst, HTTP2FrameHeader header) @safe @nog
 
 /// unpacking
 HTTP2FrameHeader unpackHTTP2FrameHeader(R)(ref R src) @safe @nogc
-	if(is(ElementType!R : ubyte))
 {
-	auto header = HTTP2FrameHeader(src);
+	HTTP2FrameHeader header = void;
+
+	static if(isStaticArray!R) {
+		import vibe.internal.array : BatchBuffer;
+		BatchBuffer!(ubyte, 9) bbuf;
+		bbuf.putN(src);
+		header = HTTP2FrameHeader(bbuf);
+	} else {
+		header = HTTP2FrameHeader(src);
+	}
 
 	return header;
 }
@@ -370,21 +396,23 @@ struct HTTP2FrameHeader
 }
 
 /// convert 32-bit unsigned integer to N bytes (MSB first)
-private void putBytes(uint N, R)(ref R dst, const(ulong) src) @safe @nogc
+void putBytes(uint N, R)(ref R dst, const(ulong) src) @safe @nogc
 {
-	assert(src > 0 && src < (cast(ulong)1 << N*8), "Invalid frame payload length");
-	assert(dst.length >= N);
+	assert(src >= 0 && src < (cast(ulong)1 << N*8), "Invalid frame payload length");
+	static if(hasLength!R) assert(dst.length >= N);
+
+	ubyte[N] buf;
+	foreach(i,ref b; buf) b = cast(ubyte)(src >> 8*(N-1-i)) & 0xff;
 
 	static if(isArray!R) {
-		uint n = N;
-		foreach(i,ref b; dst[0..N]) b = cast(ubyte)(src >> 8*(n-1-i)) & 0xff;
+		dst = buf;
 	} else {
-		foreach(i,ref b; dst.takeExactly(N)) b = cast(ubyte)(src >> 8*i) & 0xff;
+		foreach(b; buf) dst.put(b);
 	}
 }
 
 /// convert a N-bytes representation MSB->LSB to uint
-private uint fromBytes(R)(R src, uint n) @safe @nogc
+uint fromBytes(R)(R src, uint n) @safe @nogc
 {
 	uint res = 0;
 	static if(isArray!R) {
@@ -396,7 +424,8 @@ private uint fromBytes(R)(R src, uint n) @safe @nogc
 }
 
 /// fill a buffer with fields from `header`
-private void serialize(R)(ref R dst, HTTP2FrameHeader header) @safe @nogc
+/// @nogc-compatible if dst.put is @nogc
+private void serialize(R)(ref R dst, HTTP2FrameHeader header) @safe
 	if(isOutputRange!(R, ubyte))
 {
 	static foreach(f; __traits(allMembers, HTTP2FrameHeader)) {

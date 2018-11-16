@@ -67,6 +67,8 @@ void handleHTTP1Connection(ConnectionStream)(ConnectionStream connection, HTTPSe
 private void handleHTTP1RequestChain(ConnectionStream)(ConnectionStream connection, HTTPContext context)
 @safe
 {
+	logInfo("HTTP/1 Request Chain Handler");
+
 	// copies connection/context instead of creating a heap closure
 	static struct CB {
 		ConnectionStream connection;
@@ -336,7 +338,7 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 			logInfo("Switching to HTTP/2");
 			// try to start an HTTP/2 connection
 			// TODO runTask as soon as multiplexing logic is done
-			return startHTTP2Connection(tcp_connection, h2settings, res);
+			return startHTTP2Connection(tcp_connection, h2settings, listen_info, res);
 		}
 
 		// if no one has written anything, return 404
