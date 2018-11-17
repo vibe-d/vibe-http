@@ -370,17 +370,19 @@ struct HTTP2FrameHeader
 }
 
 /// convert 32-bit unsigned integer to N bytes (MSB first)
-private void putBytes(uint N, R)(ref R dst, const(ulong) src) @safe @nogc
+void putBytes(uint N, R)(ref R dst, const(ulong) src) @safe @nogc
 {
-	assert(src > 0 && src < (cast(ulong)1 << N*8), "Invalid frame payload length");
-	assert(dst.length >= N);
+    assert(src > 0 && src < (cast(ulong)1 << N*8), "Invalid uint for putBytes");
+    static if(hasLength!R) assert(dst.length >= N);
 
-	static if(isArray!R) {
-		uint n = N;
-		foreach(i,ref b; dst[0..N]) b = cast(ubyte)(src >> 8*(n-1-i)) & 0xff;
-	} else {
-		foreach(i,ref b; dst.takeExactly(N)) b = cast(ubyte)(src >> 8*i) & 0xff;
-	}
+    ubyte[N] buf;
+    foreach(i,ref b; buf) b = cast(ubyte)(src >> 8*(N-1-i)) & 0xff;
+
+    static if(isArray!R) {
+        dst = buf;
+    } else {
+        foreach(b; buf) dst.put(b);
+    }
 }
 
 /// convert a N-bytes representation MSB->LSB to uint
