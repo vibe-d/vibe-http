@@ -6,12 +6,15 @@ import vibe.http.server;
 import vibe.core.stream;
 import vibe.core.log;
 import vibe.core.net;
+import vibe.core.core;
 import vibe.stream.tls;
+import vibe.internal.array;
+import vibe.internal.allocator;
 
 import std.base64;
 import std.bitmanip; // read from ubyte (decoding)
 import std.traits;
-import std.range : empty;
+import std.range;
 import std.exception : enforce;
 import std.conv : to;
 import std.algorithm : canFind; // alpn callback
@@ -206,6 +209,16 @@ struct HTTP2Settings {
 
 }
 
+void serializeSettings(R)(ref R dst, HTTP2Settings settings) @safe @nogc
+{
+	static foreach(s; __traits(allMembers, HTTP2Settings)) {
+		static if(is(typeof(__traits(getMember, HTTP2Settings, s)) == HTTP2SettingValue)) {
+			mixin("dst.putBytes!2((getUDAs!(settings."~s~", HTTP2Setting)[0]).id);");
+			mixin("dst.putBytes!4(settings."~s~");");
+		}
+	}
+}
+
 unittest {
 
 	HTTP2Settings settings;
@@ -355,19 +368,17 @@ unittest {
  * if !valid, close connection and refuse to upgrade (RFC) - TODO discuss
  * if valid, send SWITCHING_PROTOCOL response and start an HTTP/2 connection handler
  */
-bool startHTTP2Connection(ConnectionStream)(ConnectionStream connection, string h2settings, HTTPServerResponse switchRes) @safe
+bool startHTTP2Connection(ConnectionStream)(ConnectionStream connection, string h2settings, HTTPServerContext context, HTTPServerResponse switchRes) @safe
 	if (isConnectionStream!ConnectionStream)
 {
-
-	logInfo("Starting HTTP/2 connection");
-
 	// init settings
-	// the server should mantain them through the connection
 	HTTP2Settings settings;
+	logInfo("Starting HTTP/2 connection");
 
 	// try decoding settings
 	if (settings.decode!Base64URL(h2settings)) {
-		switchRes.switchToHTTP2!handleHTTP2Connection(settings);
+		// send response
+		switchRes.switchToHTTP2(&handleHTTP2Connection!ConnectionStream, settings, context);
 		return true;
 	} else {
 		// reply with a 400 (bad request) header
@@ -378,8 +389,7 @@ bool startHTTP2Connection(ConnectionStream)(ConnectionStream connection, string 
 }
 
 unittest {
-	//import vibe.core.core : runApplication;
-
+	import vibe.core.core : runApplication;
 	// empty handler, just to test if protocol switching works
 	void handleReq(HTTPServerRequest req, HTTPServerResponse res)
 	@safe {
@@ -389,10 +399,10 @@ unittest {
 
 	auto settings = HTTPServerSettings();
 	settings.port = 8090;
-	settings.bindAddresses = ["localhost"];
+	settings.bindAddresses = ["192.168.1.131", "localhost"];
 
 	listenHTTP!handleReq(settings);
-	//runApplication();
+	runApplication();
 }
 
 unittest {
@@ -428,46 +438,274 @@ private TLSALPNCallback http2Callback = (string[] choices) {
 	else return "http/1.1";
 };
 
-// TODO dummy for now
-void handleHTTP2Connection(Connection)(Connection connection, HTTP2Settings settings)
-	if (isConnectionStream!Connection)
+/** server & client should send a connection preface
+  * server should receive a connection preface from the client
+  * server connection preface consists of a SETTINGS Frame
+  */
+void handleHTTP2Connection(ConnectionStream)(ConnectionStream connection, HTTP2Settings settings, HTTPServerContext context) @safe
+	if (isConnectionStream!ConnectionStream)
 {
-	// the HTTP/1 UPGRADE should initialize a stream with ID 1
-	auto h2 = HTTP2ConnectionStream!Connection(connection, 1);
-	// server & client should send a connection preface
-	// before starting HTTP/2 communication
+	logInfo("HTTP/2 Connection Handler");
+
+	ubyte[45] settingBuf;
+	FixedAppender!(ubyte[], HTTP2HeaderLength+36) settingDst;
+	FixedAppender!(ubyte[], HTTP2HeaderLength) ackDst;
+
+	// read the connection preface
+	ubyte[24] h2connPreface;
+	connection.read(h2connPreface);
+	assert(h2connPreface == "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", "Invalid HTTP/2 connection preface");
+	logInfo("Received client connection preface");
+
+	// send SETTINGS Frame
+	settingDst.createHTTP2FrameHeader(36, HTTP2FrameType.SETTINGS, 0x0, 0);
+	settingDst.serializeSettings(settings);
+	connection.write(settingDst.data);
+
+	// initialize the request handler
+	HTTP2ServerContext h2context = {context, 2};
+	handleHTTP2FrameChain(connection, settings, h2context);
 }
 
-// TODO dummy for now
+private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream connection, HTTP2Settings settings, HTTP2ServerContext context)
+@safe
+{
+	logInfo("HTTP/2 Frame Chain Handler");
+
+	static struct CB {
+		ConnectionStream connection;
+		HTTP2Settings settings;
+		HTTP2ServerContext context;
+
+		void opCall(bool st)
+		{
+			if (!st) connection.close;
+			else runTask(&handleHTTP2FrameChain, connection, settings, context);
+		}
+	}
+
+	while(true) {
+		CB cb = {connection, settings, context};
+		auto st = connection.waitForDataAsync(cb);
+
+		final switch(st) {
+			case WaitForDataAsyncStatus.waiting: return;
+			case WaitForDataAsyncStatus.noMoreData: connection.close; return;
+			case WaitForDataAsyncStatus.dataAvailable: handleHTTP2Frame(connection, settings, context); break;
+		}
+	}
+}
+
+private void handleHTTP2Frame(ConnectionStream)(ConnectionStream connection, HTTP2Settings settings, HTTP2ServerContext context)
+@safe
+{
+	logInfo("HTTP/2 Frame Handler");
+	auto h2stream = HTTP2ConnectionStream!ConnectionStream(connection, context.nextStreamID);
+
+	() @trusted {
+
+		import vibe.internal.utilallocator: RegionListAllocator;
+		version (VibeManualMemoryManagement)
+			scope alloc = new RegionListAllocator!(shared(Mallocator), false)(1024, Mallocator.instance);
+		else
+			scope alloc = new RegionListAllocator!(shared(GCAllocator), true)(1024, GCAllocator.instance);
+		handleFrameAlloc(h2stream, settings, context, alloc);
+
+	} ();
+
+}
+
+private void handleFrameAlloc(ConnectionStream)(ConnectionStream stream, HTTP2Settings settings, HTTP2ServerContext context, IAllocator alloc)
+@safe
+{
+	logInfo("HTTP/2 Frame Handler (Alloc)");
+
+	// payload buffer
+	auto rawBuf = AllocAppender!(ubyte[])(alloc);
+	auto payload = AllocAppender!(ubyte[])(alloc);
+
+	// Frame properties
+	bool endStream = false;
+	bool needsCont = false;
+	bool isAck = false;
+	HTTP2FrameStreamDependency sdep;
+
+	// read header
+	stream.readHeader(rawBuf);
+	auto len = rawBuf.data[0..3].fromBytes(3);
+
+	// adjust buffer sizes
+	rawBuf.reserve(len);
+	payload.reserve(len);
+
+	// read payload
+	stream.readPayload(rawBuf, len);
+
+	import std.stdio;
+	writeln(rawBuf.data);
+
+	// parse frame
+	auto header = payload.unpackHTTP2Frame(rawBuf.data, endStream, needsCont, isAck, sdep);
+
+	logInfo("Received: "~to!string(header.type)~" on streamID "~to!string(header.streamId));
+	writeln(payload.data);
+
+	// build reply according to frame type
+	final switch(header.type) {
+		case HTTP2FrameType.DATA:
+			if(endStream) {
+				// close stream `stream.streamId`
+			}
+			break;
+
+		case HTTP2FrameType.HEADERS:
+			if(sdep.isSet) {
+				// update stream dependency with data in `sdep`
+			}
+			if(needsCont) {
+				// wait for the next header frame until end_headers flag is set
+				// END_STREAM flag does not count in this case
+			}
+			if(endStream) {
+				// close stream `stream.streamId`
+			}
+			break;
+
+		case HTTP2FrameType.PRIORITY:
+			// update stream dependency with data in `sdep`
+			break;
+
+		case HTTP2FrameType.RST_STREAM:
+			// reset stream in `closed` state
+			// payload contains error code
+			break;
+
+		case HTTP2FrameType.SETTINGS:
+			// parse settings payload
+			if(!isAck) {
+				// acknowledge settings with SETTINGS ACK Frame
+				FixedAppender!(ubyte[], 9) ackReply;
+				ackReply.createHTTP2FrameHeader(0, header.type, 0x1, header.streamId);
+				stream.write(ackReply.data);
+			}
+			break;
+
+		case HTTP2FrameType.PUSH_PROMISE:
+			// reserve a streamId to be created (in payload)
+			// if not possible, CONNECTION_ERROR (invalid stream id)
+			//
+			// process header sent (in payload)
+			if(needsCont) {
+				// wait for the next header frame until end_headers flag is set
+			}
+			break;
+
+		case HTTP2FrameType.PING:
+			if(!isAck) {
+				// acknowledge ping with PING ACK Frame
+				rawBuf.reserve(HTTP2HeaderLength + len);
+				rawBuf.createHTTP2FrameHeader(len, header.type, 0x1, header.streamId);
+				rawBuf.buildHTTP2Frame(payload.data);
+
+				stream.write(rawBuf.data);
+			}
+			break;
+
+		case HTTP2FrameType.GOAWAY: // GOAWAY is used to close connection (in handler)
+			// set LAST_STREAM_ID to the received value
+			// report error code & additional debug info
+			// terminate connection
+			break;
+
+		case HTTP2FrameType.WINDOW_UPDATE:
+			// update window size for DATA Frames flow control
+			// window size is a uint (31) in payload
+			break;
+
+		case HTTP2FrameType.CONTINUATION:
+			// process header block fragment in payload
+			if(needsCont) {
+				// wait for the next header frame until end_headers flag is set
+			}
+			break;
+	}
+}
+
+enum HTTP2StreamState {
+	IDLE,
+	RESERVED_LOCAL,
+	RESERVED_REMOTE,
+	OPEN,
+	HALF_CLOSED_LOCAL,
+	HALF_CLOSED_REMOTE,
+	CLOSED
+}
+
+private struct HTTP2ServerContext
+{
+	private {
+		HTTPServerContext m_context;
+	}
+
+	uint nextStreamID = 2;
+	alias m_context this;
+}
+
 // based on TCPConnection
 // added methods for compliance with the Stream class
 struct HTTP2ConnectionStream(CS)
 {
+	static assert(isConnectionStream!CS);
+
 	private {
+		enum Parse { HEADER, PAYLOAD };
 		CS m_conn;
-		const uint m_streamId;
+		const uint m_streamId; // streams initiated by the server must be even-numbered
+		Parse toParse = Parse.HEADER;
 	}
 
 	alias m_conn this;
-	static assert(isConnectionStream!CS);
+	HTTP2StreamState state;
 
 	this(CS)(ref CS conn, uint sid) @safe
 	{
 		m_conn = conn;
 		m_streamId = sid;
+		state = HTTP2StreamState.IDLE;
 	}
 
 	this(CS)(ref CS conn) @safe
 	{
-		m_conn = conn;
-		m_streamId = 0;
+		this(conn, 0);
 	}
 
 	@property uint streamId() @safe @nogc { return m_streamId; }
+
+	void readHeader(R)(ref R dst) @safe
+	{
+		assert(toParse == Parse.HEADER);
+		toParse = Parse.PAYLOAD;
+
+		ubyte[9] buf;
+		m_conn.read(buf);
+		dst.put(buf);
+	}
+
+	void readPayload(R)(ref R dst, int len) @safe
+	{
+		assert(toParse == Parse.PAYLOAD);
+		toParse = Parse.HEADER;
+
+		ubyte[8] buf = void;
+		while(len > 0) {
+			auto end = (len < buf.length) ? len : buf.length;
+			len -= m_conn.read(buf[0..end], IOMode.all);
+			dst.put(buf[0..end]);
+		}
+	}
 }
 
 unittest {
-	import std.stdio;
 	TCPConnection c;
 	auto h2 = HTTP2ConnectionStream!TCPConnection(c, 1);
 
