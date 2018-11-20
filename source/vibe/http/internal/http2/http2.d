@@ -541,14 +541,10 @@ private void handleFrameAlloc(ConnectionStream)(ConnectionStream stream, HTTP2Se
 	// read payload
 	stream.readPayload(rawBuf, len);
 
-	import std.stdio;
-	writeln(rawBuf.data);
-
 	// parse frame
 	auto header = payload.unpackHTTP2Frame(rawBuf.data, endStream, needsCont, isAck, sdep);
 
 	logInfo("Received: "~to!string(header.type)~" on streamID "~to!string(header.streamId));
-	writeln(payload.data);
 
 	// build reply according to frame type
 	final switch(header.type) {
@@ -614,12 +610,20 @@ private void handleFrameAlloc(ConnectionStream)(ConnectionStream stream, HTTP2Se
 		case HTTP2FrameType.GOAWAY: // GOAWAY is used to close connection (in handler)
 			// set LAST_STREAM_ID to the received value
 			// report error code & additional debug info
+			// respond with GOAWAY
+			//rawBuf.reserve(HTTP2HeaderLength + len);
+			//rawBuf.createHTTP2FrameHeader(len, header.type, 0x0, 0);
+			//rawBuf.buildHTTP2Frame(payload.data);
+			//stream.write(rawBuf.data);
 			// terminate connection
+			//stream.close();
 			break;
 
 		case HTTP2FrameType.WINDOW_UPDATE:
-			// update window size for DATA Frames flow control
 			// window size is a uint (31) in payload
+			import std.stdio;
+			writeln(payload.data.fromBytes(4));
+			// update window size for DATA Frames flow control
 			break;
 
 		case HTTP2FrameType.CONTINUATION:
