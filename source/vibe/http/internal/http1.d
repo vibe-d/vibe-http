@@ -1,5 +1,6 @@
 module vibe.http.internal.http1;
 
+import vibe.http.internal.http2.http2 : startHTTP2Connection;
 import vibe.core.stream;
 import vibe.core.core : runTask;
 import vibe.core.net;
@@ -20,7 +21,6 @@ import vibe.stream.operations;
 import vibe.stream.zlib;
 import vibe.textfilter.urlencode : urlEncode, urlDecode;
 import vibe.stream.tls;
-import vibe.http.internal.http2 : startHTTP2Connection;
 
 import std.datetime;
 import std.typecons;
