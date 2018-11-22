@@ -1011,6 +1011,11 @@ struct HTTPServerResponse {
 		return m_data.bodyWriter;
 	}
 
+	@property void bodyWriter(T)(ref T writer)
+	{
+		m_data.bodyWriter(writer);
+	}
+
 	/** Sends a redirect request to the client.
 
 		Params:
@@ -1043,7 +1048,7 @@ struct HTTPServerResponse {
 		m_data.switchProtocol(protocol, del);
 	}
 	/// ditto
-	package void switchToHTTP2(HANDLER)(HANDLER handler, HTTP2Settings settings, HTTPServerContext context)
+	package void switchToHTTP2(HANDLER)(HANDLER handler, HTTP2Settings settings, HTTP2ServerContext context)
 	@safe {
 		m_data.switchToHTTP2(handler, settings, context);
 	}
@@ -2194,6 +2199,15 @@ struct HTTPServerResponseData {
 				return m_bodyWriter;
 			}
 
+		/**
+		  * Used to change the bodyWriter during a HTTP/2 upgrade
+		  */
+		@property void bodyWriter(T)(T writer) @safe
+		{
+			assert(!m_bodyWriter && !headerWritten, "Unable to set bodyWriter");
+			m_bodyWriter = writer;
+		}
+
 		/** Sends a redirect request to the client.
 
 				Params:
@@ -2272,26 +2286,23 @@ struct HTTPServerResponseData {
 			}
 
 		package void switchToHTTP2(HANDLER)(HANDLER handler, const HTTP2Settings settings,
-				HTTPServerContext context)
+				HTTP2ServerContext context)
 			@safe {
-				import vibe.http.internal.http2.frame;
-				import vibe.http.internal.http2.http2;
-
-				// send SWITCHING_PROTOCOL request
-				statusCode = HTTPStatus.switchingProtocols;
-				headers["Upgrade"] = "h2c";
-				writeHeader();
-
 				logInfo("sending SWITCHING_PROTOCOL response");
 
-				// handle HTTP2 connection
-				handler(m_rawConnection.extract!TCPConnection, settings, context);
+				statusCode = HTTPStatus.switchingProtocols;
+				headers["Upgrade"] = "h2c";
+
+				writeVoidBody();
+
+				// TODO improve handler (handleHTTP2Connection) connection management
+				auto tcp_conn = m_rawConnection.extract!TCPConnection;
+				handler(tcp_conn, tcp_conn, settings, context);
 
 				finalize();
 				// close the existing connection
 				if (m_rawConnection && m_rawConnection.connected)
-					m_rawConnection.close(); // connection not reusable after a protocol upgrade
-
+				m_rawConnection.close(); // connection not reusable after a protocol upgrade
 			}
 
 		// send a badRequest error response and close the connection
@@ -2459,12 +2470,19 @@ struct HTTPServerResponseData {
 	}
 
 	private void writeHeader()
-		@safe {
+	@safe {
+		writeHeader(m_conn);
+	}
+
+	// accept a destination stream
+	private void writeHeader(Stream)(Stream conn) @safe
+		if(isStream!Stream)
+	{
 			import vibe.stream.wrapper;
 
 			assert(!m_bodyWriter && !m_headerWritten, "Try to write header after body has already begun.");
 			m_headerWritten = true;
-			auto dst = streamOutputRange!1024(m_conn);
+			auto dst = streamOutputRange!1024(conn);
 
 			void writeLine(T...)(string fmt, T args)
 				@safe {
