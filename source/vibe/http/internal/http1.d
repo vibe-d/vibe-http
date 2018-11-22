@@ -50,6 +50,7 @@ void handleHTTP1Connection(ConnectionStream)(ConnectionStream connection, HTTPSe
 	if (context.tlsContext) {
 		version (HaveNoTLS) assert(false, "No TLS support compiled in.");
 		else {
+
 			logDebug("Accept TLS connection: %s", context.tlsContext.kind);
 
 			//TODO: determine if there's a better alternative to InterfaceProxy
@@ -58,6 +59,15 @@ void handleHTTP1Connection(ConnectionStream)(ConnectionStream connection, HTTPSe
 
 			// TODO: reverse DNS lookup for peer_name of the incoming connection for TLS client certificate verification purposes
 			tls_stream = createTLSStreamFL(http_stream, context.tlsContext, TLSStreamState.accepting, null, connection.remoteAddress);
+
+			Nullable!string proto = tls_stream.alpn;
+			if(!proto.isNull && proto == "h2") {
+				import vibe.http.internal.http2.http2;
+				HTTP2Settings settings;
+				HTTP2ServerContext h2context = {context, 1, null};
+				handleHTTP2Connection(tls_stream, connection, settings, h2context);
+				return;
+			}
 			http_stream = tls_stream;
 		}
 	}
@@ -96,7 +106,7 @@ private void handleHTTP1RequestChain(ConnectionStream)(ConnectionStream connecti
 private void handleHTTP1Request(ConnectionStream)(ConnectionStream connection, HTTPContext context)
 @safe
 {
-	logInfo("Request");
+	logInfo("HTTP/1 Request Handler");
 
 	HTTPServerSettings settings;
 	InterfaceProxy!Stream http_stream;
@@ -169,7 +179,7 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 		else {
 			static if (is(InterfaceProxy!ConnectionStream == ConnectionStream))
 				req.clientCertificate = (cast(TLSStream)http_stream).peerCertificate;
-			else if (is(typeof(http_stream) : TLSStream))
+			else static if (is(typeof(http_stream) == TLSStream))
 				req.clientCertificate = http_stream.extract!TLSStreamType.peerCertificate;
 			else
 				assert(false);
@@ -321,7 +331,6 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 		// handle the request
 		logTrace("handle request (body %d)", req.bodyReader.leastSize);
 		res.httpVersion = req.httpVersion;
-		request_task(req, res);
 
 		/**
 		 * UPGRADE TO HTTP/2 for cleartext HTTP/1
@@ -330,16 +339,37 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 		 * "h2" is ignored since it is used for TLS protocol switching (ALPN)
 		 */
 		if(req.headers.get("Upgrade") == "h2c" ) {
+			import vibe.http.internal.http2.http2 : HTTP2ServerContext;
+
+			// write the original response to a buffer
+			Nullable!(ubyte[]) createResBuffer(IAllocator alloc) @safe
+			{
+				import vibe.stream.memory;
+				InterfaceProxy!OutputStream bwriter = createMemoryOutputStream(alloc);
+
+				res.bodyWriter = bwriter;
+				request_task(req, res);
+				return res.bodyWriter.extract!(MemoryOutputStream).data.nullable;
+			}
+
 			auto psettings = "HTTP2-Settings" in req.headers;
 			enforceHTTP(psettings !is null, HTTPStatus.badRequest, "Upgrade request must
 					include HTTP2-Settings");
 			auto h2settings = *psettings;
 
 			logInfo("Switching to HTTP/2");
-			// try to start an HTTP/2 connection
-			// TODO runTask as soon as multiplexing logic is done
-			return startHTTP2Connection(tcp_connection, h2settings, listen_info, res);
+			logTrace("handle request (body %d)", req.bodyReader.leastSize);
+
+			// initialize the request handler
+			HTTP2ServerContext h2context = {listen_info, 2, createResBuffer(request_allocator)};
+			auto switchRes = HTTPServerResponse(http_stream, cproxy, settings, request_allocator);
+
+			return startHTTP2Connection(tcp_connection, h2settings, h2context, switchRes);
 		}
+
+
+		request_task(req, res);
+
 
 		// if no one has written anything, return 404
 		if (!res.headerWritten) {
