@@ -330,7 +330,6 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 
 		// handle the request
 		logTrace("handle request (body %d)", req.bodyReader.leastSize);
-		res.httpVersion = req.httpVersion;
 
 		/**
 		 * UPGRADE TO HTTP/2 for cleartext HTTP/1
@@ -342,14 +341,18 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 			import vibe.http.internal.http2.http2 : HTTP2ServerContext;
 
 			// write the original response to a buffer
-			Nullable!(ubyte[]) createResBuffer(IAllocator alloc) @safe
+			void createResBuffer(IAllocator alloc, HTTP2ServerContext ctx) @safe
 			{
 				import vibe.stream.memory;
-				InterfaceProxy!OutputStream bwriter = createMemoryOutputStream(alloc);
+				MemoryOutputStream buf = createMemoryOutputStream(alloc);
 
-				res.bodyWriter = bwriter;
+				res.bodyWriter(buf);
+				ctx.resHeader = buf.data.nullable;
+
 				request_task(req, res);
-				return res.bodyWriter.extract!(MemoryOutputStream).data.nullable;
+				ctx.resBody = buf.data[ctx.resHeader.length..$].nullable;
+
+				import std.stdio;
 			}
 
 			auto psettings = "HTTP2-Settings" in req.headers;
@@ -361,13 +364,15 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 			logTrace("handle request (body %d)", req.bodyReader.leastSize);
 
 			// initialize the request handler
-			HTTP2ServerContext h2context = {listen_info, 2, createResBuffer(request_allocator)};
+			HTTP2ServerContext h2context = {listen_info, 2};
+			createResBuffer(request_allocator, h2context);
 			auto switchRes = HTTPServerResponse(http_stream, cproxy, settings, request_allocator);
 
 			return startHTTP2Connection(tcp_connection, h2settings, h2context, switchRes);
 		}
 
 
+		res.httpVersion = req.httpVersion;
 		request_task(req, res);
 
 

@@ -1,23 +1,28 @@
 module vibe.http.internal.http2.http2;
 
 import vibe.http.internal.http2.frame;
-
 import vibe.http.server;
-import vibe.core.stream;
+
 import vibe.core.log;
 import vibe.core.net;
 import vibe.core.core;
+import vibe.core.stream;
 import vibe.stream.tls;
 import vibe.internal.array;
 import vibe.internal.allocator;
+import vibe.internal.freelistref;
+import vibe.internal.interfaceproxy;
 
-import std.base64;
-import std.bitmanip; // read from ubyte (decoding)
-import std.traits;
 import std.range;
-import std.exception : enforce;
+import std.base64;
+import std.traits;
+import std.bitmanip; // read from ubyte (decoding)
+import std.typecons;
 import std.conv : to;
+import std.exception : enforce;
 import std.algorithm : canFind; // alpn callback
+import std.variant : Algebraic;
+
 /*
  *  6.5.1.  SETTINGS Format
  *
@@ -102,6 +107,8 @@ import std.algorithm : canFind; // alpn callback
  *   An endpoint that receives a SETTINGS frame with any unknown or
  *   unsupported identifier MUST ignore that setting.
 */
+version = VibeForceALPN;
+
 alias HTTP2SettingID = ushort;
 alias HTTP2SettingValue = uint;
 
@@ -368,7 +375,8 @@ unittest {
  * if !valid, close connection and refuse to upgrade (RFC) - TODO discuss
  * if valid, send SWITCHING_PROTOCOL response and start an HTTP/2 connection handler
  */
-bool startHTTP2Connection(ConnectionStream)(ConnectionStream connection, string h2settings, HTTPServerContext context, HTTPServerResponse switchRes) @safe
+bool startHTTP2Connection(ConnectionStream)(ConnectionStream connection, string h2settings,
+		HTTP2ServerContext context, HTTPServerResponse switchRes) @safe
 	if (isConnectionStream!ConnectionStream)
 {
 	// init settings
@@ -393,23 +401,26 @@ unittest {
 	// empty handler, just to test if protocol switching works
 	void handleReq(HTTPServerRequest req, HTTPServerResponse res)
 	@safe {
-		//if (req.path == "/")
-		//res.writeBody("Hello, World! This is an HTTP/1.1 connection response.");
+		if (req.path == "/")
+		res.writeBody("Hello, World! This response is sent through HTTP/2");
 	}
 
 	auto settings = HTTPServerSettings();
 	settings.port = 8090;
-	settings.bindAddresses = ["192.168.1.131", "localhost"];
+	settings.bindAddresses = ["localhost"];
 
 	listenHTTP!handleReq(settings);
-	runApplication();
+	//runApplication();
 }
 
 unittest {
 	//import vibe.core.core : runApplication;
 
 	void handleRequest (HTTPServerRequest req, HTTPServerResponse res)
-	@safe {}
+	@safe {
+		if (req.path == "/")
+		res.writeBody("Hello, World! This response is sent through HTTP/2");
+	}
 
 
 	HTTPServerSettings settings;
@@ -421,11 +432,11 @@ unittest {
 
 	// set alpn callback to support HTTP/2
 	// should accept the 'h2' protocol request
-	settings.tlsContext.alpnCallback(http2Callback);
+	settings.tlsContext.alpnCallback = http2Callback;
 
 	// dummy, just for testing
 	listenHTTP!handleRequest(settings);
-	//runApplication();
+	runApplication();
 }
 
 /**
@@ -433,42 +444,46 @@ unittest {
   * must be set before initializing the server with 'listenHTTP'
   * if the protocol is not set, it replies with HTTP/1.1
   */
-private TLSALPNCallback http2Callback = (string[] choices) {
+TLSALPNCallback http2Callback = (string[] choices) {
+	logInfo("http2Callback");
 	if (choices.canFind("h2")) return "h2";
 	else return "http/1.1";
 };
+
+private alias TLSStreamType = ReturnType!(createTLSStreamFL!(InterfaceProxy!Stream));
 
 /** server & client should send a connection preface
   * server should receive a connection preface from the client
   * server connection preface consists of a SETTINGS Frame
   */
-void handleHTTP2Connection(ConnectionStream)(ConnectionStream connection, HTTP2Settings settings, HTTPServerContext context) @safe
-	if (isConnectionStream!ConnectionStream)
+void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream, TCPConnection
+		connection, HTTP2Settings settings, HTTP2ServerContext context) @safe
+	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStreamType))
 {
 	logInfo("HTTP/2 Connection Handler");
 
-	ubyte[45] settingBuf;
-	FixedAppender!(ubyte[], HTTP2HeaderLength+36) settingDst;
-	FixedAppender!(ubyte[], HTTP2HeaderLength) ackDst;
-
 	// read the connection preface
 	ubyte[24] h2connPreface;
-	connection.read(h2connPreface);
-	assert(h2connPreface == "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", "Invalid HTTP/2 connection preface");
-	logInfo("Received client connection preface");
+	stream.read(h2connPreface);
+
+	assert(h2connPreface == "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", "Invalid HTTP/2 h2stream preface");
+	logInfo("Received client h2stream preface");
 
 	// send SETTINGS Frame
+	ubyte[45] settingBuf;
+	FixedAppender!(ubyte[], HTTP2HeaderLength+36) settingDst;
 	settingDst.createHTTP2FrameHeader(36, HTTP2FrameType.SETTINGS, 0x0, 0);
 	settingDst.serializeSettings(settings);
-	connection.write(settingDst.data);
+	stream.write(settingDst.data);
 
-	// initialize the request handler
-	HTTP2ServerContext h2context = {context, 2};
-	handleHTTP2FrameChain(connection, settings, h2context);
+	// send reply to original request
+	//if(!context.resBuf.isNull) stream.writeResponseFrame(context.resBuf);
+
+	handleHTTP2FrameChain(connection, settings, context);
 }
 
-private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream connection, HTTP2Settings settings, HTTP2ServerContext context)
-@safe
+private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream connection, HTTP2Settings settings, HTTP2ServerContext context) @safe
+	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStream))
 {
 	logInfo("HTTP/2 Frame Chain Handler");
 
@@ -496,8 +511,8 @@ private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream connection
 	}
 }
 
-private void handleHTTP2Frame(ConnectionStream)(ConnectionStream connection, HTTP2Settings settings, HTTP2ServerContext context)
-@safe
+private void handleHTTP2Frame(ConnectionStream)(ConnectionStream connection, HTTP2Settings settings, HTTP2ServerContext context) @safe
+	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStream))
 {
 	logInfo("HTTP/2 Frame Handler");
 	auto h2stream = HTTP2ConnectionStream!ConnectionStream(connection, context.nextStreamID);
@@ -515,8 +530,7 @@ private void handleHTTP2Frame(ConnectionStream)(ConnectionStream connection, HTT
 
 }
 
-private void handleFrameAlloc(ConnectionStream)(ConnectionStream stream, HTTP2Settings settings, HTTP2ServerContext context, IAllocator alloc)
-@safe
+private void handleFrameAlloc(ConnectionStream)(ConnectionStream stream, HTTP2Settings settings, HTTP2ServerContext context, IAllocator alloc) @safe
 {
 	logInfo("HTTP/2 Frame Handler (Alloc)");
 
@@ -621,8 +635,6 @@ private void handleFrameAlloc(ConnectionStream)(ConnectionStream stream, HTTP2Se
 
 		case HTTP2FrameType.WINDOW_UPDATE:
 			// window size is a uint (31) in payload
-			import std.stdio;
-			writeln(payload.data.fromBytes(4));
 			// update window size for DATA Frames flow control
 			break;
 
@@ -645,13 +657,15 @@ enum HTTP2StreamState {
 	CLOSED
 }
 
-private struct HTTP2ServerContext
+struct HTTP2ServerContext
 {
 	private {
 		HTTPServerContext m_context;
 	}
 
 	uint nextStreamID = 2;
+	Nullable!(ubyte[]) resBuf;
+
 	alias m_context this;
 }
 
@@ -659,7 +673,7 @@ private struct HTTP2ServerContext
 // added methods for compliance with the Stream class
 struct HTTP2ConnectionStream(CS)
 {
-	static assert(isConnectionStream!CS);
+	static assert(isConnectionStream!CS || is(CS : TLSStream));
 
 	private {
 		enum Parse { HEADER, PAYLOAD };
