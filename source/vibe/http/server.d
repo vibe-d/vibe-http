@@ -1482,7 +1482,7 @@ unittest {
 
 	//void write(alias HeaderCallback, alias BodyCallback)()
 	//{
-		//connection.writeHeaders!HeaderCallback();
+		//connection.writeHeader!HeaderCallback();
 		//connection.writeBody!BodyCallback();
 	//}
 //}
@@ -2202,10 +2202,17 @@ struct HTTPServerResponseData {
 		/**
 		  * Used to change the bodyWriter during a HTTP/2 upgrade
 		  */
-		@property void bodyWriter(T)(T writer) @safe
+		@property void bodyWriter(T)(ref T writer) @safe
 		{
 			assert(!m_bodyWriter && !headerWritten, "Unable to set bodyWriter");
-			m_bodyWriter = writer;
+			// write the current set headers before initiating the bodyWriter
+			writeHeader(writer);
+			static if(!is(T == InterfaceProxy!OutputStream)) {
+				InterfaceProxy!OutputStream bwriter = writer;
+				m_bodyWriter = bwriter;
+			} else {
+				m_bodyWriter = writer;
+			}
 		}
 
 		/** Sends a redirect request to the client.
@@ -2476,7 +2483,7 @@ struct HTTPServerResponseData {
 
 	// accept a destination stream
 	private void writeHeader(Stream)(Stream conn) @safe
-		if(isStream!Stream)
+		if(isStream!Stream || isOutputStream!Stream)
 	{
 			import vibe.stream.wrapper;
 
