@@ -137,7 +137,6 @@ HTTP2Setting http2Setting(HTTP2SettingID id, string name) {
 	return HTTP2Setting(id, name);
 }
 
-
 struct HTTP2Settings {
 
 	// no limit specified in the RFC
@@ -220,8 +219,25 @@ void serializeSettings(R)(ref R dst, HTTP2Settings settings) @safe @nogc
 {
 	static foreach(s; __traits(allMembers, HTTP2Settings)) {
 		static if(is(typeof(__traits(getMember, HTTP2Settings, s)) == HTTP2SettingValue)) {
-			mixin("dst.putBytes!2((getUDAs!(settings."~s~", HTTP2Setting)[0]).id);");
+			mixin("dst.putBytes!2((getUDAs!(settings."~s~",HTTP2Setting)[0]).id);");
 			mixin("dst.putBytes!4(settings."~s~");");
+		}
+	}
+}
+
+void unpackSettings(R)(ref HTTP2Settings settings, R src) @safe @nogc
+{
+	while(!src.empty) {
+		auto id = src.takeExactly(2).fromBytes(2);
+		src.popFrontN(2);
+		static foreach(s; __traits(allMembers, HTTP2Settings)) {
+			static if(is(typeof(__traits(getMember, HTTP2Settings, s)) == HTTP2SettingValue)) {
+				mixin("if(id == ((getUDAs!(settings."~s~",HTTP2Setting)[0]).id)) {
+							settings."~s~" = src.takeExactly(4).fromBytes(4);
+							src.popFrontN(4);
+						}");
+
+			}
 		}
 	}
 }
@@ -476,9 +492,6 @@ void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream, TCPConnect
 	settingDst.serializeSettings(settings);
 	stream.write(settingDst.data);
 
-	// send reply to original request
-	//if(!context.resBuf.isNull) stream.writeResponseFrame(context.resBuf);
-
 	handleHTTP2FrameChain(connection, settings, context);
 }
 
@@ -591,12 +604,14 @@ private void handleFrameAlloc(ConnectionStream)(ConnectionStream stream, HTTP2Se
 			break;
 
 		case HTTP2FrameType.SETTINGS:
-			// parse settings payload
 			if(!isAck) {
+				// parse settings payload
+				settings.unpackSettings(payload.data);
 				// acknowledge settings with SETTINGS ACK Frame
 				FixedAppender!(ubyte[], 9) ackReply;
 				ackReply.createHTTP2FrameHeader(0, header.type, 0x1, header.streamId);
 				stream.write(ackReply.data);
+				logInfo("Sent SETTINGS ACK");
 			}
 			break;
 
@@ -634,6 +649,7 @@ private void handleFrameAlloc(ConnectionStream)(ConnectionStream stream, HTTP2Se
 			break;
 
 		case HTTP2FrameType.WINDOW_UPDATE:
+			// TODO per-stream and connection-based flow control
 			// window size is a uint (31) in payload
 			// update window size for DATA Frames flow control
 			break;
@@ -664,7 +680,10 @@ struct HTTP2ServerContext
 	}
 
 	uint nextStreamID = 2;
-	Nullable!(ubyte[]) resBuf;
+
+	// used to mantain the first request in case of `h2c` protocol switching
+	Nullable!(ubyte[]) resHeader;
+	Nullable!(ubyte[]) resBody;
 
 	alias m_context this;
 }
@@ -680,6 +699,10 @@ struct HTTP2ConnectionStream(CS)
 		CS m_conn;
 		const uint m_streamId; // streams initiated by the server must be even-numbered
 		Parse toParse = Parse.HEADER;
+
+		// TODO manage the underlying HTTP/1.1 request
+		HTTPServerRequest m_req;
+		HTTPServerResponse m_res;
 	}
 
 	alias m_conn this;
