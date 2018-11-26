@@ -1,6 +1,7 @@
 module vibe.http.internal.http2.http2;
 
 import vibe.http.internal.http2.frame;
+import vibe.http.internal.http2.hpack.tables;
 import vibe.http.server;
 
 import vibe.core.log;
@@ -402,7 +403,8 @@ bool startHTTP2Connection(ConnectionStream)(ConnectionStream connection, string 
 	// try decoding settings
 	if (settings.decode!Base64URL(h2settings)) {
 		// send response
-		switchRes.switchToHTTP2(&handleHTTP2Connection!ConnectionStream, settings, context);
+		context.settings = settings;
+		switchRes.switchToHTTP2(&handleHTTP2Connection!ConnectionStream, context);
 		return true;
 	} else {
 		// reply with a 400 (bad request) header
@@ -472,8 +474,7 @@ private alias TLSStreamType = ReturnType!(createTLSStreamFL!(InterfaceProxy!Stre
   * server should receive a connection preface from the client
   * server connection preface consists of a SETTINGS Frame
   */
-void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream, TCPConnection
-		connection, HTTP2Settings settings, HTTP2ServerContext context) @safe
+void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream, TCPConnection connection, HTTP2ServerContext context) @safe
 	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStreamType))
 {
 	logInfo("HTTP/2 Connection Handler");
@@ -489,46 +490,48 @@ void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream, TCPConnect
 	ubyte[45] settingBuf;
 	FixedAppender!(ubyte[], HTTP2HeaderLength+36) settingDst;
 	settingDst.createHTTP2FrameHeader(36, HTTP2FrameType.SETTINGS, 0x0, 0);
-	settingDst.serializeSettings(settings);
+	settingDst.serializeSettings(context.settings);
 	stream.write(settingDst.data);
 
-	handleHTTP2FrameChain(connection, settings, context);
+	() @trusted {
+		IndexingTable table = IndexingTable(context.settings.headerTableSize);
+		handleHTTP2FrameChain(connection, context);
+	} ();
 }
 
-private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream connection, HTTP2Settings settings, HTTP2ServerContext context) @safe
+private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream connection, HTTP2ServerContext context) @safe
 	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStream))
 {
 	logInfo("HTTP/2 Frame Chain Handler");
 
 	static struct CB {
 		ConnectionStream connection;
-		HTTP2Settings settings;
 		HTTP2ServerContext context;
 
 		void opCall(bool st)
 		{
 			if (!st) connection.close;
-			else runTask(&handleHTTP2FrameChain, connection, settings, context);
+			else runTask(&handleHTTP2FrameChain, connection, context);
 		}
 	}
 
 	while(true) {
-		CB cb = {connection, settings, context};
+		CB cb = {connection, context};
 		auto st = connection.waitForDataAsync(cb);
 
 		final switch(st) {
 			case WaitForDataAsyncStatus.waiting: return;
 			case WaitForDataAsyncStatus.noMoreData: connection.close; return;
-			case WaitForDataAsyncStatus.dataAvailable: handleHTTP2Frame(connection, settings, context); break;
+			case WaitForDataAsyncStatus.dataAvailable: handleHTTP2Frame(connection, context); break;
 		}
 	}
 }
 
-private void handleHTTP2Frame(ConnectionStream)(ConnectionStream connection, HTTP2Settings settings, HTTP2ServerContext context) @safe
+private void handleHTTP2Frame(ConnectionStream)(ConnectionStream connection, HTTP2ServerContext context) @safe
 	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStream))
 {
 	logInfo("HTTP/2 Frame Handler");
-	auto h2stream = HTTP2ConnectionStream!ConnectionStream(connection, context.nextStreamID);
+	auto h2stream = HTTP2ConnectionStream!ConnectionStream(connection, context.next_sid);
 
 	() @trusted {
 
@@ -537,13 +540,13 @@ private void handleHTTP2Frame(ConnectionStream)(ConnectionStream connection, HTT
 			scope alloc = new RegionListAllocator!(shared(Mallocator), false)(1024, Mallocator.instance);
 		else
 			scope alloc = new RegionListAllocator!(shared(GCAllocator), true)(1024, GCAllocator.instance);
-		handleFrameAlloc(h2stream, settings, context, alloc);
+		handleFrameAlloc(h2stream, context, alloc);
 
 	} ();
 
 }
 
-private void handleFrameAlloc(ConnectionStream)(ConnectionStream stream, HTTP2Settings settings, HTTP2ServerContext context, IAllocator alloc) @safe
+private void handleFrameAlloc(ConnectionStream)(ConnectionStream stream, HTTP2ServerContext context, IAllocator alloc) @safe
 {
 	logInfo("HTTP/2 Frame Handler (Alloc)");
 
@@ -606,7 +609,7 @@ private void handleFrameAlloc(ConnectionStream)(ConnectionStream stream, HTTP2Se
 		case HTTP2FrameType.SETTINGS:
 			if(!isAck) {
 				// parse settings payload
-				settings.unpackSettings(payload.data);
+				context.settings.unpackSettings(payload.data);
 				// acknowledge settings with SETTINGS ACK Frame
 				FixedAppender!(ubyte[], 9) ackReply;
 				ackReply.createHTTP2FrameHeader(0, header.type, 0x1, header.streamId);
@@ -677,22 +680,52 @@ struct HTTP2ServerContext
 {
 	private {
 		HTTPServerContext m_context;
+		Nullable!HTTP2Settings m_settings;
+		uint m_sid = 2;
+		bool m_isTLS = true;
 	}
-
-	uint nextStreamID = 2;
 
 	// used to mantain the first request in case of `h2c` protocol switching
 	Nullable!(ubyte[]) resHeader;
 	Nullable!(ubyte[]) resBody;
 
+	this(HTTPServerContext ctx, HTTP2Settings settings) @safe
+	{
+		m_context = ctx;
+		m_settings = settings;
+	}
+
+	this(HTTPServerContext ctx) @safe
+	{
+		m_context = ctx;
+	}
+
 	alias m_context this;
+
+	@property uint next_sid() @safe @nogc { assert(m_sid % 2 == 0); m_sid += 2; return m_sid; }
+
+	@property bool isTLS() @safe @nogc { return m_isTLS; }
+
+	@property void setNoTLS() @safe @nogc { m_isTLS = false; }
+
+	@property ref HTTP2Settings settings() @safe @nogc
+	{
+		assert(!m_settings.isNull);
+		return m_settings;
+	}
+
+	@property void settings(ref HTTP2Settings settings) @safe @nogc
+	{
+		assert(m_settings.isNull);
+		m_settings = settings;
+	}
 }
 
 // based on TCPConnection
 // added methods for compliance with the Stream class
 struct HTTP2ConnectionStream(CS)
 {
-	static assert(isConnectionStream!CS || is(CS : TLSStream));
+	static assert(isConnectionStream!CS || is(CS : TLSStream) || isOutputStream!Stream);
 
 	private {
 		enum Parse { HEADER, PAYLOAD };

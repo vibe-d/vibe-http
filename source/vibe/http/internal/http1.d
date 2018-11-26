@@ -64,8 +64,8 @@ void handleHTTP1Connection(ConnectionStream)(ConnectionStream connection, HTTPSe
 			if(!proto.isNull && proto == "h2") {
 				import vibe.http.internal.http2.http2;
 				HTTP2Settings settings;
-				HTTP2ServerContext h2context = {context, 1, null};
-				handleHTTP2Connection(tls_stream, connection, settings, h2context);
+				auto h2context = HTTP2ServerContext(context, settings);
+				handleHTTP2Connection(tls_stream, connection, h2context);
 				return;
 			}
 			http_stream = tls_stream;
@@ -341,7 +341,7 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 			import vibe.http.internal.http2.http2 : HTTP2ServerContext;
 
 			// write the original response to a buffer
-			void createResBuffer(IAllocator alloc, HTTP2ServerContext ctx) @safe
+			void createResBuffer(IAllocator alloc, ref HTTP2ServerContext ctx) @safe
 			{
 				import vibe.stream.memory;
 				MemoryOutputStream buf = createMemoryOutputStream(alloc);
@@ -351,8 +351,6 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 
 				request_task(req, res);
 				ctx.resBody = buf.data[ctx.resHeader.length..$].nullable;
-
-				import std.stdio;
 			}
 
 			auto psettings = "HTTP2-Settings" in req.headers;
@@ -364,7 +362,7 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 			logTrace("handle request (body %d)", req.bodyReader.leastSize);
 
 			// initialize the request handler
-			HTTP2ServerContext h2context = {listen_info, 2};
+			auto h2context = HTTP2ServerContext(listen_info);
 			createResBuffer(request_allocator, h2context);
 			auto switchRes = HTTPServerResponse(http_stream, cproxy, settings, request_allocator);
 

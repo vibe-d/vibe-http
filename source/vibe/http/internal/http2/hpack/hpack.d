@@ -12,6 +12,7 @@ import std.array; // appender
 import std.algorithm.iteration;
 
 
+/// interface for the HPACK encoder
 void encodeHPACK(I,R)(I src, ref R dst, ref IndexingTable table, bool huffman = true) @safe
 	if(is(I == HTTP2HeaderTableField) || is(ElementType!I : HTTP2HeaderTableField))
 {

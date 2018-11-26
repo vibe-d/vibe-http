@@ -1048,9 +1048,9 @@ struct HTTPServerResponse {
 		m_data.switchProtocol(protocol, del);
 	}
 	/// ditto
-	package void switchToHTTP2(HANDLER)(HANDLER handler, HTTP2Settings settings, HTTP2ServerContext context)
+	package void switchToHTTP2(HANDLER)(HANDLER handler, HTTP2ServerContext context)
 	@safe {
-		m_data.switchToHTTP2(handler, settings, context);
+		m_data.switchToHTTP2(handler, context);
 	}
 
 	// Send a BadRequest and close connection (failed switch to HTTP/2)
@@ -2292,8 +2292,7 @@ struct HTTPServerResponseData {
 					m_rawConnection.close(); // connection not reusable after a protocol upgrade
 			}
 
-		package void switchToHTTP2(HANDLER)(HANDLER handler, const HTTP2Settings settings,
-				HTTP2ServerContext context)
+		package void switchToHTTP2(HANDLER)(HANDLER handler, HTTP2ServerContext context)
 			@safe {
 				logInfo("sending SWITCHING_PROTOCOL response");
 
@@ -2304,7 +2303,7 @@ struct HTTPServerResponseData {
 
 				// TODO improve handler (handleHTTP2Connection) connection management
 				auto tcp_conn = m_rawConnection.extract!TCPConnection;
-				handler(tcp_conn, tcp_conn, settings, context);
+				handler(tcp_conn, tcp_conn, context);
 
 				finalize();
 				// close the existing connection

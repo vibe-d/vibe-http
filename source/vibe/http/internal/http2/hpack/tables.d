@@ -67,7 +67,13 @@ struct HTTP2HeaderTableField {
 	static foreach(t; __traits(allMembers, HeaderValue)) {
 		mixin("this(string n, " ~
 				typeof(__traits(getMember, HeaderValue, t)).stringof ~
-				" v) { name = n; value = v; }");
+				" v) @safe { name = n; value = v; }");
+	}
+
+	this(R)(R t) @safe
+	{
+		assert(t.length == 2, "Invalid range for HTTP2HeaderTableField initializer");
+		this(t[0], t[1]);
 	}
 }
 
