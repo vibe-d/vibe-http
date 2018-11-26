@@ -71,6 +71,7 @@ struct HTTP2HeaderTableField {
 	}
 
 	this(R)(R t) @safe
+		if(is(ElementType!R : string))
 	{
 		assert(t.length == 2, "Invalid range for HTTP2HeaderTableField initializer");
 		this(t[0], t[1]);
