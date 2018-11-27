@@ -3,7 +3,7 @@ module vibe.http.server;
 public import vibe.core.net;
 import vibe.core.stream;
 import vibe.http.internal.http1;
-import vibe.http.internal.http2.http2;
+import vibe.http.internal.http2.settings;
 
 public import vibe.http.log;
 public import vibe.http.common;

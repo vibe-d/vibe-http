@@ -1,6 +1,7 @@
 module vibe.http.internal.http1;
 
-import vibe.http.internal.http2.http2 : startHTTP2Connection;
+import vibe.http.internal.http2.http2;
+import vibe.http.internal.http2.settings;
 import vibe.core.stream;
 import vibe.core.core : runTask;
 import vibe.core.net;
@@ -62,7 +63,6 @@ void handleHTTP1Connection(ConnectionStream)(ConnectionStream connection, HTTPSe
 
 			Nullable!string proto = tls_stream.alpn;
 			if(!proto.isNull && proto == "h2") {
-				import vibe.http.internal.http2.http2;
 				HTTP2Settings settings;
 				auto h2context = HTTP2ServerContext(context, settings);
 				handleHTTP2Connection(tls_stream, connection, h2context);
@@ -338,8 +338,6 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 		 * "h2" is ignored since it is used for TLS protocol switching (ALPN)
 		 */
 		if(req.headers.get("Upgrade") == "h2c" ) {
-			import vibe.http.internal.http2.http2 : HTTP2ServerContext;
-
 			// write the original response to a buffer
 			void createResBuffer(IAllocator alloc, ref HTTP2ServerContext ctx) @safe
 			{
