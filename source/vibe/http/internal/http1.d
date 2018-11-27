@@ -361,6 +361,7 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 
 			// initialize the request handler
 			auto h2context = HTTP2ServerContext(listen_info);
+			h2context.setNoTLS;
 			createResBuffer(request_allocator, h2context);
 			auto switchRes = HTTPServerResponse(http_stream, cproxy, settings, request_allocator);
 

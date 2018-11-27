@@ -2,6 +2,7 @@ module vibe.http.internal.http2.http2;
 
 import vibe.http.internal.http2.frame;
 import vibe.http.internal.http2.settings;
+import vibe.http.internal.http2.translate;
 import vibe.http.internal.http2.hpack.tables;
 import vibe.http.server;
 
@@ -167,7 +168,7 @@ unittest {
 
 	auto settings = HTTPServerSettings();
 	settings.port = 8090;
-	settings.bindAddresses = ["localhost"];
+	settings.bindAddresses = ["192.168.1.131", "localhost"];
 
 	listenHTTP!handleReq(settings);
 	//runApplication();
@@ -187,8 +188,8 @@ unittest {
 	settings.port = 8091;
 	settings.bindAddresses = ["127.0.0.1"];
 	settings.tlsContext = createTLSContext(TLSContextKind.server);
-	settings.tlsContext.useCertificateChainFile("tests/server.crt");
-	settings.tlsContext.usePrivateKeyFile("tests/server.key");
+	settings.tlsContext.useCertificateChainFile("tests/http2/cert.pem");
+	settings.tlsContext.usePrivateKeyFile("tests/http2/key.pem");
 
 	// set alpn callback to support HTTP/2
 	// should accept the 'h2' protocol request
@@ -226,7 +227,7 @@ void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream, TCPConnect
 	stream.read(h2connPreface);
 
 	assert(h2connPreface == "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", "Invalid HTTP/2 h2stream preface");
-	logInfo("Received client h2stream preface");
+	logInfo("Received client http2 connection preface");
 
 	// send SETTINGS Frame
 	ubyte[45] settingBuf;
@@ -234,37 +235,41 @@ void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream, TCPConnect
 	settingDst.createHTTP2FrameHeader(36, HTTP2FrameType.SETTINGS, 0x0, 0);
 	settingDst.serializeSettings(context.settings);
 	stream.write(settingDst.data);
+	logInfo("Sent server http2 connection preface");
 
-	() @trusted {
-		IndexingTable table = IndexingTable(context.settings.headerTableSize);
-		handleHTTP2FrameChain(connection, context);
-	} ();
+	// initialize Frame handler
+	static if(is(ConnectionStream : TCPConnection)) {
+		handleHTTP2FrameChain(stream, connection, context);
+	} else if(context.isTLS && is(ConnectionStream : TLSStreamType)) {
+		handleHTTP2FrameChain(stream.get, connection, context);
+	}
 }
 
-private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream connection, HTTP2ServerContext context) @safe
+private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TCPConnection connection, HTTP2ServerContext context) @safe
 	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStream))
 {
 	logInfo("HTTP/2 Frame Chain Handler");
 
 	static struct CB {
-		ConnectionStream connection;
+		ConnectionStream stream;
+		TCPConnection connection;
 		HTTP2ServerContext context;
 
 		void opCall(bool st)
 		{
 			if (!st) connection.close;
-			else runTask(&handleHTTP2FrameChain, connection, context);
+			else runTask(&handleHTTP2FrameChain, stream, connection, context);
 		}
 	}
 
 	while(true) {
-		CB cb = {connection, context};
+		CB cb = {stream, connection, context};
 		auto st = connection.waitForDataAsync(cb);
 
 		final switch(st) {
 			case WaitForDataAsyncStatus.waiting: return;
 			case WaitForDataAsyncStatus.noMoreData: connection.close; return;
-			case WaitForDataAsyncStatus.dataAvailable: handleHTTP2Frame(connection, context); break;
+			case WaitForDataAsyncStatus.dataAvailable: handleHTTP2Frame(stream, context); break;
 		}
 	}
 }
@@ -273,7 +278,7 @@ private void handleHTTP2Frame(ConnectionStream)(ConnectionStream connection, HTT
 	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStream))
 {
 	logInfo("HTTP/2 Frame Handler");
-	auto h2stream = HTTP2ConnectionStream!ConnectionStream(connection, context.next_sid);
+	auto h2stream = HTTP2ConnectionStream!ConnectionStream(connection, 0);
 
 	() @trusted {
 
@@ -288,10 +293,18 @@ private void handleHTTP2Frame(ConnectionStream)(ConnectionStream connection, HTT
 
 }
 
-private void handleFrameAlloc(ConnectionStream)(ConnectionStream stream, HTTP2ServerContext context, IAllocator alloc) @safe
+private void handleFrameAlloc(ConnectionStream)(ConnectionStream stream, HTTP2ServerContext context, IAllocator alloc) @trusted
 {
 	logInfo("HTTP/2 Frame Handler (Alloc)");
 
+	// TODO determine if an actor as an encoder / decoder would be useful
+	IndexingTable table = IndexingTable(context.settings.headerTableSize);
+
+	if(!context.resHeader.isNull) {
+		auto firstResHeader =
+			buildHeaderFrame!(StartLine.RESPONSE)(cast(string)context.resHeader, context, table, alloc);
+		stream.write(firstResHeader);
+	}
 	// payload buffer
 	auto rawBuf = AllocAppender!(ubyte[])(alloc);
 	auto payload = AllocAppender!(ubyte[])(alloc);
@@ -430,9 +443,12 @@ struct HTTP2ConnectionStream(CS)
 		const uint m_streamId; // streams initiated by the server must be even-numbered
 		Parse toParse = Parse.HEADER;
 
-		// TODO manage the underlying HTTP/1.1 request
-		HTTPServerRequest m_req;
-		HTTPServerResponse m_res;
+		// Stream dependency
+		HTTP2FrameStreamDependency m_dependency;
+
+		//// TODO manage the underlying HTTP/1.1 request
+		//HTTPServerRequest m_req;
+		//HTTPServerResponse m_res;
 	}
 
 	alias m_conn this;
@@ -451,6 +467,8 @@ struct HTTP2ConnectionStream(CS)
 	}
 
 	@property uint streamId() @safe @nogc { return m_streamId; }
+
+	@property HTTP2FrameStreamDependency dependency() @safe @nogc { return m_dependency; }
 
 	void readHeader(R)(ref R dst) @safe
 	{
