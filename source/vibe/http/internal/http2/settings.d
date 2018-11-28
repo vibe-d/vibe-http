@@ -278,7 +278,7 @@ struct HTTP2ServerContext
 	private {
 		HTTPServerContext m_context;
 		Nullable!HTTP2Settings m_settings;
-		uint m_sid = 2;
+		uint m_sid = 0;
 		bool m_isTLS = true;
 	}
 
@@ -298,6 +298,8 @@ struct HTTP2ServerContext
 	}
 
 	alias m_context this;
+
+	@property HTTPServerContext h1context() @safe @nogc { return m_context; }
 
 	@property uint next_sid() @safe @nogc { assert(m_sid % 2 == 0); m_sid += 2; return m_sid; }
 
