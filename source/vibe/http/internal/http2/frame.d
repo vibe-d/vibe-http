@@ -1,6 +1,6 @@
 module vibe.http.internal.http2.frame;
 
-import vibe.http.internal.http2.http2;
+import vibe.http.internal.http2.settings;
 
 import std.typecons;
 import std.traits;
