@@ -35,6 +35,7 @@ import std.format;
 import std.parallelism;
 import std.exception;
 import std.string;
+import std.traits;
 import std.encoding : sanitize;
 
 version (VibeNoSSL) version = HaveNoTLS;
@@ -745,7 +746,6 @@ struct HTTPServerRequest {
 		DictionaryList!(string, true, 8) params;
 
 		@property scope string requestURI() const @safe { return m_data.requestURI; }
-
 		// ditto
 		@property void requestURI(string uri) @safe { m_data.requestURI = uri; }
 
@@ -2573,6 +2573,29 @@ unittest
 	  assert(cvm[""] == "");
 }
 
+void parseHTTP2RequestHeader(R)(ref R headers, ref HTTPServerRequest reqStruct) @safe
+{
+	import std.algorithm.searching : find, startsWith;
+	import std.algorithm.iteration : filter;
+	auto req = reqStruct.m_data;
+
+	//Method
+	req.method = cast(HTTPMethod)headers.find!((h,m) => h.name == m)(":method")[0].value;
+
+	//Host
+	req.host = cast(string)headers.find!((h,m) => h.name == m)(":authority")[0].value;
+
+	//URI
+	req.requestURI = req.host;
+
+	//HTTP version
+	req.httpVersion = HTTPVersion.HTTP_2;
+
+	//headers
+	foreach(h; headers.filter!(f => !f.name.startsWith(":"))) {
+		req.headers[h.name] = cast(string)h.value;
+	}
+}
 
 void parseRequestHeader(InputStream)(HTTPServerRequest reqStruct, InputStream http_stream, IAllocator alloc, ulong max_header_size)
 	if (isInputStream!InputStream)
