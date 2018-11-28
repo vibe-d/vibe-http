@@ -4,6 +4,7 @@ import vibe.http.internal.http2.frame;
 import vibe.http.internal.http2.settings;
 import vibe.http.internal.http2.translate;
 import vibe.http.internal.http2.hpack.tables;
+import vibe.http.internal.http2.hpack.hpack;
 import vibe.http.server;
 
 import vibe.core.log;
@@ -226,16 +227,9 @@ void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream, TCPConnect
 	ubyte[24] h2connPreface;
 	stream.read(h2connPreface);
 
+	
 	assert(h2connPreface == "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", "Invalid HTTP/2 h2stream preface");
 	logInfo("Received client http2 connection preface");
-
-	// send SETTINGS Frame
-	ubyte[45] settingBuf;
-	FixedAppender!(ubyte[], HTTP2HeaderLength+36) settingDst;
-	settingDst.createHTTP2FrameHeader(36, HTTP2FrameType.SETTINGS, 0x0, 0);
-	settingDst.serializeSettings(context.settings);
-	stream.write(settingDst.data);
-	logInfo("Sent server http2 connection preface");
 
 	// initialize Frame handler
 	static if(is(ConnectionStream : TCPConnection)) {
@@ -269,16 +263,16 @@ private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TC
 		final switch(st) {
 			case WaitForDataAsyncStatus.waiting: return;
 			case WaitForDataAsyncStatus.noMoreData: connection.close; return;
-			case WaitForDataAsyncStatus.dataAvailable: handleHTTP2Frame(stream, context); break;
+			case WaitForDataAsyncStatus.dataAvailable: handleHTTP2Frame(stream, connection, context); break;
 		}
 	}
 }
 
-private void handleHTTP2Frame(ConnectionStream)(ConnectionStream connection, HTTP2ServerContext context) @safe
+private void handleHTTP2Frame(ConnectionStream)(ConnectionStream stream, TCPConnection connection, HTTP2ServerContext context) @safe
 	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStream))
 {
 	logInfo("HTTP/2 Frame Handler");
-	auto h2stream = HTTP2ConnectionStream!ConnectionStream(connection, 0);
+	auto h2stream = HTTP2ConnectionStream!ConnectionStream(stream, 0);
 
 	() @trusted {
 
@@ -287,13 +281,13 @@ private void handleHTTP2Frame(ConnectionStream)(ConnectionStream connection, HTT
 			scope alloc = new RegionListAllocator!(shared(Mallocator), false)(1024, Mallocator.instance);
 		else
 			scope alloc = new RegionListAllocator!(shared(GCAllocator), true)(1024, GCAllocator.instance);
-		handleFrameAlloc(h2stream, context, alloc);
+		handleFrameAlloc(h2stream, connection, context, alloc);
 
 	} ();
 
 }
 
-private void handleFrameAlloc(ConnectionStream)(ConnectionStream stream, HTTP2ServerContext context, IAllocator alloc) @trusted
+private void handleFrameAlloc(ConnectionStream)(ConnectionStream stream, TCPConnection connection, HTTP2ServerContext context, IAllocator alloc) @trusted
 {
 	logInfo("HTTP/2 Frame Handler (Alloc)");
 
@@ -347,6 +341,10 @@ private void handleFrameAlloc(ConnectionStream)(ConnectionStream stream, HTTP2Se
 				// wait for the next header frame until end_headers flag is set
 				// END_STREAM flag does not count in this case
 			}
+			// parse headers in payload
+			auto hdec = appender!(HTTP2HeaderTableField[]);
+			decodeHPACK(cast(immutable(ubyte)[])payload.data, hdec, table, alloc);
+			handleHTTP2Request(stream, connection, context, hdec.data, table, alloc);
 			if(endStream) {
 				// close stream `stream.streamId`
 			}
@@ -363,13 +361,8 @@ private void handleFrameAlloc(ConnectionStream)(ConnectionStream stream, HTTP2Se
 
 		case HTTP2FrameType.SETTINGS:
 			if(!isAck) {
-				// parse settings payload
-				context.settings.unpackSettings(payload.data);
-				// acknowledge settings with SETTINGS ACK Frame
-				FixedAppender!(ubyte[], 9) ackReply;
-				ackReply.createHTTP2FrameHeader(0, header.type, 0x1, header.streamId);
-				stream.write(ackReply.data);
-				logInfo("Sent SETTINGS ACK");
+				// TODO do not send back if not connection preface
+				handleHTTP2SettingsFrame(stream, payload.data, header, context);
 			}
 			break;
 
@@ -421,6 +414,30 @@ private void handleFrameAlloc(ConnectionStream)(ConnectionStream stream, HTTP2Se
 	}
 }
 
+void handleHTTP2SettingsFrame(Stream)(Stream stream, ubyte[] data, HTTP2FrameHeader header, ref HTTP2ServerContext context, bool isConnectionPreface = true) @safe
+{
+	// parse settings payload
+	context.settings.unpackSettings(data);
+
+	// acknowledge settings with SETTINGS ACK Frame
+	FixedAppender!(ubyte[], 9) ackReply;
+	ackReply.createHTTP2FrameHeader(0, header.type, 0x1, header.streamId);
+
+	if(isConnectionPreface) sendHTTP2SettingsFrame(stream, context);
+
+	stream.write(ackReply.data);
+	logInfo("Sent SETTINGS ACK");
+}
+
+void sendHTTP2SettingsFrame(Stream)(Stream stream, HTTP2ServerContext context) @safe
+{
+	FixedAppender!(ubyte[], HTTP2HeaderLength+36) settingDst;
+	settingDst.createHTTP2FrameHeader(36, HTTP2FrameType.SETTINGS, 0x0, 0);
+	settingDst.serializeSettings(context.settings);
+	stream.write(settingDst.data);
+	logInfo("Sent SETTINGS Frame");
+}
+
 enum HTTP2StreamState {
 	IDLE,
 	RESERVED_LOCAL,
@@ -465,6 +482,8 @@ struct HTTP2ConnectionStream(CS)
 	{
 		this(conn, 0);
 	}
+
+	@property CS connection() @safe { return m_conn; }
 
 	@property uint streamId() @safe @nogc { return m_streamId; }
 
