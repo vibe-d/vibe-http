@@ -4,7 +4,7 @@ public import vibe.core.net;
 import vibe.core.stream;
 import vibe.http.internal.http1;
 import vibe.http.internal.http2.settings;
-import vibe.http.internal.http2.translate;
+import vibe.http.internal.http2.exchange;
 
 public import vibe.http.log;
 public import vibe.http.common;

@@ -5,6 +5,7 @@ import vibe.http.internal.http2.hpack.tables;
 import vibe.http.internal.http2.hpack.util;
 
 import vibe.internal.array : AllocAppender;
+import vibe.core.log;
 
 import std.range; // Decoder
 import std.string;
@@ -121,6 +122,10 @@ private void decodeLiteral(I,R)(ref I src, ref R dst) @safe
 
 	// take a buffer of remaining octets
 	auto vlen = bbuf.toInteger(1); // value length
+	if(vlen > src.length) {
+		logWarn("Invalid literal decoded");
+		return;
+	}
 	auto buf = src[0..vlen];
 	src = src[vlen..$];
 

@@ -348,8 +348,10 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 				res.bodyWriterH2(buf);
 				ctx.resHeader = buf.data.nullable;
 
-				request_task(req, res);
-				ctx.resBody = buf.data[ctx.resHeader.length..$].nullable;
+				if(req.method != HTTPMethod.HEAD) {
+					request_task(req, res);
+					ctx.resBody = buf.data[ctx.resHeader.length..$].nullable;
+				}
 			}
 
 			auto psettings = "HTTP2-Settings" in req.headers;

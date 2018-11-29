@@ -33,7 +33,7 @@ import std.algorithm.mutation;
 import std.algorithm.searching;
 
 /**
-  * Translation between HTTP/1.1 and HTTP/2 headers, as documented in:
+  * HTTP/2 message exchange module as documented in:
   * RFC 7540 (HTTP/2) section 8
 */
 
@@ -130,8 +130,7 @@ unittest {
 }
 
 // similar to originalHandleRequest but adapted to HTTP/2
-bool handleHTTP2Request(UStream)(HTTP2ConnectionStream!UStream stream, TCPConnection tcp_connection,
-		HTTP2ServerContext h2context, HTTP2HeaderTableField[] headers, ref IndexingTable table, scope IAllocator alloc) @safe
+bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPConnection tcp_connection, HTTP2ServerContext h2context, HTTP2HeaderTableField[] headers, ref IndexingTable table, scope IAllocator alloc) @safe
 {
 	SysTime reqtime = Clock.currTime(UTC());
 	HTTPServerContext listen_info = h2context.h1context;
@@ -152,7 +151,7 @@ bool handleHTTP2Request(UStream)(HTTP2ConnectionStream!UStream stream, TCPConnec
 	HTTPServerRequestDelegate request_task = context.requestHandler;
 	HTTPServerSettings settings = context.settings;
 
-	// temporarily set to the default settings, the virtual host specific settings will be set further down
+	// temporarily set to the default settings
 	req.m_settings = settings;
 
 	// Create the response object
@@ -176,8 +175,6 @@ bool handleHTTP2Request(UStream)(HTTP2ConnectionStream!UStream stream, TCPConnec
 		}
 	}
 
-	// TODO error page handler
-
 	bool parsed = false;
 
 	// parse request:
@@ -185,139 +182,130 @@ bool handleHTTP2Request(UStream)(HTTP2ConnectionStream!UStream stream, TCPConnec
 	// defined in vibe.http.server because of protected struct HTTPServerRequest
 	parseHTTP2RequestHeader(headers, req);
 
-	//try {
-		// find the matching virtual host
-		string reqhost;
-		ushort reqport = 0;
+	string reqhost;
+	ushort reqport = 0;
+	{
+		string s = req.host;
+		enforceHTTP(s.length > 0 || req.httpVersion <= HTTPVersion.HTTP_1_0, HTTPStatus.badRequest, "Missing Host header.");
+		if (s.startsWith('[')) { // IPv6 address
+			auto idx = s.indexOf(']');
+			enforce(idx > 0, "Missing closing ']' for IPv6 address.");
+			reqhost = s[1 .. idx];
+			s = s[idx+1 .. $];
+		} else if (s.length) { // host name or IPv4 address
+			auto idx = s.indexOf(':');
+			if (idx < 0) idx = s.length;
+			enforceHTTP(idx > 0, HTTPStatus.badRequest, "Missing Host header.");
+			reqhost = s[0 .. idx];
+			s = s[idx .. $];
+		}
+		if (s.startsWith(':')) reqport = s[1 .. $].to!ushort;
+	}
+	foreach (ctx; listen_info.virtualHosts) {
+		if (icmp2(ctx.settings.hostName, reqhost) == 0 &&
+				(!reqport || reqport == ctx.settings.port))
 		{
-			string s = req.host;
-			enforceHTTP(s.length > 0 || req.httpVersion <= HTTPVersion.HTTP_1_0, HTTPStatus.badRequest, "Missing Host header.");
-			if (s.startsWith('[')) { // IPv6 address
-				auto idx = s.indexOf(']');
-				enforce(idx > 0, "Missing closing ']' for IPv6 address.");
-				reqhost = s[1 .. idx];
-				s = s[idx+1 .. $];
-			} else if (s.length) { // host name or IPv4 address
-				auto idx = s.indexOf(':');
-				if (idx < 0) idx = s.length;
-				enforceHTTP(idx > 0, HTTPStatus.badRequest, "Missing Host header.");
-				reqhost = s[0 .. idx];
-				s = s[idx .. $];
-			}
-			if (s.startsWith(':')) reqport = s[1 .. $].to!ushort;
+			context = ctx;
+			settings = ctx.settings;
+			request_task = ctx.requestHandler;
+			break;
 		}
-		foreach (ctx; listen_info.virtualHosts) {
-			if (icmp2(ctx.settings.hostName, reqhost) == 0 &&
-					(!reqport || reqport == ctx.settings.port))
-			{
-				context = ctx;
-				settings = ctx.settings;
-				request_task = ctx.requestHandler;
-				break;
+	}
+	req.m_settings = settings;
+	res.m_settings = settings;
+
+	// setup compressed output
+	if (settings.useCompressionIfPossible) {
+		if (auto pae = "Accept-Encoding" in req.headers) {
+			if (canFind(*pae, "gzip")) {
+				res.headers["Content-Encoding"] = "gzip";
+			} else if (canFind(*pae, "deflate")) {
+				res.headers["Content-Encoding"] = "deflate";
 			}
 		}
-		req.m_settings = settings;
-		res.m_settings = settings;
+	}
 
-		// setup compressed output
-		if (settings.useCompressionIfPossible) {
-			if (auto pae = "Accept-Encoding" in req.headers) {
-				if (canFind(*pae, "gzip")) {
-					res.headers["Content-Encoding"] = "gzip";
-				} else if (canFind(*pae, "deflate")) {
-					res.headers["Content-Encoding"] = "deflate";
-				}
-			}
+	// handle Expect header
+	if (auto pv = "Expect" in req.headers) {
+		if (icmp2(*pv, "100-continue") == 0) {
+			logTrace("sending 100 continue");
+			auto cres =	buildHeaderFrame!(StartLine.RESPONSE)(
+					"HTTP/1.1 100 Continue\r\n\r\n", h2context, table, alloc);
+			// TODO return / send header
 		}
+	}
 
-		// handle Expect header
-		if (auto pv = "Expect" in req.headers) {
-			if (icmp2(*pv, "100-continue") == 0) {
-				logTrace("sending 100 continue");
-				auto cres =	buildHeaderFrame!(StartLine.RESPONSE)(
-						"HTTP/1.1 100 Continue\r\n\r\n", h2context, table, alloc);
-				// TODO return / send header
-			}
+	// eagerly parse the URL as its lightweight and defacto @nogc
+	auto url = URL.parse(req.requestURI);
+	req.queryString = url.queryString;
+	req.username = url.username;
+	req.password = url.password;
+	req.requestPath = url.path;
+
+	// lookup the session
+	if (settings.sessionStore) {
+		// use the first cookie that contains a valid session ID in case
+		// of multiple matching session cookies
+		foreach (val; req.cookies.getAll(settings.sessionIdCookie)) {
+			req.session = settings.sessionStore.open(val);
+			res.m_session = req.session;
+			if (req.session) break;
 		}
+	}
 
-		// eagerly parse the URL as its lightweight and defacto @nogc
-		auto url = URL.parse(req.requestURI);
-		req.queryString = url.queryString;
-		req.username = url.username;
-		req.password = url.password;
-		req.requestPath = url.path;
+	// write default headers
+	if (req.method == HTTPMethod.HEAD) res.m_isHeadResponse = true;
+	if (settings.serverString.length)
+		res.headers["Server"] = settings.serverString;
+	res.headers["Date"] = formatRFC822DateAlloc(alloc, reqtime);
+	if (req.persistent) res.headers["Keep-Alive"] = formatAlloc(alloc, "timeout=%d", settings.keepAliveTimeout.total!"seconds"());
 
-		// lookup the session
-		if (settings.sessionStore) {
-			// use the first cookie that contains a valid session ID in case
-			// of multiple matching session cookies
-			foreach (val; req.cookies.getAll(settings.sessionIdCookie)) {
-				req.session = settings.sessionStore.open(val);
-				res.m_session = req.session;
-				if (req.session) break;
-			}
-		}
+	// finished parsing the request
+	parsed = true;
+	logTrace("persist: %s", req.persistent);
+	//keep_alive = req.persistent;
 
-		// write default headers
-		if (req.method == HTTPMethod.HEAD) res.m_isHeadResponse = true;
-		if (settings.serverString.length)
-			res.headers["Server"] = settings.serverString;
-		res.headers["Date"] = formatRFC822DateAlloc(alloc, reqtime);
-		if (req.persistent) res.headers["Keep-Alive"] = formatAlloc(alloc, "timeout=%d", settings.keepAliveTimeout.total!"seconds"());
+	// create HEADERS frame
+	auto headerWriter = createHeaderOutputStream(alloc);
+	res.writeHeaderOut(headerWriter);
 
-		// finished parsing the request
-		parsed = true;
-		logTrace("persist: %s", req.persistent);
-		//keep_alive = req.persistent;
+	// send HEADERS frame
+	h2context.next_sid = stream.streamId;
+	auto headerFrame = buildHeaderFrame!(StartLine.RESPONSE)(headerWriter.data, h2context, table, alloc);
+	if(headerFrame.length < h2context.settings.maxFrameSize)
+	{
+		headerFrame[4] += 0x4; // set END_HEADERS flag (sending complete header)
+		cstream.write(headerFrame);
+	} else {
+		// TODO CONTINUATION frames
+		assert(false);
+	}
 
-		// create HEADERS frame
-		auto headerWriter = createHeaderOutputStream(alloc);
-		res.writeHeaderOut(headerWriter);
+	logTrace("Sent HEADERS frame on streamID " ~ stream.streamId.to!string);
 
-		// send HEADERS frame
-		h2context.next_sid = stream.streamId;
-		auto headerFrame = buildHeaderFrame!(StartLine.RESPONSE)(headerWriter.data, h2context, table, alloc);
-		if(headerFrame.length < h2context.settings.maxFrameSize)
-		{
-			headerFrame[4] += 0x4; // set END_HEADERS flag (sending complete header)
-			cstream.write(headerFrame);
-		} else {
-			assert(false);
-			// TODO CONTINUATION frames
-		}
-
-		logInfo("Sent HEADERS frame on streamID " ~ stream.streamId.to!string);
-
-		// send DATA frame
+	if(req.method != HTTPMethod.HEAD) {
+		// handle payload
 		auto dataWriter = createDataOutputStream(alloc);
+		auto dataFrame = AllocAppender!(ubyte[])(alloc);
 		res.bodyWriterH2 = dataWriter;
+
+		// run task (writes body)
 		request_task(req, res);
-		// TODO create DATA frame and send written body
+
+		// create DATA Frame
+		dataFrame.createHTTP2FrameHeader(dataWriter.data.length.to!uint,
+				HTTP2FrameType.DATA, 0x1, stream.streamId);
+		dataFrame.put(dataWriter.data);
+		cstream.write(dataFrame.data);
+
+		logTrace("Sent DATA frame on streamID " ~ stream.streamId.to!string);
+	}
 
 
-		// if no one has written anything, return 404
-		if (!res.headerWritten) {
-			//string dbg_msg;
-			//logDiagnostic("No response written for %s", req.requestURI);
-			//if (settings.options & HTTPServerOption.errorStackTraces)
-				//dbg_msg = format("No routes match path '%s'", req.requestURI);
-			//errorOut(HTTPStatus.notFound, httpStatusText(HTTPStatus.notFound), dbg_msg, null);
-		}
-	//} catch (HTTPStatusException err) {
-		//if (!res.headerWritten) errorOut(err.status, err.msg, err.debugMessage, err);
-		//else logDiagnostic("HTTPSterrorOutatusException while writing the response: %s", err.msg);
-		//debug logDebug("Exception while handling request %s %s: %s", req.method, req.requestURI, () @trusted { return err.toString().sanitize; } ());
-		//if (!parsed || res.headerWritten || justifiesConnectionClose(err.status))
-			//keep_alive = false;
-	//} catch (UncaughtException e) {
-		//auto status = parsed ? HTTPStatus.internalServerError : HTTPStatus.badRequest;
-		//string dbg_msg;
-		//if (settings.options & HTTPServerOption.errorStackTraces) dbg_msg = () @trusted { return e.toString().sanitize; } ();
-		//if (!res.headerWritten && tcp_connection.connected) errorOut(status, httpStatusText(status), dbg_msg, e);
-		//else logDiagnostic("Error while writing the response: %s", e.msg);
-		//debug logDebug("Exception while handling request %s %s: %s", req.method, req.requestURI, () @trusted { return e.toString().sanitize(); } ());
-		//if (!parsed || res.headerWritten || !cast(Exception)e) keep_alive = false;
-	//}
+	// if no one has written anything, return 404
+	if (!res.headerWritten) {
+		assert(false);
+	}
 
 	return true;
 }
@@ -381,45 +369,3 @@ private final class HeaderOutputStream : OutputStream {
     nothrow {
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
