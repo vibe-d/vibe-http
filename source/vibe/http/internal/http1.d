@@ -42,7 +42,7 @@ void handleHTTP1Connection(ConnectionStream)(ConnectionStream connection, HTTPSe
 {
 	connection.tcpNoDelay = true;
 
-	logInfo("Connection");
+	//logInfo("Connection");
 	version(HaveNoTLS) {} else {
 		TLSStreamType tls_stream;
 	}
@@ -77,7 +77,7 @@ void handleHTTP1Connection(ConnectionStream)(ConnectionStream connection, HTTPSe
 private void handleHTTP1RequestChain(ConnectionStream)(ConnectionStream connection, HTTPContext context)
 @safe
 {
-	logInfo("HTTP/1 Request Chain Handler");
+	//logInfo("HTTP/1 Request Chain Handler");
 
 	// copies connection/context instead of creating a heap closure
 	static struct CB {
@@ -106,7 +106,7 @@ private void handleHTTP1RequestChain(ConnectionStream)(ConnectionStream connecti
 private void handleHTTP1Request(ConnectionStream)(ConnectionStream connection, HTTPContext context)
 @safe
 {
-	logInfo("HTTP/1 Request Handler");
+	//logInfo("HTTP/1 Request Handler");
 
 	HTTPServerSettings settings;
 	InterfaceProxy!Stream http_stream;
@@ -137,7 +137,7 @@ private void handleHTTP1Request(ConnectionStream)(ConnectionStream connection, H
 private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnection tcp_connection, HTTPServerContext listen_info, HTTPServerSettings settings, ref bool keep_alive, scope IAllocator request_allocator)
 @safe {
 
-	logInfo ("Old request handler");
+	//logInfo ("Old request handler");
 	import std.algorithm.searching : canFind;
 
 	SysTime reqtime = Clock.currTime(UTC());
@@ -227,6 +227,7 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 
 		// basic request parsing
 		parseRequestHeader(req, reqReader, request_allocator, settings.maxRequestHeaderSize);
+
 		logTrace("Got request header.");
 
 		// find the matching virtual host
@@ -344,7 +345,7 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 				import vibe.stream.memory;
 				MemoryOutputStream buf = createMemoryOutputStream(alloc);
 
-				res.bodyWriter(buf);
+				res.bodyWriterH2(buf);
 				ctx.resHeader = buf.data.nullable;
 
 				request_task(req, res);
@@ -356,7 +357,7 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 					include HTTP2-Settings");
 			auto h2settings = *psettings;
 
-			logInfo("Switching to HTTP/2");
+			logDebug("Switching to HTTP/2");
 			logTrace("handle request (body %d)", req.bodyReader.leastSize);
 
 			// initialize the request handler

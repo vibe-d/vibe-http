@@ -18,6 +18,7 @@ import vibe.internal.array;
 import vibe.internal.utilallocator: RegionListAllocator;
 import vibe.stream.wrapper : ConnectionProxyStream, createConnectionProxyStream, createConnectionProxyStreamFL;
 import vibe.utils.string;
+import vibe.stream.memory;
 import vibe.inet.url;
 
 import std.range;
@@ -40,6 +41,8 @@ enum StartLine { REQUEST, RESPONSE };
 
 private alias H2F = HTTP2HeaderTableField;
 
+alias DataOutputStream = MemoryOutputStream;
+
 /// accepts a HTTP/1.1 header list, converts it to an HTTP/2 header frame and encodes it
 ubyte[] buildHeaderFrame(alias type)(string[] h1header, HTTP2ServerContext context, ref IndexingTable table, scope IAllocator alloc) @safe
 {
@@ -59,11 +62,12 @@ ubyte[] buildHeaderFrame(alias type)(string[] h1header, HTTP2ServerContext conte
 		.each!(s => s.split(": ").H2F.encodeHPACK(pbuf, table));
 
 	// TODO padding
-	hbuf.createHTTP2FrameHeader(cast(uint)pbuf.data.length, HTTP2FrameType.SETTINGS, 0x4, 0);
+	hbuf.createHTTP2FrameHeader(cast(uint)pbuf.data.length, HTTP2FrameType.HEADERS, 0x0, context.next_sid);
 	res.put(hbuf.data);
 	res.put(pbuf.data);
 	return res.data;
 }
+
 /// DITTO
 ubyte[] buildHeaderFrame(alias type)(string h1header, HTTP2ServerContext context, ref IndexingTable table, scope IAllocator alloc) @safe
 {
@@ -266,11 +270,30 @@ bool handleHTTP2Request(UStream)(HTTP2ConnectionStream!UStream stream, TCPConnec
 		logTrace("persist: %s", req.persistent);
 		//keep_alive = req.persistent;
 
-		// handle the request
-		//logTrace("handle request (body %d)", req.bodyReader.leastSize);
+		// create HEADERS frame
+		auto headerWriter = createHeaderOutputStream(alloc);
+		res.writeHeaderOut(headerWriter);
 
-		res.httpVersion = req.httpVersion;
+		// send HEADERS frame
+		h2context.next_sid = stream.streamId;
+		auto headerFrame = buildHeaderFrame!(StartLine.RESPONSE)(headerWriter.data, h2context, table, alloc);
+		if(headerFrame.length < h2context.settings.maxFrameSize)
+		{
+			headerFrame[4] += 0x4; // set END_HEADERS flag (sending complete header)
+			cstream.write(headerFrame);
+		} else {
+			assert(false);
+			// TODO CONTINUATION frames
+		}
+
+		logInfo("Sent HEADERS frame on streamID " ~ stream.streamId.to!string);
+
+		// send DATA frame
+		auto dataWriter = createDataOutputStream(alloc);
+		res.bodyWriterH2 = dataWriter;
 		request_task(req, res);
+		// TODO create DATA frame and send written body
+
 
 		// if no one has written anything, return 404
 		if (!res.headerWritten) {
@@ -299,8 +322,65 @@ bool handleHTTP2Request(UStream)(HTTP2ConnectionStream!UStream stream, TCPConnec
 	return true;
 }
 
+private DataOutputStream createDataOutputStream(IAllocator alloc = vibeThreadAllocator())
+@safe nothrow {
+	return createMemoryOutputStream(alloc);
+}
 
+private HeaderOutputStream createHeaderOutputStream(IAllocator alloc = vibeThreadAllocator())
+@safe nothrow {
+    return new HeaderOutputStream(alloc);
+}
 
+private final class HeaderOutputStream : OutputStream {
+@safe:
+
+    private {
+        AllocAppender!(string) m_destination;
+    }
+
+    this(IAllocator alloc)
+    nothrow {
+        m_destination = AllocAppender!(string)(alloc);
+    }
+
+    /// An array with all data written to the stream so far.
+    @property string data() @trusted nothrow { return m_destination.data(); }
+
+    /// Resets the stream to its initial state containing no data.
+    void reset(AppenderResetMode mode = AppenderResetMode.keepData)
+    @system {
+        m_destination.reset(mode);
+    }
+
+    /// Reserves space for data - useful for optimization.
+    void reserve(size_t nbytes)
+    {
+        m_destination.reserve(nbytes);
+    }
+
+    size_t write(in string bytes, IOMode)
+    {
+        () @trusted { m_destination.put(bytes); } ();
+        return bytes.length;
+	}
+	/// DITTO
+    size_t write(const(ubyte[]) bytes, IOMode)
+    {
+        () @trusted { m_destination.put(cast(string)bytes); } ();
+        return bytes.length;
+	}
+
+    alias write = OutputStream.write;
+
+    void flush()
+    nothrow {
+    }
+
+    void finalize()
+    nothrow {
+    }
+}
 
 
 

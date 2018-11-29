@@ -273,6 +273,8 @@ unittest {
 	assert(!settings.decode!Base64URL("a|b+*-c"));
 }
 
+// TODO should implement stream ID management
+/// used to mantain a connection context
 struct HTTP2ServerContext
 {
 	private {
@@ -301,7 +303,9 @@ struct HTTP2ServerContext
 
 	@property HTTPServerContext h1context() @safe @nogc { return m_context; }
 
-	@property uint next_sid() @safe @nogc { assert(m_sid % 2 == 0); m_sid += 2; return m_sid; }
+	@property uint next_sid() @safe @nogc { assert(m_sid == 1 || m_sid % 2 == 0); return m_sid; }
+
+	@property void next_sid(uint sid) @safe @nogc { assert(m_sid == 1 || m_sid % 2 == 0); m_sid = sid; }
 
 	@property bool isTLS() @safe @nogc { return m_isTLS; }
 

@@ -294,11 +294,11 @@ private void handleFrameAlloc(ConnectionStream)(ConnectionStream stream, TCPConn
 	// TODO determine if an actor as an encoder / decoder would be useful
 	IndexingTable table = IndexingTable(context.settings.headerTableSize);
 
-	if(!context.resHeader.isNull) {
-		auto firstResHeader =
-			buildHeaderFrame!(StartLine.RESPONSE)(cast(string)context.resHeader, context, table, alloc);
-		stream.write(firstResHeader);
-	}
+	//if(!context.resHeader.isNull) { // TODO
+		//auto firstResHeader =
+			//buildFrame!(StartLine.RESPONSE)(cast(string)context.resHeader, type, context, table, alloc);
+		//stream.write(firstResHeader);
+	//}
 	// payload buffer
 	auto rawBuf = AllocAppender!(ubyte[])(alloc);
 	auto payload = AllocAppender!(ubyte[])(alloc);
@@ -342,6 +342,7 @@ private void handleFrameAlloc(ConnectionStream)(ConnectionStream stream, TCPConn
 				// END_STREAM flag does not count in this case
 			}
 			// parse headers in payload
+			stream.streamId = header.streamId;
 			auto hdec = appender!(HTTP2HeaderTableField[]);
 			decodeHPACK(cast(immutable(ubyte)[])payload.data, hdec, table, alloc);
 			handleHTTP2Request(stream, connection, context, hdec.data, table, alloc);
@@ -457,7 +458,7 @@ struct HTTP2ConnectionStream(CS)
 	private {
 		enum Parse { HEADER, PAYLOAD };
 		CS m_conn;
-		const uint m_streamId; // streams initiated by the server must be even-numbered
+		uint m_streamId; // streams initiated by the server must be even-numbered
 		Parse toParse = Parse.HEADER;
 
 		// Stream dependency
@@ -486,6 +487,8 @@ struct HTTP2ConnectionStream(CS)
 	@property CS connection() @safe { return m_conn; }
 
 	@property uint streamId() @safe @nogc { return m_streamId; }
+
+	@property void streamId(uint sid) @safe @nogc { m_streamId = sid; }
 
 	@property HTTP2FrameStreamDependency dependency() @safe @nogc { return m_dependency; }
 

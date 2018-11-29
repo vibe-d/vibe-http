@@ -4,6 +4,7 @@ public import vibe.core.net;
 import vibe.core.stream;
 import vibe.http.internal.http1;
 import vibe.http.internal.http2.settings;
+import vibe.http.internal.http2.translate;
 
 public import vibe.http.log;
 public import vibe.http.common;
@@ -950,6 +951,13 @@ struct HTTPServerResponse {
 		m_data.writeBody(data, status, content_type);
 	}
 
+	// public overload for output streams only
+	void writeHeaderOut(Stream)(Stream conn) @safe
+		if(isOutputStream!Stream)
+	{
+		m_data.writeHeader(conn);
+	}
+
 	void writeRawBody(RandomAccessStream)(RandomAccessStream stream) @safe
 		if (isRandomAccessStream!RandomAccessStream)
 	{
@@ -1011,9 +1019,9 @@ struct HTTPServerResponse {
 		return m_data.bodyWriter;
 	}
 
-	@property void bodyWriter(T)(ref T writer)
+	@property void bodyWriterH2(T)(ref T writer)
 	{
-		m_data.bodyWriter(writer);
+		m_data.bodyWriterH2(writer);
 	}
 
 	/** Sends a redirect request to the client.
@@ -1381,7 +1389,7 @@ private HTTPListener listenHTTPPlain(HTTPServerSettings settings, HTTPServerRequ
 			TCPListenOptions options = TCPListenOptions.defaults;
 			if(reusePort) options |= TCPListenOptions.reusePort; else options &= ~TCPListenOptions.reusePort;
 			auto ret = listenTCP(listen_info.bindPort, (TCPConnection conn) nothrow @safe {
-					logInfo("ListenHTTP");
+					//logInfo("ListenHTTP");
 					try { handleHTTP1Connection(conn, listen_info);
 					} catch (Exception e) {
 						logError("HTTP connection handler has thrown: %s", e.msg);
@@ -1567,6 +1575,11 @@ struct HTTPServerRequestData {
 				_path = urlDecode(requestPath.toString);
 			}
 			return _path.get;
+		}
+
+		void path(string st) @safe {
+			assert(_path.isNull, "Unable to set request path");
+			_path = st;
 		}
 
 		private Nullable!string _path;
@@ -1895,6 +1908,7 @@ struct HTTPServerResponseData {
 	}
 
 	protected {
+
 		/// The protocol version of the response - should not be changed
 		HTTPVersion httpVersion = HTTPVersion.HTTP_1_1;
 
@@ -2196,17 +2210,22 @@ struct HTTPServerResponseData {
 					}
 				}
 
+
+
 				return m_bodyWriter;
 			}
 
 		/**
-		  * Used to change the bodyWriter during a HTTP/2 upgrade
+		  * Used to change the bodyWriter during a HTTP/2 connection
 		  */
-		@property void bodyWriter(T)(ref T writer) @safe
+		import vibe.stream.memory;
+		@property void bodyWriterH2(T)(ref T writer) @safe
+			if(isOutputStream!T)
 		{
-			assert(!m_bodyWriter && !headerWritten, "Unable to set bodyWriter");
+			assert(!m_bodyWriter, "Unable to set bodyWriter");
 			// write the current set headers before initiating the bodyWriter
-			writeHeader(writer);
+			if(!m_headerWritten) writeHeader(writer);
+
 			static if(!is(T == InterfaceProxy!OutputStream)) {
 				InterfaceProxy!OutputStream bwriter = writer;
 				m_bodyWriter = bwriter;
@@ -2294,7 +2313,7 @@ struct HTTPServerResponseData {
 
 		package void switchToHTTP2(HANDLER)(HANDLER handler, HTTP2ServerContext context)
 			@safe {
-				logInfo("sending SWITCHING_PROTOCOL response");
+				//logInfo("sending SWITCHING_PROTOCOL response");
 
 				statusCode = HTTPStatus.switchingProtocols;
 				headers["Upgrade"] = "h2c";
@@ -2585,11 +2604,15 @@ void parseHTTP2RequestHeader(R)(ref R headers, ref HTTPServerRequest reqStruct) 
 	//Host
 	req.host = cast(string)headers.find!((h,m) => h.name == m)(":authority")[0].value;
 
+	//Path
+	req.path = cast(string)headers.find!((h,m) => h.name == m)(":path")[0].value;
+
 	//URI
 	req.requestURI = req.host;
 
 	//HTTP version
 	req.httpVersion = HTTPVersion.HTTP_2;
+
 
 	//headers
 	foreach(h; headers.filter!(f => !f.name.startsWith(":"))) {
