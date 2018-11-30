@@ -2,7 +2,7 @@ module vibe.http.internal.http2.http2;
 
 import vibe.http.internal.http2.frame;
 import vibe.http.internal.http2.settings;
-import vibe.http.internal.http2.translate;
+import vibe.http.internal.http2.exchange;
 import vibe.http.internal.http2.hpack.tables;
 import vibe.http.internal.http2.hpack.hpack;
 import vibe.http.server;
@@ -25,6 +25,7 @@ import std.typecons;
 import std.conv : to;
 import std.exception : enforce;
 import std.algorithm : canFind; // alpn callback
+import std.algorithm.iteration;
 import std.variant : Algebraic;
 
 /*
@@ -258,18 +259,24 @@ private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TC
 
 	while(true) {
 		CB cb = {stream, connection, context};
+		bool closeStream = false;
 		auto st = connection.waitForDataAsync(cb);
 
 		final switch(st) {
 			case WaitForDataAsyncStatus.waiting: return;
 			case WaitForDataAsyncStatus.noMoreData: connection.close; return;
-			case WaitForDataAsyncStatus.dataAvailable: handleHTTP2Frame(stream, connection, context); break;
+			case WaitForDataAsyncStatus.dataAvailable:
+				if(!closeStream)
+					handleHTTP2Frame(stream, connection, context, closeStream);
+				else closeStream = false;
+				break;
 		}
 	}
 }
 
-// TODO initialize new streams according to frame payload
-private void handleHTTP2Frame(ConnectionStream)(ConnectionStream stream, TCPConnection connection, HTTP2ServerContext context) @safe
+/// initializes an allocator and handles stream / connection closing
+private void handleHTTP2Frame(ConnectionStream)(ConnectionStream stream, TCPConnection
+		connection, ref HTTP2ServerContext context, ref bool closeStream) @safe
 	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStream))
 {
 	logInfo("HTTP/2 Frame Handler");
@@ -282,30 +289,34 @@ private void handleHTTP2Frame(ConnectionStream)(ConnectionStream stream, TCPConn
 		else
 			scope alloc = new RegionListAllocator!(shared(GCAllocator), true)(1024, GCAllocator.instance);
 		auto h2stream = HTTP2ConnectionStream!ConnectionStream(stream, 0, alloc);
-		handleFrameAlloc(h2stream, connection, context, alloc);
+		closeStream = handleFrameAlloc(h2stream, connection, context, alloc);
 
+		if(closeStream) {
+			logInfo("Stream lifecycle ended. Closing stream");
+			h2stream.finalize();
+		}
 	} ();
 
 	if(!connection.waitForData()) {
-		stream.finalize();
 		connection.close;
 		logWarn("Reached end of stream while reading.");
 	}
 }
 
-private void handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCPConnection connection,
-		HTTP2ServerContext context, IAllocator alloc) @trusted
+/** Receives an HTTP2ConnectionStream, and handles the data received by decoding frames
+  * Currently supports simple requests / responses
+  * Stream Lifecycle is treated according to RFC 7540, Section 5.1
+  * TODO flow control through WINDOW_UPDATE frames
+*/
+private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCPConnection connection,
+		ref HTTP2ServerContext context, IAllocator alloc) @trusted
 {
 	logInfo("HTTP/2 Frame Handler (Alloc)");
 
+
 	// TODO determine if an actor as an encoder / decoder would be useful
 	IndexingTable table = IndexingTable(context.settings.headerTableSize);
-
-	//if(!context.resHeader.isNull) { // TODO h2c first request
-		//auto firstResHeader =
-			//buildFrame!(StartLine.RESPONSE)(cast(string)context.resHeader, type, context, table, alloc);
-		//stream.write(firstResHeader);
-	//}
+	bool closeStream = false;
 
 	// payload buffer
 	auto rawBuf = AllocAppender!(ubyte[])(alloc);
@@ -323,7 +334,7 @@ private void handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 	} catch (Exception e) {
 		logWarn("Failed reading HTTP/2 header");
 		stream.finalize();
-		return;
+		return true;
 	}
 
 	auto len = rawBuf.data[0..3].fromBytes(3);
@@ -345,15 +356,12 @@ private void handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 	final switch(header.type) {
 		case HTTP2FrameType.DATA:
 			if(endStream) {
+				closeStream = true;
 				// close stream `stream.streamId`
 			}
 			break;
 
 		case HTTP2FrameType.HEADERS:
-			if(endStream) {
-				// TODO check that used stream ids are not opened in next frames
-				//context.usedSIDs.put(header.streamId);
-			}
 			stream.state = HTTP2StreamState.OPEN;
 			if(sdep.isSet) {
 				// update stream dependency with data in `sdep`
@@ -363,6 +371,9 @@ private void handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 				logInfo("Received full HEADERS block");
 				auto hdec = appender!(HTTP2HeaderTableField[]);
 				decodeHPACK(cast(immutable(ubyte)[])payload.data, hdec, table, alloc);
+				// insert data in table
+				hdec.data.each!(h => table.insert(h));
+				// write a response (HEADERS + DATA according to request method)
 				handleHTTP2Request(stream, connection, context, hdec.data, table, alloc);
 			} else {
 				// wait for the next CONTINUATION frame until end_headers flag is set
@@ -370,7 +381,11 @@ private void handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 				logInfo("Incomplete HEADERS block, waiting for CONTINUATION frame.");
 				stream.putHeaderBlock(payload.data);
 				handleFrameAlloc(stream, connection, context, alloc);
-				return;
+				return true;
+			}
+			if(endStream) {
+				closeStream = true;
+				logInfo("Setting CLOSE_STREAM");
 			}
 			break;
 
@@ -385,7 +400,6 @@ private void handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 
 		case HTTP2FrameType.SETTINGS:
 			if(!isAck) {
-				// TODO do not send back if not connection preface
 				handleHTTP2SettingsFrame(stream, payload.data, header, context);
 			} else {
 				logInfo("Received SETTINGS ACK");
@@ -393,6 +407,7 @@ private void handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 			break;
 
 		case HTTP2FrameType.PUSH_PROMISE:
+			// SHOULD NOT be received (only servers send PUSH_PROMISES
 			// reserve a streamId to be created (in payload)
 			// if not possible, CONNECTION_ERROR (invalid stream id)
 			//
@@ -413,7 +428,9 @@ private void handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 			}
 			break;
 
-		case HTTP2FrameType.GOAWAY: // GOAWAY is used to close connection (in handler)
+		case HTTP2FrameType.GOAWAY:
+			// GOAWAY is used to close connection (in case of errors)
+			// TODO proper closing
 			// set LAST_STREAM_ID to the received value
 			// report error code & additional debug info
 			// respond with GOAWAY
@@ -445,6 +462,45 @@ private void handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 			}
 			break;
 	}
+
+	// in case of H2C protocol switching
+	if(!context.isTLS && !context.resHeader.isNull) { // h2c first request
+		// response is sent on stream ID 1
+		context.next_sid = 1;
+		auto headerFrame = buildHeaderFrame!(StartLine.RESPONSE)(cast(string)context.resHeader.get, context, table, alloc);
+		if(headerFrame.length < context.settings.maxFrameSize)
+		{
+			headerFrame[4] += 0x4; // set END_HEADERS flag (sending complete header)
+			try {
+				stream.write(headerFrame);
+			} catch (Exception e) {
+				logWarn("Unable to write HEADERS Frame to stream");
+			}
+		} else {
+			// TODO CONTINUATION frames
+			assert(false);
+		}
+		context.resHeader.nullify;
+
+		// send DATA (body) if present
+		if(!context.resBody.isNull) {
+			auto dataFrame = AllocAppender!(ubyte[])(alloc);
+
+			// create DATA Frame with END_STREAM (0x1) flag
+			dataFrame.createHTTP2FrameHeader(context.resBody.get.length.to!uint, HTTP2FrameType.DATA, 0x1, context.next_sid);
+			dataFrame.put(context.resBody.get);
+			try {
+				stream.write(dataFrame.data);
+			} catch(Exception e) {
+				logWarn("Unable to write DATA Frame to stream.");
+			}
+
+			logTrace("Sent DATA frame on streamID " ~ stream.streamId.to!string);
+			context.resBody.nullify;
+		}
+		logInfo("Sent first HTTP/2 response to H2C connection");
+	}
+	return closeStream;
 }
 
 /// handle SETTINGS frame exchange (new connection)
@@ -482,8 +538,11 @@ enum HTTP2StreamState {
 	CLOSED
 }
 
-// based on TCPConnection
-// added methods for compliance with the Stream class
+/** Represent a HTTP/2 Stream
+  * The underlying connection can be TCPConnection or TLSStream
+  * TODO: stream dependency, proper handling of stream IDs
+  * approach: mantain a union of IDs so that only correct streams are initialized
+*/
 struct HTTP2ConnectionStream(CS)
 {
 	static assert(isConnectionStream!CS || is(CS : TLSStream) || isOutputStream!Stream);
@@ -590,7 +649,7 @@ struct HTTP2ConnectionStream(CS)
 
 	void finalize() @safe
 	{
-		m_conn.finalize();
+		// TODO register streamID in USED set
 	}
 
 	void putHeaderBlock(T)(T src) @safe
