@@ -1,4 +1,4 @@
-module vibe.http.internal.http2.translate;
+module vibe.http.internal.http2.exchange;
 
 import vibe.http.internal.http2.settings;
 import vibe.http.internal.http2.http2 : HTTP2ConnectionStream;
@@ -129,7 +129,12 @@ unittest {
 	assert(res == expected);
 }
 
-// similar to originalHandleRequest but adapted to HTTP/2
+/** Similar to originalHandleRequest but adapted to HTTP/2
+  * the main changes are parsing and reading / writing to stream
+  * The request is converted to HTTPServerRequest through parseHTTP2RequestHeader
+  * once the HTTPServerResponse is built, HEADERS frame and optionally DATA Frame is sent
+  * TODO: CONTINUATION frames in case headers exceed maximum size allowed
+*/
 bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPConnection tcp_connection, HTTP2ServerContext h2context, HTTP2HeaderTableField[] headers, ref IndexingTable table, scope IAllocator alloc) @safe
 {
 	SysTime reqtime = Clock.currTime(UTC());
@@ -292,7 +297,7 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 		// run task (writes body)
 		request_task(req, res);
 
-		// create DATA Frame
+		// create DATA Frame with END_STREAM (0x1) flag
 		dataFrame.createHTTP2FrameHeader(dataWriter.data.length.to!uint,
 				HTTP2FrameType.DATA, 0x1, stream.streamId);
 		dataFrame.put(dataWriter.data);
