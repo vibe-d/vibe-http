@@ -113,6 +113,9 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, ref T src, HTTP2FrameHeader header,
 			break;
 
 		case HTTP2FrameType.PRIORITY:
+			break;
+
+		case HTTP2FrameType.PRIORITY:
 			assert(len == 5, "Invalid PRIORITY Frame");
 			sdep.fill(src);
 			break;
@@ -156,6 +159,9 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, ref T src, HTTP2FrameHeader header,
 			break;
 
 		case HTTP2FrameType.PING:
+			break;
+
+		case HTTP2FrameType.PING:
 			assert(len == 8, "Invalid PING Frame (FRAME_SIZE error)");
 			assert(header.streamId == 0, "Invalid streamId for PING Frame");
 			if(header.flags & 0x1) {
@@ -182,6 +188,8 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, ref T src, HTTP2FrameHeader header,
 				if(i == 0) b &= 127; // reserved bit
 				payloadDst.put(b);
 				src.popFront();
+				payloadDst.put(b);
+				src.popFront();
 			}
 			break;
 
@@ -192,6 +200,9 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, ref T src, HTTP2FrameHeader header,
 				src.popFront();
 			}
 			if(header.flags & 0x4) endHeaders = true;
+			break;
+
+		default:
 			break;
 
 		default:
@@ -322,6 +333,8 @@ unittest {
 /// header packing
 /// @nogc-compatible if dst.put is @nogc
 void createHTTP2FrameHeader(R)(ref R dst, const uint len, const HTTP2FrameType type, const ubyte flags, const uint sid) @safe
+{
+	dst.serialize(HTTP2FrameHeader(len, type, flags, sid));
 {
 	dst.serialize(HTTP2FrameHeader(len, type, flags, sid));
 }
