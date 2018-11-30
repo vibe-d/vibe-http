@@ -199,7 +199,7 @@ unittest {
 
 	// dummy, just for testing
 	listenHTTP!handleRequest(settings);
-	runApplication();
+	//runApplication();
 }
 
 /**
