@@ -1,12 +1,14 @@
 name "vibe-http"
 description "HTTP server and client implementation and higher level HTTP functionality"
 
-dependency "vibe-d:crypto" version="~>0.8.4"
+dependency "vibe-d:crypto" version="*"
 dependency "vibe-d:tls" version="*"
 dependency "vibe-d:inet" version="*"
 dependency "vibe-d:stream" version="*"
 dependency "vibe-d:textfilter" version="*"
-dependency "diet-ng" version="~>1.1"
-dependency "taggedalgebraic" version="~>0.10.9"
+dependency "diet-ng" version="*"
+dependency "taggedalgebraic" version="*"
 
 targetType "library"
+
+versions "VibeForceALPN"
