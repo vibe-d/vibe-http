@@ -1,6 +1,7 @@
 module vibe.http.internal.http2.settings;
 
 import vibe.http.internal.http2.frame;
+import vibe.http.internal.http2.hpack.tables;
 import vibe.http.server;
 import vibe.core.log;
 import vibe.core.net;
@@ -301,6 +302,7 @@ struct HTTP2ServerContext
 	{
 		m_context = ctx;
 	}
+
 
 	alias m_context this;
 

@@ -76,7 +76,7 @@ HTTP2FrameHeader unpackHTTP2Frame(R,T)(ref R payloadDst, T src, ref bool endStre
   *
   * Note: @nogc-compatible as long as payloadDst.put is @nogc (AllocAppender.put isn't)
   */
-void unpackHTTP2Frame(R,T)(ref R payloadDst, ref T src, HTTP2FrameHeader header, ref bool endStream, ref bool endHeaders, ref bool ack, ref HTTP2FrameStreamDependency sdep) @safe
+void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref bool endStream, ref bool endHeaders, ref bool ack, ref HTTP2FrameStreamDependency sdep) @safe
 {
 	size_t len = header.payloadLength;
 
