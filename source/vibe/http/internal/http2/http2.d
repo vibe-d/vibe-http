@@ -236,11 +236,49 @@ void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream, TCPConnect
 	handleHTTP2FrameChain(stream, connection, context);
 }
 
+/// async frame handler
+private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TCPConnection connection, HTTP2ServerContext context) @safe
+	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStream))
 {
-	// start sending frames
-	// the HTTP/1 UPGRADE should initialize a stream with ID 1
-	// server & client should send a connection preface
-	// before starting HTTP/2 communication
+	logInfo("HTTP/2 Frame Chain Handler");
+
+	static struct CB {
+		ConnectionStream stream;
+		TCPConnection connection;
+		HTTP2ServerContext context;
+
+		void opCall(bool st)
+		{
+			if (!st) connection.close;
+			else runTask(&handleHTTP2FrameChain, stream, connection, context);
+		}
+	}
+
+	while(true) {
+		CB cb = {stream, connection, context};
+		auto st = connection.waitForDataAsync(cb);
+
+		final switch(st) {
+			case WaitForDataAsyncStatus.waiting:
+				logWarn("Waiting for data");
+				return;
+			case WaitForDataAsyncStatus.noMoreData:
+				stream.finalize();
+				connection.close();
+				logWarn("Reached end of stream.");
+				return;
+			case WaitForDataAsyncStatus.dataAvailable:
+				handleHTTP2Frame(stream, connection, context);
+				if(stream.empty) {
+					logWarn("No available data in TLS stream. Closing connection.");
+					stream.finalize();
+					connection.close();
+					return;
+				}
+				break;
+		}
+	}
+}
 }
 
 // TODO dummy for now
