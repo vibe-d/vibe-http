@@ -33,7 +33,8 @@ import std.typecons;
 
 enum HTTPVersion {
 	HTTP_1_0,
-	HTTP_1_1
+	HTTP_1_1,
+	HTTP_2
 }
 
 
@@ -350,6 +351,7 @@ string getHTTPVersionString(HTTPVersion ver)
 	final switch(ver){
 		case HTTPVersion.HTTP_1_0: return "HTTP/1.0";
 		case HTTPVersion.HTTP_1_1: return "HTTP/1.1";
+		case HTTPVersion.HTTP_2:   return "HTTP/2";
 	}
 }
 
