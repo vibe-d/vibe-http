@@ -399,21 +399,21 @@ struct HTTP2FrameHeader
 /// convert 32-bit unsigned integer to N bytes (MSB first)
 void putBytes(uint N, R)(ref R dst, const(ulong) src) @safe @nogc
 {
-    assert(src > 0 && src < (cast(ulong)1 << N*8), "Invalid uint for putBytes");
-    static if(hasLength!R) assert(dst.length >= N);
+	assert(src >= 0 && src < (cast(ulong)1 << N*8), "Invalid frame payload length");
+	static if(hasLength!R) assert(dst.length >= N);
 
-    ubyte[N] buf;
-    foreach(i,ref b; buf) b = cast(ubyte)(src >> 8*(N-1-i)) & 0xff;
+	ubyte[N] buf;
+	foreach(i,ref b; buf) b = cast(ubyte)(src >> 8*(N-1-i)) & 0xff;
 
-    static if(isArray!R) {
-        dst = buf;
-    } else {
-        foreach(b; buf) dst.put(b);
-    }
+	static if(isArray!R) {
+		dst = buf;
+	} else {
+		foreach(b; buf) dst.put(b);
+	}
 }
 
 /// convert a N-bytes representation MSB->LSB to uint
-private uint fromBytes(R)(R src, uint n) @safe @nogc
+uint fromBytes(R)(R src, uint n) @safe @nogc
 {
 	uint res = 0;
 	static if(isArray!R) {
@@ -425,7 +425,8 @@ private uint fromBytes(R)(R src, uint n) @safe @nogc
 }
 
 /// fill a buffer with fields from `header`
-private void serialize(R)(ref R dst, HTTP2FrameHeader header) @safe @nogc
+/// @nogc-compatible if dst.put is @nogc
+private void serialize(R)(ref R dst, HTTP2FrameHeader header) @safe
 	if(isOutputRange!(R, ubyte))
 {
 	static foreach(f; __traits(allMembers, HTTP2FrameHeader)) {
