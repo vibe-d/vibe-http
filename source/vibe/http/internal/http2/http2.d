@@ -138,18 +138,19 @@ import std.variant : Algebraic;
  * if !valid, close connection and refuse to upgrade (RFC) - TODO discuss
  * if valid, send SWITCHING_PROTOCOL response and start an HTTP/2 connection handler
  */
-bool startHTTP2Connection(ConnectionStream)(ConnectionStream connection, string h2settings, HTTPServerResponse switchRes) @safe
+bool startHTTP2Connection(ConnectionStream)(ConnectionStream connection, string h2settings,
+		HTTP2ServerContext context, HTTPServerResponse switchRes) @safe
 	if (isConnectionStream!ConnectionStream)
 {
-	logInfo("Starting HTTP/2 connection");
-
 	// init settings
-	// the server should mantain them through the connection
 	HTTP2Settings settings;
+	logInfo("Starting HTTP/2 connection");
 
 	// try decoding settings
 	if (settings.decode!Base64URL(h2settings)) {
-		switchRes.switchToHTTP2!(handleHTTP2Connection!HTTP2ConnectionStream)(settings);
+		// send response
+		context.settings = settings;
+		switchRes.switchToHTTP2(&handleHTTP2Connection!ConnectionStream, context);
 		return true;
 	} else {
 		// reply with a 400 (bad request) header
@@ -160,13 +161,12 @@ bool startHTTP2Connection(ConnectionStream)(ConnectionStream connection, string 
 }
 
 unittest {
-	//import vibe.core.core : runApplication;
-
+	import vibe.core.core : runApplication;
 	// empty handler, just to test if protocol switching works
 	void handleReq(HTTPServerRequest req, HTTPServerResponse res)
 	@safe {
-		//if (req.path == "/")
-		//res.writeBody("Hello, World! This is an HTTP/1.1 connection response.");
+		if (req.path == "/")
+			res.writeBody("Hello, World! This response is sent through HTTP/2");
 	}
 
 	auto settings = HTTPServerSettings();
