@@ -1,6 +1,8 @@
 //module vibe.http.internal.hpack.tables;
 module vibe.http.internal.http2.hpack.tables;
 
+import vibe.http.internal.http2.hpack.exception;
+
 import vibe.http.status;
 import vibe.http.common;
 import vibe.core.log;
@@ -67,7 +69,14 @@ struct HTTP2HeaderTableField {
 	static foreach(t; __traits(allMembers, HeaderValue)) {
 		mixin("this(string n, " ~
 				typeof(__traits(getMember, HeaderValue, t)).stringof ~
-				" v) { name = n; value = v; }");
+				" v) @safe { name = n; value = v; }");
+	}
+
+	this(R)(R t) @safe
+		if(is(ElementType!R : string))
+	{
+		assert(t.length == 2, "Invalid range for HTTP2HeaderTableField initializer");
+		this(t[0], t[1]);
 	}
 }
 
@@ -189,6 +198,8 @@ private struct DynamicTable {
 		m_table.capacity = ms;
 	}
 
+	@property void dispose() { m_table.dispose(); }
+
 	// number of elements inside dynamic table
 	@property size_t size() @safe @nogc { return m_size; }
 
@@ -280,6 +291,11 @@ struct IndexingTable {
 		m_dynamic = DynamicTable(ms);
 	}
 
+	~this()
+	{
+		m_dynamic.dispose();
+	}
+
 	@property size_t size() @safe @nogc { return STATIC_TABLE_SIZE + m_dynamic.index + 1; }
 
 	@property bool empty() @safe @nogc { return m_dynamic.size == 0; }
@@ -293,9 +309,9 @@ struct IndexingTable {
 	}
 
 	// element retrieval
-	HTTP2HeaderTableField opIndex(size_t idx) @safe @nogc
+	HTTP2HeaderTableField opIndex(size_t idx) @safe
 	{
-		assert(idx > 0 && idx <= size(), "Invalid table index");
+		enforceHPACK(idx > 0 && idx <= size(), "Invalid HPACK table index");
 
 		if (idx < STATIC_TABLE_SIZE+1) return getStaticTableEntry(idx);
 		else return m_dynamic[m_dynamic.index - (idx - STATIC_TABLE_SIZE) + 1];
