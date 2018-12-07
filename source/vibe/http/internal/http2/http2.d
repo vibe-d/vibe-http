@@ -178,7 +178,6 @@ unittest {
 }
 
 unittest {
-
 	//import vibe.core.core : runApplication;
 
 	void handleRequest (HTTPServerRequest req, HTTPServerResponse res)
@@ -201,21 +200,42 @@ unittest {
 	//runApplication();
 }
 
-
 /**
   * an ALPN callback which can be used to detect the "h2" protocol
   * must be set before initializing the server with 'listenHTTP'
   * if the protocol is not set, it replies with HTTP/1.1
   */
-private TLSALPNCallback http2Callback = (string[] choices) {
+TLSALPNCallback http2Callback = (string[] choices) {
+	//logInfo("http2Callback");
 	if (choices.canFind("h2")) return "h2";
 	else return "http/1.1";
 };
 
+private alias TLSStreamType = ReturnType!(createTLSStreamFL!(InterfaceProxy!Stream));
 
-// TODO dummy for now
-void handleHTTP2Connection(ConnectionStream)(ConnectionStream connection, HTTP2Settings settings)
-	if (is(ConnectionStream == HTTP2ConnectionStream))
+/** server & client should send a connection preface
+  * server should receive a connection preface from the client
+  * server connection preface consists of a SETTINGS Frame
+  */
+void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream, TCPConnection connection, HTTP2ServerContext context) @safe
+	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStreamType))
+{
+	logInfo("HTTP/2 Connection Handler");
+
+	// read the connection preface
+	ubyte[24] h2connPreface;
+	stream.read(h2connPreface);
+
+	if(h2connPreface != "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n") {
+		logWarn("Ignoring invalid HTTP/2 client connection preface");
+		return;
+	}
+	logInfo("Received client http2 connection preface");
+
+	// initialize Frame handler
+	handleHTTP2FrameChain(stream, connection, context);
+}
+
 {
 	// start sending frames
 	// the HTTP/1 UPGRADE should initialize a stream with ID 1
