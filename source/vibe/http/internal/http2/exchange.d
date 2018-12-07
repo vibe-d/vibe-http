@@ -1,7 +1,7 @@
 module vibe.http.internal.http2.exchange;
 
 import vibe.http.internal.http2.settings;
-import vibe.http.internal.http2.http2 : HTTP2ConnectionStream;
+import vibe.http.internal.http2.http2 : HTTP2ConnectionStream, HTTP2StreamState;
 import vibe.http.internal.http2.hpack.hpack;
 import vibe.http.internal.http2.hpack.tables;
 import vibe.http.internal.http2.frame;
@@ -90,7 +90,7 @@ private void convertStartMessage(T)(string src, ref T dst, ref IndexingTable tab
 					} catch(Exception e) {
 						H2F(":scheme", (isTLS ? "https" : "http")).encodeHPACK(dst, table);
 						H2F(":path", buf).encodeHPACK(dst, table);
-					}
+				}
 			} else if(type == StartLine.RESPONSE) { // response (status-line)
 				// status-line = HTTP-version SP status-code SP reason-phrase CRLF
 				static foreach(st; __traits(allMembers, HTTPStatus)) {
@@ -304,6 +304,12 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 		cstream.write(dataFrame.data);
 
 		logTrace("Sent DATA frame on streamID " ~ stream.streamId.to!string);
+	}
+
+	if(stream.state == HTTP2StreamState.HALF_CLOSED_REMOTE) {
+		stream.state = HTTP2StreamState.CLOSED;
+	} else {
+		stream.state = HTTP2StreamState.HALF_CLOSED_LOCAL;
 	}
 
 
