@@ -5,6 +5,7 @@ import vibe.http.internal.http2.settings;
 import vibe.http.internal.http2.exchange;
 import vibe.http.internal.http2.hpack.tables;
 import vibe.http.internal.http2.hpack.hpack;
+import vibe.http.internal.http2.hpack.exception;
 import vibe.http.server;
 
 import vibe.core.log;
@@ -177,7 +178,7 @@ unittest {
 }
 
 unittest {
-	//import vibe.core.core : runApplication;
+	import vibe.core.core : runApplication;
 
 	void handleRequest (HTTPServerRequest req, HTTPServerResponse res)
 	@safe {
@@ -199,7 +200,7 @@ unittest {
 
 	// dummy, just for testing
 	listenHTTP!handleRequest(settings);
-	//runApplication();
+	runApplication();
 }
 
 /**
@@ -228,15 +229,14 @@ void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream, TCPConnect
 	ubyte[24] h2connPreface;
 	stream.read(h2connPreface);
 
-	assert(h2connPreface == "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", "Invalid HTTP/2 h2stream preface");
+	if(h2connPreface != "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n") {
+		logWarn("Ignoring invalid HTTP/2 client connection preface");
+		return;
+	}
 	logInfo("Received client http2 connection preface");
 
 	// initialize Frame handler
-	static if(is(ConnectionStream : TCPConnection)) {
-		handleHTTP2FrameChain(stream, connection, context);
-	} else if(context.isTLS && is(ConnectionStream : TLSStreamType)) {
-		handleHTTP2FrameChain(stream.get, connection, context);
-	}
+	handleHTTP2FrameChain(stream, connection, context);
 }
 
 /// async frame handler
@@ -259,16 +259,25 @@ private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TC
 
 	while(true) {
 		CB cb = {stream, connection, context};
-		bool closeStream = false;
 		auto st = connection.waitForDataAsync(cb);
 
 		final switch(st) {
-			case WaitForDataAsyncStatus.waiting: return;
-			case WaitForDataAsyncStatus.noMoreData: connection.close; return;
+			case WaitForDataAsyncStatus.waiting:
+				logWarn("Waiting for data");
+				return;
+			case WaitForDataAsyncStatus.noMoreData:
+				stream.finalize();
+				connection.close();
+				logWarn("Reached end of stream.");
+				return;
 			case WaitForDataAsyncStatus.dataAvailable:
-				if(!closeStream)
-					handleHTTP2Frame(stream, connection, context, closeStream);
-				else closeStream = false;
+				handleHTTP2Frame(stream, connection, context);
+				if(stream.empty) {
+					logWarn("No available data in TLS stream. Closing connection.");
+					stream.finalize();
+					connection.close();
+					return;
+				}
 				break;
 		}
 	}
@@ -276,7 +285,7 @@ private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TC
 
 /// initializes an allocator and handles stream / connection closing
 private void handleHTTP2Frame(ConnectionStream)(ConnectionStream stream, TCPConnection
-		connection, ref HTTP2ServerContext context, ref bool closeStream) @safe
+		connection, ref HTTP2ServerContext context) @safe
 	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStream))
 {
 	logInfo("HTTP/2 Frame Handler");
@@ -289,18 +298,13 @@ private void handleHTTP2Frame(ConnectionStream)(ConnectionStream stream, TCPConn
 		else
 			scope alloc = new RegionListAllocator!(shared(GCAllocator), true)(1024, GCAllocator.instance);
 		auto h2stream = HTTP2ConnectionStream!ConnectionStream(stream, 0, alloc);
-		closeStream = handleFrameAlloc(h2stream, connection, context, alloc);
-
-		if(closeStream) {
-			logInfo("Stream lifecycle ended. Closing stream");
-			h2stream.finalize();
+		while(true) {
+			handleFrameAlloc(h2stream, connection, context, alloc);
+			if(h2stream.state == HTTP2StreamState.CLOSED) break;
 		}
 	} ();
 
-	if(!connection.waitForData()) {
-		connection.close;
-		logWarn("Reached end of stream while reading.");
-	}
+	logInfo("Stream lifecycle ended. Closing stream");
 }
 
 /** Receives an HTTP2ConnectionStream, and handles the data received by decoding frames
@@ -308,15 +312,14 @@ private void handleHTTP2Frame(ConnectionStream)(ConnectionStream stream, TCPConn
   * Stream Lifecycle is treated according to RFC 7540, Section 5.1
   * TODO flow control through WINDOW_UPDATE frames
 */
-private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCPConnection connection,
+private void handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCPConnection connection,
 		ref HTTP2ServerContext context, IAllocator alloc) @trusted
 {
 	logInfo("HTTP/2 Frame Handler (Alloc)");
 
-
 	// TODO determine if an actor as an encoder / decoder would be useful
 	IndexingTable table = IndexingTable(context.settings.headerTableSize);
-	bool closeStream = false;
+	uint len = 0;
 
 	// payload buffer
 	auto rawBuf = AllocAppender!(ubyte[])(alloc);
@@ -329,22 +332,25 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 	HTTP2FrameStreamDependency sdep;
 
 	// read header
-	try {
-		stream.readHeader(rawBuf);
-	} catch (Exception e) {
-		logWarn("Failed reading HTTP/2 header");
-		stream.finalize();
-		return true;
+	if(stream.canRead) {
+		try {
+			len = stream.readHeader(rawBuf);
+		} catch (UncaughtException e) {
+			logWarn("Failed reading from HTTP/2 stream");
+			stream.state = HTTP2StreamState.CLOSED;
+			return;
+		}
+	} else {
+		stream.state = HTTP2StreamState.CLOSED;
+		return;
 	}
-
-	auto len = rawBuf.data[0..3].fromBytes(3);
 
 	// adjust buffer sizes
 	rawBuf.reserve(len);
 	payload.reserve(len);
 
-	// read payload
-	stream.readPayload(rawBuf, len);
+	// read payload if needed
+	if(len) stream.readPayload(rawBuf, len);
 
 	// parse frame
 	auto header = payload.unpackHTTP2Frame(rawBuf.data, endStream, endHeaders, isAck, sdep);
@@ -356,9 +362,15 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 	final switch(header.type) {
 		case HTTP2FrameType.DATA:
 			if(endStream) {
-				closeStream = true;
-				// close stream `stream.streamId`
+				if(stream.state == HTTP2StreamState.HALF_CLOSED_LOCAL) {
+					stream.state = HTTP2StreamState.CLOSED;
+				} else if(stream.state == HTTP2StreamState.OPEN) {
+					stream.state = HTTP2StreamState.HALF_CLOSED_REMOTE;
+				} else if(stream.state == HTTP2StreamState.IDLE) {
+					stream.state = HTTP2StreamState.OPEN;
+				}
 			}
+			// TODO process payload
 			break;
 
 		case HTTP2FrameType.HEADERS:
@@ -366,13 +378,28 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 			if(sdep.isSet) {
 				// update stream dependency with data in `sdep`
 			}
+			if(endStream) {
+				if(stream.state == HTTP2StreamState.HALF_CLOSED_LOCAL) {
+					stream.state = HTTP2StreamState.CLOSED;
+				} else {
+					stream.state = HTTP2StreamState.HALF_CLOSED_REMOTE;
+				}
+				logInfo("Setting CLOSE_STREAM");
+			}
 			// parse headers in payload
 			if(endHeaders) {
 				logInfo("Received full HEADERS block");
 				auto hdec = appender!(HTTP2HeaderTableField[]);
-				decodeHPACK(cast(immutable(ubyte)[])payload.data, hdec, table, alloc);
+				try {
+					decodeHPACK(cast(immutable(ubyte)[])payload.data, hdec, table, alloc);
+				} catch (HPACKException e) {
+					logWarn(e.message);
+					// send GOAWAY frame
+				} catch (Exception e) {
+					assert(false);
+				}
 				// insert data in table
-				hdec.data.each!(h => table.insert(h));
+				hdec.data.each!((h) { if(h.index) table.insert(h); });
 				// write a response (HEADERS + DATA according to request method)
 				handleHTTP2Request(stream, connection, context, hdec.data, table, alloc);
 			} else {
@@ -381,11 +408,7 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 				logInfo("Incomplete HEADERS block, waiting for CONTINUATION frame.");
 				stream.putHeaderBlock(payload.data);
 				handleFrameAlloc(stream, connection, context, alloc);
-				return true;
-			}
-			if(endStream) {
-				closeStream = true;
-				logInfo("Setting CLOSE_STREAM");
+				return;
 			}
 			break;
 
@@ -396,6 +419,7 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 		case HTTP2FrameType.RST_STREAM:
 			// reset stream in `closed` state
 			// payload contains error code
+			stream.state = HTTP2StreamState.CLOSED;
 			break;
 
 		case HTTP2FrameType.SETTINGS:
@@ -420,11 +444,13 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 		case HTTP2FrameType.PING:
 			if(!isAck) {
 				// acknowledge ping with PING ACK Frame
-				rawBuf.reserve(HTTP2HeaderLength + len);
-				rawBuf.createHTTP2FrameHeader(len, header.type, 0x1, header.streamId);
-				rawBuf.buildHTTP2Frame(payload.data);
+				auto buf = AllocAppender!(ubyte[])(alloc);
+				buf.createHTTP2FrameHeader(len, header.type, 0x1, header.streamId);
+				import std.stdio;
+				writeln(buf.data);
+				buf.buildHTTP2Frame(payload.data);
 
-				stream.write(rawBuf.data);
+				stream.write(buf.data);
 			}
 			break;
 
@@ -440,6 +466,7 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 			//stream.write(rawBuf.data);
 			// terminate connection
 			//stream.close();
+			stream.state = HTTP2StreamState.CLOSED;
 			break;
 
 		case HTTP2FrameType.WINDOW_UPDATE:
@@ -454,7 +481,14 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 			if(endHeaders) {
 				logInfo("Received full HEADERS block");
 				auto hdec = appender!(HTTP2HeaderTableField[]);
-				decodeHPACK(cast(immutable(ubyte)[])stream.headerBlock, hdec, table, alloc);
+				try {
+					decodeHPACK(cast(immutable(ubyte)[])payload.data, hdec, table, alloc);
+				} catch (HPACKException e) {
+					logWarn(e.message);
+					// send GOAWAY frame
+				} catch (Exception e) {
+					assert(false);
+				}
 				handleHTTP2Request(stream, connection, context, hdec.data, table, alloc);
 			} else {
 				logInfo("Incomplete HEADERS block, waiting for CONTINUATION frame.");
@@ -500,7 +534,6 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 		}
 		logInfo("Sent first HTTP/2 response to H2C connection");
 	}
-	return closeStream;
 }
 
 /// handle SETTINGS frame exchange (new connection)
@@ -578,6 +611,11 @@ struct HTTP2ConnectionStream(CS)
 
 	@property HTTP2StreamState state() @safe @nogc { return m_state; }
 
+	@property bool canRead() @safe @nogc
+	{
+		return (m_state == HTTP2StreamState.OPEN || m_state == HTTP2StreamState.IDLE);
+	}
+
 	/// set state according to Stream lifecycle (RFC 7540 section 5.1)
 	@property void state(HTTP2StreamState st) @safe @nogc
 	{
@@ -599,8 +637,7 @@ struct HTTP2ConnectionStream(CS)
 				else assert(false, "Invalid state");
 				break;
 			case HTTP2StreamState.CLOSED:
-				if(m_state != HTTP2StreamState.IDLE) m_state = st;
-				else assert(false, "Invalid state");
+				m_state = st;
 				break;
 			case HTTP2StreamState.RESERVED_LOCAL:
 			case HTTP2StreamState.RESERVED_REMOTE:
@@ -624,14 +661,16 @@ struct HTTP2ConnectionStream(CS)
 		return m_headerBlock.data;
 	}
 
-	void readHeader(R)(ref R dst) @safe
+	uint readHeader(R)(ref R dst) @safe
 	{
 		assert(toParse == Parse.HEADER);
-		toParse = Parse.PAYLOAD;
 
 		ubyte[9] buf;
 		m_conn.read(buf);
 		dst.put(buf);
+		auto len = dst.data[0..3].fromBytes(3);
+		if(len > 0) toParse = Parse.PAYLOAD;
+		return len;
 	}
 
 	void readPayload(R)(ref R dst, int len) @safe
@@ -650,6 +689,7 @@ struct HTTP2ConnectionStream(CS)
 	void finalize() @safe
 	{
 		// TODO register streamID in USED set
+		//m_conn.finalize();
 	}
 
 	void putHeaderBlock(T)(T src) @safe
