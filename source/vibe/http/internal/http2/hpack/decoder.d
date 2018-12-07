@@ -5,6 +5,7 @@ import vibe.http.internal.http2.hpack.tables;
 import vibe.http.internal.http2.hpack.util;
 
 import vibe.internal.array : AllocAppender;
+import vibe.core.log;
 
 import std.range; // Decoder
 import std.string;
@@ -26,7 +27,7 @@ void decode(I, R, T)(ref I src, ref R dst, ref IndexingTable table,  ref T alloc
 	src = src[1..$];
 
 	if(bbuf & 128) {
-		auto res = decodeInteger(src, bbuf);
+		auto res = decodeInteger(src, bbuf, 7);
 		dst.put(table[res]);
 	} else {
 		HTTP2HeaderTableField hres;
@@ -34,7 +35,7 @@ void decode(I, R, T)(ref I src, ref R dst, ref IndexingTable table,  ref T alloc
 		auto adst = AllocAppender!string(alloc);
 
 		if (bbuf & 64) { // inserted in dynamic table
-			auto idx = bbuf.toInteger(2);
+			size_t idx = bbuf.toInteger(2);
 			if(idx > 0) {  // name == table[index].name, value == literal
 				hres.name = table[idx].name;
 			} else {   // name == literal, value == literal
@@ -47,7 +48,7 @@ void decode(I, R, T)(ref I src, ref R dst, ref IndexingTable table,  ref T alloc
 			hres.neverIndex = false;
 
 		} else if(bbuf & 16) { // NEVER inserted in dynamic table
-			auto idx = bbuf.toInteger(4);
+			size_t idx = decodeInteger(src, bbuf, 4);
 			if(idx > 0) {  // name == table[index].name, value == literal
 				hres.name = table[idx].name;
 			} else {   // name == literal, value == literal
@@ -60,7 +61,7 @@ void decode(I, R, T)(ref I src, ref R dst, ref IndexingTable table,  ref T alloc
 			hres.neverIndex = true;
 
 		} else if(!(bbuf & 32)) { // this occourrence is not inserted in dynamic table
-			auto idx = bbuf.toInteger(4);
+			size_t idx = decodeInteger(src, bbuf, 4);
 			if(idx > 0) {  // name == table[index].name, value == literal
 				hres.name = table[idx].name;
 			} else {   // name == literal, value == literal
@@ -89,10 +90,9 @@ private void setReset(I,R)(ref I dst, ref R buf)
 	buf.reset;
 }
 
-private size_t decodeInteger(I)(ref I src, ubyte bbuf) @safe @nogc
+private size_t decodeInteger(I)(ref I src, ubyte bbuf, uint nbits) @safe @nogc
 {
-	uint nbits = 7;
-	auto res = bbuf.toInteger(1);
+	auto res = bbuf.toInteger(8-nbits);
 
 	if (res < (1 << nbits) - 1) {
 		return res;
@@ -121,6 +121,10 @@ private void decodeLiteral(I,R)(ref I src, ref R dst) @safe
 
 	// take a buffer of remaining octets
 	auto vlen = bbuf.toInteger(1); // value length
+	if(vlen > src.length) {
+		logWarn("Invalid literal decoded");
+		return;
+	}
 	auto buf = src[0..vlen];
 	src = src[vlen..$];
 
