@@ -109,7 +109,7 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref
 			}
 			src.popFrontN(header.payloadLength - len); // remove padding
 			if(header.flags & 0x1) endStream = true;
-			if(header.flags & 0x4) needsCont = true;
+			if(header.flags & 0x4) endHeaders = true;
 			break;
 
 		case HTTP2FrameType.PRIORITY:
@@ -152,7 +152,7 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref
 				src.popFront();
 			}
 			src.popFrontN(header.payloadLength - len); // remove padding
-			if(header.flags & 0x4) needsCont = true;
+			if(header.flags & 0x4) endHeaders = true;
 			break;
 
 		case HTTP2FrameType.PING:
@@ -190,14 +190,12 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref
 				payloadDst.put(b);
 				src.popFront();
 			}
-			if(header.flags & 0x4) needsCont = true;
+			if(header.flags & 0x4) endHeaders = true;
 			break;
 
 		default:
 			assert(false, "Invalid frame header unpacked");
 	}
-
-	return header;
 }
 
 unittest {
@@ -205,74 +203,75 @@ unittest {
 
 	FixedAppender!(ubyte[], 4) payloadDst;
 	bool endStream = false;
-	bool needsCont = false;
+	bool endHeaders = false;
 	bool ack = false;
 	HTTP2FrameStreamDependency sdep;
 
 
 	// DATA Frame
 	ubyte[] data = [0, 0, 4, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1];
-	payloadDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	payloadDst.unpackHTTP2Frame(data, endStream, endHeaders, ack, sdep);
 	assert(payloadDst.data == [1, 1, 1, 1]);
 
 	// HEADERS Frame
 	payloadDst.clear;
 	data = [0, 0, 4, 1, 0, 0, 0, 0, 2, 2, 2, 2, 2];
-	payloadDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	payloadDst.unpackHTTP2Frame(data, endStream, endHeaders, ack, sdep);
 	assert(payloadDst.data == [2, 2, 2, 2]);
 
 	// PRIORITY Frame
 	payloadDst.clear;
 	data = [0, 0, 5, 2, 0, 0, 0, 0, 3, 0, 0, 0, 2, 5];
-	payloadDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	payloadDst.unpackHTTP2Frame(data, endStream, endHeaders, ack, sdep);
 	assert(payloadDst.data == []);
 	assert(sdep.weight == 5 &&  sdep.streamId == 2);
 
 	// RST_STREAM Frame
 	payloadDst.clear;
 	data = [0, 0, 4, 3, 0, 0, 0, 0, 4, 4, 4, 4, 4];
-	payloadDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	payloadDst.unpackHTTP2Frame(data, endStream, endHeaders, ack, sdep);
 	assert(payloadDst.data == [4, 4, 4, 4]);
 
 	// SETTINGS Frame
 	FixedAppender!(ubyte[], 6) settingsDst;
 	data = [0, 0, 6, 4, 0, 0, 0, 0, 0, 0, 1, 2, 2, 2, 2];
-	settingsDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	settingsDst.unpackHTTP2Frame(data, endStream, endHeaders, ack, sdep);
 	assert(settingsDst.data == [0, 1, 2, 2, 2, 2]);
 
 	// PUSH_PROMISE Frame
 	payloadDst.clear;
 	data = [0, 0, 8, 5, 0, 0, 0, 0, 5, 0, 0, 0, 2, 4, 4, 4, 4];
-	payloadDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	payloadDst.unpackHTTP2Frame(data, endStream, endHeaders, ack, sdep);
 	assert(payloadDst.data == [4, 4, 4, 4]);
 	assert(sdep.weight == 5 &&  sdep.streamId == 2);
 
 	// PING Frame
 	FixedAppender!(ubyte[], 8) pingDst;
 	data = [0, 0, 8, 6, 0, 0, 0, 0, 0, 0, 0, 0, 2, 4, 4, 4, 4];
-	pingDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	pingDst.unpackHTTP2Frame(data, endStream, endHeaders, ack, sdep);
 	assert(pingDst.data == [0, 0, 0, 2, 4, 4, 4, 4]);
 
 	// GOAWAY Frame
 	pingDst.clear;
 	data = [0, 0, 8, 7, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 4];
-	pingDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	pingDst.unpackHTTP2Frame(data, endStream, endHeaders, ack, sdep);
 	assert(pingDst.data == [0, 0, 0, 2, 0, 0, 0, 4]);
 
 	// WINDOW_UPDATE
 	payloadDst.clear;
 	data = [0, 0, 4, 8, 0, 0, 0, 0, 6, 1, 1, 1, 1];
-	payloadDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	payloadDst.unpackHTTP2Frame(data, endStream, endHeaders, ack, sdep);
 	assert(payloadDst.data == [1, 1, 1, 1]);
 
 	// CONTINUATION
 	payloadDst.clear;
 	data = [0, 0, 4, 9, 0, 0, 0, 0, 6, 2, 2, 2, 2];
-	payloadDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	payloadDst.unpackHTTP2Frame(data, endStream, endHeaders, ack, sdep);
 	assert(payloadDst.data == [2, 2, 2, 2]);
 }
 
 /*** FRAME BUILDING ***/
+
 /// concatenates a Frame header with a Frame payload
 void buildHTTP2Frame(R,H,T)(ref R dst, ref H header, ref T payload) @safe @nogc
 	if(is(ElementType!R : ubyte) && is(ElementType!T : ubyte))
