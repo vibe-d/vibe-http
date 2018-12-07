@@ -55,6 +55,7 @@ void handleHTTP1Connection(ConnectionStream)(ConnectionStream connection, HTTPSe
 	if (context.tlsContext) {
 		version (HaveNoTLS) assert(false, "No TLS support compiled in.");
 		else {
+
 			logDebug("Accept TLS connection: %s", context.tlsContext.kind);
 
 			//TODO: determine if there's a better alternative to InterfaceProxy
@@ -80,6 +81,8 @@ void handleHTTP1Connection(ConnectionStream)(ConnectionStream connection, HTTPSe
 private void handleHTTP1RequestChain(ConnectionStream)(ConnectionStream connection, HTTPContext context)
 @safe
 {
+	//logInfo("HTTP/1 Request Chain Handler");
+
 	// copies connection/context instead of creating a heap closure
 	static struct CB {
 		ConnectionStream connection;
@@ -107,7 +110,7 @@ private void handleHTTP1RequestChain(ConnectionStream)(ConnectionStream connecti
 private void handleHTTP1Request(ConnectionStream)(ConnectionStream connection, HTTPContext context)
 @safe
 {
-	logInfo("Request");
+	//logInfo("HTTP/1 Request Handler");
 
 	HTTPServerSettings settings;
 	InterfaceProxy!Stream http_stream;
@@ -138,7 +141,7 @@ private void handleHTTP1Request(ConnectionStream)(ConnectionStream connection, H
 private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnection tcp_connection, HTTPServerContext listen_info, HTTPServerSettings settings, ref bool keep_alive, scope IAllocator request_allocator)
 @safe {
 
-	logInfo ("Old request handler");
+	//logInfo ("Old request handler");
 	import std.algorithm.searching : canFind;
 
 	SysTime reqtime = Clock.currTime(UTC());
@@ -228,6 +231,7 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 
 		// basic request parsing
 		parseRequestHeader(req, reqReader, request_allocator, settings.maxRequestHeaderSize);
+
 		logTrace("Got request header.");
 
 		// find the matching virtual host
@@ -331,8 +335,6 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 
 		// handle the request
 		logTrace("handle request (body %d)", req.bodyReader.leastSize);
-		res.httpVersion = req.httpVersion;
-		request_task(req, res);
 
 		/**
 		 * UPGRADE TO HTTP/2 for cleartext HTTP/1
@@ -341,16 +343,42 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 		 * "h2" is ignored since it is used for TLS protocol switching (ALPN)
 		 */
 		if(req.headers.get("Upgrade") == "h2c" ) {
+			// write the original response to a buffer
+			void createResBuffer(IAllocator alloc, ref HTTP2ServerContext ctx) @safe
+			{
+				import vibe.stream.memory;
+				MemoryOutputStream buf = createMemoryOutputStream(alloc);
+
+				res.bodyWriterH2(buf);
+				ctx.resHeader = buf.data.nullable;
+
+				if(req.method != HTTPMethod.HEAD) {
+					request_task(req, res);
+					ctx.resBody = buf.data[ctx.resHeader.length..$].nullable;
+				}
+			}
+
 			auto psettings = "HTTP2-Settings" in req.headers;
 			enforceHTTP(psettings !is null, HTTPStatus.badRequest, "Upgrade request must
 					include HTTP2-Settings");
 			auto h2settings = *psettings;
 
-			logInfo("Switching to HTTP/2");
-			// try to start an HTTP/2 connection
-			// TODO runTask as soon as multiplexing logic is done
-			return startHTTP2Connection(tcp_connection, h2settings, res);
+			logDebug("Switching to HTTP/2");
+			logTrace("handle request (body %d)", req.bodyReader.leastSize);
+
+			// initialize the request handler
+			auto h2context = HTTP2ServerContext(listen_info);
+			h2context.setNoTLS;
+			createResBuffer(request_allocator, h2context);
+			auto switchRes = HTTPServerResponse(http_stream, cproxy, settings, request_allocator);
+
+			return startHTTP2Connection(tcp_connection, h2settings, h2context, switchRes);
 		}
+
+
+		res.httpVersion = req.httpVersion;
+		request_task(req, res);
+
 
 		// if no one has written anything, return 404
 		if (!res.headerWritten) {
