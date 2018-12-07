@@ -1019,6 +1019,11 @@ struct HTTPServerResponse {
 		return m_data.bodyWriter;
 	}
 
+	@property void bodyWriterH2(T)(ref T writer)
+	{
+		m_data.bodyWriterH2(writer);
+	}
+
 	/** Sends a redirect request to the client.
 
 		Params:
@@ -1051,9 +1056,9 @@ struct HTTPServerResponse {
 		m_data.switchProtocol(protocol, del);
 	}
 	/// ditto
-	package void switchToHTTP2(alias connection_handler)(HTTP2Settings settings)
-	{
-		m_data.switchToHTTP2!connection_handler(settings);
+	package void switchToHTTP2(HANDLER)(HANDLER handler, HTTP2ServerContext context)
+	@safe {
+		m_data.switchToHTTP2(handler, context);
 	}
 
 	// Send a BadRequest and close connection (failed switch to HTTP/2)
@@ -1384,7 +1389,7 @@ private HTTPListener listenHTTPPlain(HTTPServerSettings settings, HTTPServerRequ
 			TCPListenOptions options = TCPListenOptions.defaults;
 			if(reusePort) options |= TCPListenOptions.reusePort; else options &= ~TCPListenOptions.reusePort;
 			auto ret = listenTCP(listen_info.bindPort, (TCPConnection conn) nothrow @safe {
-					logInfo("ListenHTTP");
+					//logInfo("ListenHTTP");
 					try { handleHTTP1Connection(conn, listen_info);
 					} catch (Exception e) {
 						logError("HTTP connection handler has thrown: %s", e.msg);
@@ -2199,8 +2204,29 @@ struct HTTPServerResponseData {
 					}
 				}
 
+
+
 				return m_bodyWriter;
 			}
+
+		/**
+		  * Used to change the bodyWriter during a HTTP/2 connection
+		  */
+		import vibe.stream.memory;
+		@property void bodyWriterH2(T)(ref T writer) @safe
+			if(isOutputStream!T)
+		{
+			assert(!m_bodyWriter, "Unable to set bodyWriter");
+			// write the current set headers before initiating the bodyWriter
+			if(!m_headerWritten) writeHeader(writer);
+
+			static if(!is(T == InterfaceProxy!OutputStream)) {
+				InterfaceProxy!OutputStream bwriter = writer;
+				m_bodyWriter = bwriter;
+			} else {
+				m_bodyWriter = writer;
+			}
+		}
 
 		/** Sends a redirect request to the client.
 
@@ -2279,28 +2305,23 @@ struct HTTPServerResponseData {
 					m_rawConnection.close(); // connection not reusable after a protocol upgrade
 			}
 
-		package void switchToHTTP2(alias connection_handler)(HTTP2Settings settings) @safe
-			if (isCallable!connection_handler &&
-				is(ReturnType!connection_handler == void))
-			{
+		package void switchToHTTP2(HANDLER)(HANDLER handler, HTTP2ServerContext context)
+			@safe {
+				//logInfo("sending SWITCHING_PROTOCOL response");
 
-				// send SWITCHING_PROTOCOL request
 				statusCode = HTTPStatus.switchingProtocols;
 				headers["Upgrade"] = "h2c";
 
-				logInfo("sending SWITCHING_PROTOCOL response");
 				writeVoidBody();
 
-				// handle HTTP2 connection
-				// TODO will be properly initialized once streams are implemented
-				HTTP2ConnectionStream h2conn;
-				connection_handler(h2conn, settings);
+				// TODO improve handler (handleHTTP2Connection) connection management
+				auto tcp_conn = m_rawConnection.extract!TCPConnection;
+				handler(tcp_conn, tcp_conn, context);
 
-				// close the existing connection
 				finalize();
+				// close the existing connection
 				if (m_rawConnection && m_rawConnection.connected)
-					m_rawConnection.close(); // connection not reusable after a protocol upgrade
-
+				m_rawConnection.close(); // connection not reusable after a protocol upgrade
 			}
 
 		// send a badRequest error response and close the connection
