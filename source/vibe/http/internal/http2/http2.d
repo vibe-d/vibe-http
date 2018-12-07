@@ -533,14 +533,30 @@ private void handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 	}
 }
 
+/// handle SETTINGS frame exchange (new connection)
+void handleHTTP2SettingsFrame(Stream)(ref Stream stream, ubyte[] data, HTTP2FrameHeader header, ref HTTP2ServerContext context, bool isConnectionPreface = true) @safe
+{
+	// parse settings payload
+	context.settings.unpackSettings(data);
 
-	//bool dataAvailableForRead() @property @safe { return false; }
+	// acknowledge settings with SETTINGS ACK Frame
+	FixedAppender!(ubyte[], 9) ackReply;
+	ackReply.createHTTP2FrameHeader(0, header.type, 0x1, header.streamId);
 
-	//const(ubyte)[] peek() @safe  { return []; }
+	if(isConnectionPreface) sendHTTP2SettingsFrame(stream, context);
 
-	//ulong read(scope ubyte[] dst, IOMode mode) @safe { return 0; }
+	stream.write(ackReply.data);
+	logInfo("Sent SETTINGS ACK");
+}
 
-	//ulong write(const(ubyte[]) bytes, IOMode mode) @safe { return 0; }
+void sendHTTP2SettingsFrame(Stream)(ref Stream stream, HTTP2ServerContext context) @safe
+{
+	FixedAppender!(ubyte[], HTTP2HeaderLength+36) settingDst;
+	settingDst.createHTTP2FrameHeader(36, HTTP2FrameType.SETTINGS, 0x0, 0);
+	settingDst.serializeSettings(context.settings);
+	stream.write(settingDst.data);
+	logInfo("Sent SETTINGS Frame");
+}
 
 	//void flush() @safe  {}
 
