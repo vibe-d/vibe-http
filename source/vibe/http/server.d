@@ -3,7 +3,8 @@ module vibe.http.server;
 public import vibe.core.net;
 import vibe.core.stream;
 import vibe.http.internal.http1;
-import vibe.http.internal.http2.http2;
+import vibe.http.internal.http2.settings;
+import vibe.http.internal.http2.exchange;
 
 public import vibe.http.log;
 public import vibe.http.common;
@@ -35,6 +36,7 @@ import std.format;
 import std.parallelism;
 import std.exception;
 import std.string;
+import std.traits;
 import std.encoding : sanitize;
 
 version (VibeNoSSL) version = HaveNoTLS;
@@ -745,7 +747,6 @@ struct HTTPServerRequest {
 		DictionaryList!(string, true, 8) params;
 
 		@property scope string requestURI() const @safe { return m_data.requestURI; }
-
 		// ditto
 		@property void requestURI(string uri) @safe { m_data.requestURI = uri; }
 
@@ -948,6 +949,13 @@ struct HTTPServerResponse {
 	void writeBody(string data, int status, string content_type = null)
 	{
 		m_data.writeBody(data, status, content_type);
+	}
+
+	// public overload for output streams only
+	void writeHeaderOut(Stream)(Stream conn) @safe
+		if(isOutputStream!Stream)
+	{
+		m_data.writeHeader(conn);
 	}
 
 	void writeRawBody(RandomAccessStream)(RandomAccessStream stream) @safe
