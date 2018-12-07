@@ -1490,7 +1490,7 @@ unittest {
 
 	//void write(alias HeaderCallback, alias BodyCallback)()
 	//{
-		//connection.writeHeaders!HeaderCallback();
+		//connection.writeHeader!HeaderCallback();
 		//connection.writeBody!BodyCallback();
 	//}
 //}
@@ -1575,6 +1575,11 @@ struct HTTPServerRequestData {
 				_path = urlDecode(requestPath.toString);
 			}
 			return _path.get;
+		}
+
+		void path(string st) @safe {
+			assert(_path.isNull, "Unable to set request path");
+			_path = st;
 		}
 
 		private Nullable!string _path;
@@ -1903,6 +1908,7 @@ struct HTTPServerResponseData {
 	}
 
 	protected {
+
 		/// The protocol version of the response - should not be changed
 		HTTPVersion httpVersion = HTTPVersion.HTTP_1_1;
 
@@ -2489,12 +2495,19 @@ struct HTTPServerResponseData {
 	}
 
 	private void writeHeader()
-		@safe {
+	@safe {
+		writeHeader(m_conn);
+	}
+
+	// accept a destination stream
+	private void writeHeader(Stream)(Stream conn) @safe
+		if(isStream!Stream || isOutputStream!Stream)
+	{
 			import vibe.stream.wrapper;
 
 			assert(!m_bodyWriter && !m_headerWritten, "Try to write header after body has already begun.");
 			m_headerWritten = true;
-			auto dst = streamOutputRange!1024(m_conn);
+			auto dst = streamOutputRange!1024(conn);
 
 			void writeLine(T...)(string fmt, T args)
 				@safe {
