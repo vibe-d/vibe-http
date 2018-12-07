@@ -558,19 +558,141 @@ void sendHTTP2SettingsFrame(Stream)(ref Stream stream, HTTP2ServerContext contex
 	logInfo("Sent SETTINGS Frame");
 }
 
-	//void flush() @safe  {}
+enum HTTP2StreamState {
+	IDLE,
+	RESERVED_LOCAL,
+	RESERVED_REMOTE,
+	OPEN,
+	HALF_CLOSED_LOCAL,
+	HALF_CLOSED_REMOTE,
+	CLOSED
+}
 
-	//void finalize() @safe  {}
+/** Represent a HTTP/2 Stream
+  * The underlying connection can be TCPConnection or TLSStream
+  * TODO: stream dependency, proper handling of stream IDs
+  * approach: mantain a union of IDs so that only correct streams are initialized
+*/
+struct HTTP2ConnectionStream(CS)
+{
+	static assert(isConnectionStream!CS || is(CS : TLSStream) || isOutputStream!Stream);
 
-	//bool connected() const @property @safe { return false; }
+	private {
+		enum Parse { HEADER, PAYLOAD };
+		CS m_conn;
+		uint m_streamId; // streams initiated by the server must be even-numbered
+		Parse toParse = Parse.HEADER;
+		HTTP2StreamState m_state;
+		AllocAppender!(ubyte[]) m_headerBlock;
 
-	//void close() @safe  {}
+		// Stream dependency TODO
+		HTTP2FrameStreamDependency m_dependency;
+	}
 
-	//bool waitForData() @safe { return false; }
+	alias m_conn this;
 
-	//ulong write(const(ubyte[]) bytes, IOMode mode) @safe { return 0; }
+	this(CS)(ref CS conn, uint sid, IAllocator alloc) @safe
+	{
+		m_conn = conn;
+		m_streamId = sid;
+		m_state = HTTP2StreamState.IDLE;
+		m_headerBlock = AllocAppender!(ubyte[])(alloc);
+	}
 
-	//void flush() @safe {}
+	this(CS)(ref CS conn, IAllocator alloc) @safe
+	{
+		this(conn, 0, alloc);
+	}
 
-	//void finalize() @safe  {}
+	@property CS connection() @safe { return m_conn; }
+
+	@property HTTP2StreamState state() @safe @nogc { return m_state; }
+
+	@property bool canRead() @safe @nogc
+	{
+		return (m_state == HTTP2StreamState.OPEN || m_state == HTTP2StreamState.IDLE);
+	}
+
+	/// set state according to Stream lifecycle (RFC 7540 section 5.1)
+	@property void state(HTTP2StreamState st) @safe @nogc
+	{
+		switch(st) {
+			case HTTP2StreamState.OPEN:
+				if(m_state == HTTP2StreamState.IDLE) m_state = st;
+				else assert(false, "Invalid state");
+				break;
+			case HTTP2StreamState.HALF_CLOSED_LOCAL:
+				if(m_state == HTTP2StreamState.OPEN ||
+						m_state == HTTP2StreamState.RESERVED_REMOTE)
+					m_state = st;
+				else assert(false, "Invalid state");
+				break;
+			case HTTP2StreamState.HALF_CLOSED_REMOTE:
+				if(m_state == HTTP2StreamState.OPEN ||
+						m_state == HTTP2StreamState.RESERVED_LOCAL)
+					m_state = st;
+				else assert(false, "Invalid state");
+				break;
+			case HTTP2StreamState.CLOSED:
+				m_state = st;
+				break;
+			case HTTP2StreamState.RESERVED_LOCAL:
+			case HTTP2StreamState.RESERVED_REMOTE:
+				if(m_state == HTTP2StreamState.IDLE) m_state = st;
+				else assert(false, "Invalid state");
+				break;
+			default:
+				assert(false, "Unrecognized state");
+ 		}
+	}
+
+	@property uint streamId() @safe @nogc { return m_streamId; }
+
+	@property void streamId(uint sid) @safe @nogc { m_streamId = sid; }
+
+	@property HTTP2FrameStreamDependency dependency() @safe @nogc { return m_dependency; }
+
+	@property ubyte[] headerBlock() @safe
+	{
+		assert(!m_headerBlock.data.empty, "No data in header block buffer");
+		return m_headerBlock.data;
+	}
+
+	uint readHeader(R)(ref R dst) @safe
+	{
+		assert(toParse == Parse.HEADER);
+
+		ubyte[9] buf;
+		m_conn.read(buf);
+		dst.put(buf);
+		auto len = dst.data[0..3].fromBytes(3);
+		if(len > 0) toParse = Parse.PAYLOAD;
+		return len;
+	}
+
+	void readPayload(R)(ref R dst, int len) @safe
+	{
+		assert(toParse == Parse.PAYLOAD);
+		toParse = Parse.HEADER;
+
+		ubyte[8] buf = void;
+		while(len > 0) {
+			auto end = (len < buf.length) ? len : buf.length;
+			len -= m_conn.read(buf[0..end], IOMode.all);
+			dst.put(buf[0..end]);
+		}
+	}
+
+	void finalize() @safe
+	{
+		// TODO register streamID in USED set
+		//m_conn.finalize();
+	}
+
+	void putHeaderBlock(T)(T src) @safe
+		if(isInputRange!T && is(ElementType!T : ubyte))
+	{
+		// TODO check header block length
+		m_headerBlock.put(src);
+	}
 }
