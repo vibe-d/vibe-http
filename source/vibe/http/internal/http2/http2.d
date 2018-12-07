@@ -494,6 +494,45 @@ private void handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 	}
 
 	//ulong leastSize() @property @safe { return 0; }
+	// in case of H2C protocol switching
+	if(!context.isTLS && !context.resHeader.isNull) { // h2c first request
+		// response is sent on stream ID 1
+		context.next_sid = 1;
+		auto headerFrame = buildHeaderFrame!(StartLine.RESPONSE)(cast(string)context.resHeader.get, context, table, alloc);
+		if(headerFrame.length < context.settings.maxFrameSize)
+		{
+			headerFrame[4] += 0x4; // set END_HEADERS flag (sending complete header)
+			try {
+				stream.write(headerFrame);
+			} catch (Exception e) {
+				logWarn("Unable to write HEADERS Frame to stream");
+			}
+		} else {
+			// TODO CONTINUATION frames
+			assert(false);
+		}
+		context.resHeader.nullify;
+
+		// send DATA (body) if present
+		if(!context.resBody.isNull) {
+			auto dataFrame = AllocAppender!(ubyte[])(alloc);
+
+			// create DATA Frame with END_STREAM (0x1) flag
+			dataFrame.createHTTP2FrameHeader(context.resBody.get.length.to!uint, HTTP2FrameType.DATA, 0x1, context.next_sid);
+			dataFrame.put(context.resBody.get);
+			try {
+				stream.write(dataFrame.data);
+			} catch(Exception e) {
+				logWarn("Unable to write DATA Frame to stream.");
+			}
+
+			logTrace("Sent DATA frame on streamID " ~ stream.streamId.to!string);
+			context.resBody.nullify;
+		}
+		logInfo("Sent first HTTP/2 response to H2C connection");
+	}
+}
+
 
 	//bool dataAvailableForRead() @property @safe { return false; }
 
