@@ -50,7 +50,6 @@ void decode(I, R, T)(ref I src, ref R dst, ref IndexingTable table,  ref T alloc
 		} else if(bbuf & 16) { // NEVER inserted in dynamic table
 			size_t idx = decodeInteger(src, bbuf, 4);
 			if(idx > 0) {  // name == table[index].name, value == literal
-
 				hres.name = table[idx].name;
 			} else {   // name == literal, value == literal
 				decodeLiteral(src, adst);
