@@ -1,6 +1,11 @@
 module vibe.http.internal.http1;
 
-import vibe.http.internal.http2.http2 : startHTTP2Connection;
+import vibe.http.internal.http2.http2;
+import vibe.http.internal.http2.settings;
+import vibe.core.stream;
+import vibe.core.core : runTask;
+import vibe.core.net;
+import vibe.http.server;
 import vibe.core.stream;
 import vibe.core.core : runTask;
 import vibe.core.net;
@@ -41,7 +46,7 @@ void handleHTTP1Connection(ConnectionStream)(ConnectionStream connection, HTTPSe
 {
 	connection.tcpNoDelay = true;
 
-	logInfo("Connection");
+	//logInfo("Connection");
 	version(HaveNoTLS) {} else {
 		TLSStreamType tls_stream;
 	}
@@ -58,6 +63,14 @@ void handleHTTP1Connection(ConnectionStream)(ConnectionStream connection, HTTPSe
 
 			// TODO: reverse DNS lookup for peer_name of the incoming connection for TLS client certificate verification purposes
 			tls_stream = createTLSStreamFL(http_stream, context.tlsContext, TLSStreamState.accepting, null, connection.remoteAddress);
+
+			Nullable!string proto = tls_stream.alpn;
+			if(!proto.isNull && proto == "h2") {
+				HTTP2Settings settings;
+				auto h2context = HTTP2ServerContext(context, settings);
+				handleHTTP2Connection(tls_stream, connection, h2context);
+				return;
+			}
 			http_stream = tls_stream;
 		}
 	}
