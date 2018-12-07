@@ -178,7 +178,8 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref
 
 		case HTTP2FrameType.WINDOW_UPDATE:
 			assert(len == 4, "Invalid WINDOW_UPDATE Frame (FRAME_SIZE error)");
-			foreach(b; src.takeExactly(len)) {
+			foreach(i,b; src.takeExactly(len).enumerate) {
+				if(i == 0) b &= 127; // reserved bit
 				payloadDst.put(b);
 				src.popFront();
 			}
