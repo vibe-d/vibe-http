@@ -3,6 +3,7 @@ module vibe.http.internal.http2.hpack.decoder;
 import vibe.http.internal.http2.hpack.huffman;
 import vibe.http.internal.http2.hpack.tables;
 import vibe.http.internal.http2.hpack.util;
+import vibe.http.internal.http2.hpack.exception;
 
 import vibe.internal.array : AllocAppender;
 import vibe.core.log;
@@ -121,10 +122,8 @@ private void decodeLiteral(I,R)(ref I src, ref R dst) @safe
 
 	// take a buffer of remaining octets
 	auto vlen = bbuf.toInteger(1); // value length
-	if(vlen > src.length) {
-		logWarn("Invalid literal decoded");
-		return;
-	}
+	enforceHPACK(vlen <= src.length, "Invalid literal decoded");
+
 	auto buf = src[0..vlen];
 	src = src[vlen..$];
 
