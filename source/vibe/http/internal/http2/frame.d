@@ -2,6 +2,8 @@ module vibe.http.internal.http2.frame;
 
 import vibe.http.internal.http2.settings;
 
+import vibe.internal.array;
+
 import std.typecons;
 import std.traits;
 import std.range;
@@ -60,14 +62,6 @@ struct HTTP2FrameStreamDependency {
 	}
 }
 
-/// DITTO
-HTTP2FrameHeader unpackHTTP2Frame(R,T)(ref R payloadDst, T src, ref bool endStream, ref bool endHeaders, ref bool ack, ref HTTP2FrameStreamDependency sdep) @safe
-{
-	auto header = unpackHTTP2FrameHeader(src);
-	unpackHTTP2Frame(payloadDst, src, header, endStream, endHeaders, ack, sdep);
-	return header;
-}
-
 /** unpacks a frame putting the payload in `payloadDst` and returning the header
   * implements the checks required for each frame type (Section 6 of HTTP/2 RFC)
   *
@@ -76,6 +70,14 @@ HTTP2FrameHeader unpackHTTP2Frame(R,T)(ref R payloadDst, T src, ref bool endStre
   *
   * Note: @nogc-compatible as long as payloadDst.put is @nogc (AllocAppender.put isn't)
   */
+HTTP2FrameHeader unpackHTTP2Frame(R,T)(ref R payloadDst, T src, ref bool endStream, ref bool endHeaders, ref bool ack, ref HTTP2FrameStreamDependency sdep) @safe
+{
+	auto header = unpackHTTP2FrameHeader(src);
+	unpackHTTP2Frame(payloadDst, src, header, endStream, endHeaders, ack, sdep);
+	return header;
+}
+
+/// DITTO
 void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref bool endStream, ref bool endHeaders, ref bool ack, ref HTTP2FrameStreamDependency sdep) @safe
 {
 	size_t len = header.payloadLength;
