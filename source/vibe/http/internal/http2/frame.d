@@ -344,45 +344,44 @@ HTTP2FrameHeader unpackHTTP2FrameHeader(R)(scope ref R src) @safe @nogc
 struct HTTP2FrameHeader
 {
 	private {
-		ubyte[3] m_length; 			// 24-bit frame payload length
+		//ubyte[3] m_length; 			// 24-bit frame payload length
+		FixedAppender!(ubyte[], 3) m_length;
 		HTTP2FrameType m_type; 		// frame type (stored as ubyte for serialization)
 		ubyte m_flags; 				// frame flags
-		ubyte[4] m_streamId;  		// stream id, uint (stored as ubyte for serialization)
+		//ubyte[4] m_streamId;  		// stream id, uint (stored as ubyte for serialization)
+		FixedAppender!(ubyte[], 4) m_streamId;
 	}
 
 	this(const uint len, const HTTP2FrameType tp, const ubyte flg, const uint sid) @safe @nogc
 	{
 		assert(sid < (cast(ulong)1 << 32), "Invalid stream id");
-		m_length.putBytes!(3)(len);
+
+		m_length.putBytes!3(len);
 		m_type = tp;
 		m_flags = flg;
-		m_streamId.putBytes!(4)(sid & ((cast(ulong)1 << 32) - 1)); // reserved bit is 0
+		m_streamId.putBytes!4(sid & ((cast(ulong)1 << 32) - 1)); // reserved bit is 0
 	}
 
 	this(T)(ref T src) @safe @nogc
 		if(is(ElementType!T : ubyte))
 	{
-		foreach(i,b; src.take(3).enumerate) {
-			m_length[i] = b;
-			src.popFront();
-		}
+		m_length.put(src.take(3));
+		src.popFrontN(3);
 
 		m_type = cast(HTTP2FrameType)src.front; src.popFront;
 		m_flags = src.front; src.popFront;
 
-		foreach(i,b; src.take(4).enumerate) {
-			m_streamId[i] = b;
-			src.popFront();
-		}
+		m_streamId.put(src.take(4));
+		src.popFrontN(4);
 	}
 
 	@property HTTP2FrameType type() @safe @nogc { return m_type; }
 
-	@property uint payloadLength() @safe @nogc { return m_length.fromBytes(3); }
+	@property uint payloadLength() @safe @nogc { return m_length.data.fromBytes(3); }
 
 	@property ubyte flags() @safe @nogc { return m_flags; }
 
-	@property uint streamId() @safe @nogc { return m_streamId.fromBytes(4); }
+	@property uint streamId() @safe @nogc { return m_streamId.data.fromBytes(4); }
 }
 
 /// convert 32-bit unsigned integer to N bytes (MSB first)
@@ -394,11 +393,7 @@ void putBytes(uint N, R)(ref R dst, const(ulong) src) @safe @nogc
 	ubyte[N] buf;
 	foreach(i,ref b; buf) b = cast(ubyte)(src >> 8*(N-1-i)) & 0xff;
 
-	static if(isArray!R) {
-		dst = buf;
-	} else {
-		foreach(b; buf) dst.put(b);
-	}
+	dst.put(buf);
 }
 
 /// convert a N-bytes representation MSB->LSB to uint
@@ -421,8 +416,8 @@ private void serialize(R)(ref R dst, HTTP2FrameHeader header) @safe
 	static foreach(f; __traits(allMembers, HTTP2FrameHeader)) {
 		static if(f != "__ctor" && f != "type"
 				&& f != "payloadLength" && f != "flags" && f != "streamId") {
-			static if(isArray!(typeof(__traits(getMember, HTTP2FrameHeader, f)))) {
-				mixin("foreach(b; header."~f~") dst.put(b);");
+			static if(f == "m_length" || f == "m_streamId") {
+				mixin("dst.put(header."~f~".data);");
 			} else static if(f == "m_type") {
 				mixin("dst.put(cast(ubyte)header."~f~");");
 			} else {
