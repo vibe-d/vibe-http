@@ -332,19 +332,9 @@ void serializeHTTP2FrameHeader(R)(ref R dst, HTTP2FrameHeader header) @safe @nog
 }
 
 /// unpacking
-HTTP2FrameHeader unpackHTTP2FrameHeader(R)(ref R src) @safe @nogc
+HTTP2FrameHeader unpackHTTP2FrameHeader(R)(scope ref R src) @safe @nogc
 {
-	HTTP2FrameHeader header = void;
-
-	static if(isStaticArray!R) {
-		import vibe.internal.array : BatchBuffer;
-		BatchBuffer!(ubyte, 9) bbuf;
-		bbuf.putN(src);
-		header = HTTP2FrameHeader(bbuf);
-	} else {
-		header = HTTP2FrameHeader(src);
-	}
-
+	scope header = HTTP2FrameHeader(src);
 	return header;
 }
 
