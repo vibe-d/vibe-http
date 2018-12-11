@@ -440,10 +440,8 @@ private void handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 		case HTTP2FrameType.PING:
 			if(!isAck) {
 				// acknowledge ping with PING ACK Frame
-				auto buf = AllocAppender!(ubyte[])(alloc);
+				FixedAppender!(ubyte[], 17) buf;
 				buf.createHTTP2FrameHeader(len, header.type, 0x1, header.streamId);
-				import std.stdio;
-				writeln(buf.data);
 				buf.buildHTTP2Frame(payload.data);
 
 				stream.write(buf.data);
