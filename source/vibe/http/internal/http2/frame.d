@@ -1,6 +1,8 @@
 module vibe.http.internal.http2.frame;
 
-import vibe.http.internal.http2.http2;
+import vibe.http.internal.http2.settings;
+
+import vibe.internal.array;
 
 import std.typecons;
 import std.traits;
@@ -18,6 +20,8 @@ import std.algorithm.mutation;
   * Section 6: Frame definition according to Frame Type
   * https://tools.ietf.org/html/rfc7540#section-6
 */
+
+enum uint HTTP2HeaderLength = 9;
 
 enum HTTP2FrameType {
 	DATA 			= 0x0,
@@ -63,11 +67,19 @@ struct HTTP2FrameStreamDependency {
   *
   * Invoked by a possible HTTP/2 request handler, the payload is meant to be handled by
   * the caller.
+  *
+  * Note: @nogc-compatible as long as payloadDst.put is @nogc (AllocAppender.put isn't)
   */
-HTTP2FrameHeader unpackHTTP2Frame(R,T)(ref R payloadDst, ref T src, ref bool endStream, ref bool needsCont, ref bool ack, ref HTTP2FrameStreamDependency sdep) @safe @nogc
-	if(is(ElementType!T : ubyte))
+HTTP2FrameHeader unpackHTTP2Frame(R,T)(ref R payloadDst, T src, ref bool endStream, ref bool endHeaders, ref bool ack, ref HTTP2FrameStreamDependency sdep) @safe
 {
 	auto header = unpackHTTP2FrameHeader(src);
+	unpackHTTP2Frame(payloadDst, src, header, endStream, endHeaders, ack, sdep);
+	return header;
+}
+
+/// DITTO
+void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref bool endStream, ref bool endHeaders, ref bool ack, ref HTTP2FrameStreamDependency sdep) @safe
+{
 	size_t len = header.payloadLength;
 
 	switch(header.type) {
@@ -99,7 +111,7 @@ HTTP2FrameHeader unpackHTTP2Frame(R,T)(ref R payloadDst, ref T src, ref bool end
 			}
 			src.popFrontN(header.payloadLength - len); // remove padding
 			if(header.flags & 0x1) endStream = true;
-			if(header.flags & 0x4) needsCont = true;
+			if(header.flags & 0x4) endHeaders = true;
 			break;
 
 		case HTTP2FrameType.PRIORITY:
@@ -142,7 +154,7 @@ HTTP2FrameHeader unpackHTTP2Frame(R,T)(ref R payloadDst, ref T src, ref bool end
 				src.popFront();
 			}
 			src.popFrontN(header.payloadLength - len); // remove padding
-			if(header.flags & 0x4) needsCont = true;
+			if(header.flags & 0x4) endHeaders = true;
 			break;
 
 		case HTTP2FrameType.PING:
@@ -168,7 +180,8 @@ HTTP2FrameHeader unpackHTTP2Frame(R,T)(ref R payloadDst, ref T src, ref bool end
 
 		case HTTP2FrameType.WINDOW_UPDATE:
 			assert(len == 4, "Invalid WINDOW_UPDATE Frame (FRAME_SIZE error)");
-			foreach(b; src.takeExactly(len)) {
+			foreach(i,b; src.takeExactly(len).enumerate) {
+				if(i == 0) b &= 0x7F; // reserved bit
 				payloadDst.put(b);
 				src.popFront();
 			}
@@ -180,14 +193,12 @@ HTTP2FrameHeader unpackHTTP2Frame(R,T)(ref R payloadDst, ref T src, ref bool end
 				payloadDst.put(b);
 				src.popFront();
 			}
-			if(header.flags & 0x4) needsCont = true;
+			if(header.flags & 0x4) endHeaders = true;
 			break;
 
 		default:
 			assert(false, "Invalid frame header unpacked");
 	}
-
-	return header;
 }
 
 unittest {
@@ -195,74 +206,75 @@ unittest {
 
 	FixedAppender!(ubyte[], 4) payloadDst;
 	bool endStream = false;
-	bool needsCont = false;
+	bool endHeaders = false;
 	bool ack = false;
 	HTTP2FrameStreamDependency sdep;
 
 
 	// DATA Frame
 	ubyte[] data = [0, 0, 4, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1];
-	payloadDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	payloadDst.unpackHTTP2Frame(data, endStream, endHeaders, ack, sdep);
 	assert(payloadDst.data == [1, 1, 1, 1]);
 
 	// HEADERS Frame
 	payloadDst.clear;
 	data = [0, 0, 4, 1, 0, 0, 0, 0, 2, 2, 2, 2, 2];
-	payloadDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	payloadDst.unpackHTTP2Frame(data, endStream, endHeaders, ack, sdep);
 	assert(payloadDst.data == [2, 2, 2, 2]);
 
 	// PRIORITY Frame
 	payloadDst.clear;
 	data = [0, 0, 5, 2, 0, 0, 0, 0, 3, 0, 0, 0, 2, 5];
-	payloadDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	payloadDst.unpackHTTP2Frame(data, endStream, endHeaders, ack, sdep);
 	assert(payloadDst.data == []);
 	assert(sdep.weight == 5 &&  sdep.streamId == 2);
 
 	// RST_STREAM Frame
 	payloadDst.clear;
 	data = [0, 0, 4, 3, 0, 0, 0, 0, 4, 4, 4, 4, 4];
-	payloadDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	payloadDst.unpackHTTP2Frame(data, endStream, endHeaders, ack, sdep);
 	assert(payloadDst.data == [4, 4, 4, 4]);
 
 	// SETTINGS Frame
 	FixedAppender!(ubyte[], 6) settingsDst;
 	data = [0, 0, 6, 4, 0, 0, 0, 0, 0, 0, 1, 2, 2, 2, 2];
-	settingsDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	settingsDst.unpackHTTP2Frame(data, endStream, endHeaders, ack, sdep);
 	assert(settingsDst.data == [0, 1, 2, 2, 2, 2]);
 
 	// PUSH_PROMISE Frame
 	payloadDst.clear;
 	data = [0, 0, 8, 5, 0, 0, 0, 0, 5, 0, 0, 0, 2, 4, 4, 4, 4];
-	payloadDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	payloadDst.unpackHTTP2Frame(data, endStream, endHeaders, ack, sdep);
 	assert(payloadDst.data == [4, 4, 4, 4]);
 	assert(sdep.weight == 5 &&  sdep.streamId == 2);
 
 	// PING Frame
 	FixedAppender!(ubyte[], 8) pingDst;
 	data = [0, 0, 8, 6, 0, 0, 0, 0, 0, 0, 0, 0, 2, 4, 4, 4, 4];
-	pingDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	pingDst.unpackHTTP2Frame(data, endStream, endHeaders, ack, sdep);
 	assert(pingDst.data == [0, 0, 0, 2, 4, 4, 4, 4]);
 
 	// GOAWAY Frame
 	pingDst.clear;
 	data = [0, 0, 8, 7, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 4];
-	pingDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	pingDst.unpackHTTP2Frame(data, endStream, endHeaders, ack, sdep);
 	assert(pingDst.data == [0, 0, 0, 2, 0, 0, 0, 4]);
 
 	// WINDOW_UPDATE
 	payloadDst.clear;
 	data = [0, 0, 4, 8, 0, 0, 0, 0, 6, 1, 1, 1, 1];
-	payloadDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	payloadDst.unpackHTTP2Frame(data, endStream, endHeaders, ack, sdep);
 	assert(payloadDst.data == [1, 1, 1, 1]);
 
 	// CONTINUATION
 	payloadDst.clear;
 	data = [0, 0, 4, 9, 0, 0, 0, 0, 6, 2, 2, 2, 2];
-	payloadDst.unpackHTTP2Frame(data, endStream, needsCont, ack, sdep);
+	payloadDst.unpackHTTP2Frame(data, endStream, endHeaders, ack, sdep);
 	assert(payloadDst.data == [2, 2, 2, 2]);
 }
 
 /*** FRAME BUILDING ***/
+
 /// concatenates a Frame header with a Frame payload
 void buildHTTP2Frame(R,H,T)(ref R dst, ref H header, ref T payload) @safe @nogc
 	if(is(ElementType!R : ubyte) && is(ElementType!T : ubyte))
@@ -282,9 +294,14 @@ void buildHTTP2Frame(R,H,T)(ref R dst, ref H header, ref T payload) @safe @nogc
 	foreach(b; payload) dst.put(b);
 }
 
-unittest {
-	import vibe.internal.array : BatchBuffer;
+/// DITTO
+/// @nogc-compatible if dst.put is @nogc
+void buildHTTP2Frame(R,T)(ref R dst, T payload) @safe
+{
+	payload.copy(dst);
+}
 
+unittest {
 	auto header = HTTP2FrameHeader(4, cast(HTTP2FrameType)1, 0, 5);
 	ubyte[4] payload = [0, 1, 2, 3];
 	ubyte[] bheader = [0, 0, 4, 1, 0, 0, 0, 0, 5];
@@ -302,7 +319,8 @@ unittest {
 
 /*** FRAME HEADER ***/
 /// header packing
-void createHTTP2FrameHeader(R)(ref R dst, const uint len, const HTTP2FrameType type, const ubyte flags, const uint sid) @safe @nogc
+/// @nogc-compatible if dst.put is @nogc
+void createHTTP2FrameHeader(R)(ref R dst, const uint len, const HTTP2FrameType type, const ubyte flags, const uint sid) @safe
 {
 	dst.serialize(HTTP2FrameHeader(len, type, flags, sid));
 }
@@ -314,11 +332,9 @@ void serializeHTTP2FrameHeader(R)(ref R dst, HTTP2FrameHeader header) @safe @nog
 }
 
 /// unpacking
-HTTP2FrameHeader unpackHTTP2FrameHeader(R)(ref R src) @safe @nogc
-	if(is(ElementType!R : ubyte))
+HTTP2FrameHeader unpackHTTP2FrameHeader(R)(scope ref R src) @safe @nogc
 {
-	auto header = HTTP2FrameHeader(src);
-
+	scope header = HTTP2FrameHeader(src);
 	return header;
 }
 
@@ -328,65 +344,60 @@ HTTP2FrameHeader unpackHTTP2FrameHeader(R)(ref R src) @safe @nogc
 struct HTTP2FrameHeader
 {
 	private {
-		ubyte[3] m_length; 			// 24-bit frame payload length
+		//ubyte[3] m_length; 			// 24-bit frame payload length
+		FixedAppender!(ubyte[], 3) m_length;
 		HTTP2FrameType m_type; 		// frame type (stored as ubyte for serialization)
 		ubyte m_flags; 				// frame flags
-		ubyte[4] m_streamId;  		// stream id, uint (stored as ubyte for serialization)
+		//ubyte[4] m_streamId;  		// stream id, uint (stored as ubyte for serialization)
+		FixedAppender!(ubyte[], 4) m_streamId;
 	}
 
 	this(const uint len, const HTTP2FrameType tp, const ubyte flg, const uint sid) @safe @nogc
 	{
 		assert(sid < (cast(ulong)1 << 32), "Invalid stream id");
-		m_length.putBytes!(3)(len);
+
+		m_length.putBytes!3(len);
 		m_type = tp;
 		m_flags = flg;
-		m_streamId.putBytes!(4)(sid & ((cast(ulong)1 << 32) - 1)); // reserved bit is 0
+		m_streamId.putBytes!4(sid & ((cast(ulong)1 << 32) - 1)); // reserved bit is 0
 	}
 
 	this(T)(ref T src) @safe @nogc
 		if(is(ElementType!T : ubyte))
 	{
-		foreach(i,b; src.take(3).enumerate) {
-			m_length[i] = b;
-			src.popFront();
-		}
+		m_length.put(src.take(3));
+		src.popFrontN(3);
 
 		m_type = cast(HTTP2FrameType)src.front; src.popFront;
 		m_flags = src.front; src.popFront;
 
-		foreach(i,b; src.take(4).enumerate) {
-			m_streamId[i] = b;
-			src.popFront();
-		}
+		m_streamId.put(src.take(4));
+		src.popFrontN(4);
 	}
 
 	@property HTTP2FrameType type() @safe @nogc { return m_type; }
 
-	@property uint payloadLength() @safe @nogc { return m_length.fromBytes(3); }
+	@property uint payloadLength() @safe @nogc { return m_length.data.fromBytes(3); }
 
 	@property ubyte flags() @safe @nogc { return m_flags; }
 
-	@property uint streamId() @safe @nogc { return m_streamId.fromBytes(4); }
+	@property uint streamId() @safe @nogc { return m_streamId.data.fromBytes(4); }
 }
 
 /// convert 32-bit unsigned integer to N bytes (MSB first)
 void putBytes(uint N, R)(ref R dst, const(ulong) src) @safe @nogc
 {
-    assert(src > 0 && src < (cast(ulong)1 << N*8), "Invalid uint for putBytes");
-    static if(hasLength!R) assert(dst.length >= N);
+	assert(src >= 0 && src < (cast(ulong)1 << N*8), "Invalid frame payload length");
+	static if(hasLength!R) assert(dst.length >= N);
 
-    ubyte[N] buf;
-    foreach(i,ref b; buf) b = cast(ubyte)(src >> 8*(N-1-i)) & 0xff;
+	ubyte[N] buf;
+	foreach(i,ref b; buf) b = cast(ubyte)(src >> 8*(N-1-i)) & 0xff;
 
-    static if(isArray!R) {
-        dst = buf;
-    } else {
-        foreach(b; buf) dst.put(b);
-    }
+	dst.put(buf);
 }
 
 /// convert a N-bytes representation MSB->LSB to uint
-private uint fromBytes(R)(R src, uint n) @safe @nogc
+uint fromBytes(R)(R src, uint n) @safe @nogc
 {
 	uint res = 0;
 	static if(isArray!R) {
@@ -398,14 +409,15 @@ private uint fromBytes(R)(R src, uint n) @safe @nogc
 }
 
 /// fill a buffer with fields from `header`
-private void serialize(R)(ref R dst, HTTP2FrameHeader header) @safe @nogc
+/// @nogc-compatible if dst.put is @nogc
+private void serialize(R)(ref R dst, HTTP2FrameHeader header) @safe
 	if(isOutputRange!(R, ubyte))
 {
 	static foreach(f; __traits(allMembers, HTTP2FrameHeader)) {
 		static if(f != "__ctor" && f != "type"
 				&& f != "payloadLength" && f != "flags" && f != "streamId") {
-			static if(isArray!(typeof(__traits(getMember, HTTP2FrameHeader, f)))) {
-				mixin("foreach(b; header."~f~") dst.put(b);");
+			static if(f == "m_length" || f == "m_streamId") {
+				mixin("dst.put(header."~f~".data);");
 			} else static if(f == "m_type") {
 				mixin("dst.put(cast(ubyte)header."~f~");");
 			} else {
