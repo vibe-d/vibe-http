@@ -298,13 +298,10 @@ void buildHTTP2Frame(R,H,T)(ref R dst, ref H header, ref T payload) @safe @nogc
 /// @nogc-compatible if dst.put is @nogc
 void buildHTTP2Frame(R,T)(ref R dst, T payload) @safe
 {
-	// put payload
-	foreach(b; payload) dst.put(b);
+	payload.copy(dst);
 }
 
 unittest {
-	import vibe.internal.array : BatchBuffer;
-
 	auto header = HTTP2FrameHeader(4, cast(HTTP2FrameType)1, 0, 5);
 	ubyte[4] payload = [0, 1, 2, 3];
 	ubyte[] bheader = [0, 0, 4, 1, 0, 0, 0, 0, 5];
