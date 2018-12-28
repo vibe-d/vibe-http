@@ -524,7 +524,7 @@ private void handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 				logWarn("Unable to write DATA Frame to stream.");
 			}
 
-			logTrace("Sent DATA frame on streamID " ~ stream.streamId.to!string);
+			logTrace("Sent DATA frame on streamID %s", stream.streamId);
 			context.resBody.nullify;
 		}
 		logInfo("Sent first HTTP/2 response to H2C connection");
