@@ -272,7 +272,7 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 
 	// create HEADERS frame
 	auto headerWriter = createHeaderOutputStream(alloc);
-	res.writeHeaderOut(headerWriter);
+	res.writeVoidBody(headerWriter);
 
 	// send HEADERS frame
 	h2context.next_sid = stream.streamId;
