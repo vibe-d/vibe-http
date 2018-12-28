@@ -951,13 +951,6 @@ struct HTTPServerResponse {
 		m_data.writeBody(data, status, content_type);
 	}
 
-	// public overload for output streams only
-	void writeHeaderOut(Stream)(Stream conn) @safe
-		if(isOutputStream!Stream)
-	{
-		m_data.writeHeader(conn);
-	}
-
 	void writeRawBody(RandomAccessStream)(RandomAccessStream stream) @safe
 		if (isRandomAccessStream!RandomAccessStream)
 	{
@@ -1013,13 +1006,18 @@ struct HTTPServerResponse {
 	{
 		m_data.writeVoidBody();
 	}
+	/// ditto
+	@property void writeVoidBody(Stream)(Stream stream)
+	{
+		m_data.writeVoidBody(stream);
+	}
 
 	@property InterfaceProxy!OutputStream bodyWriter()
 	{
 		return m_data.bodyWriter;
 	}
 
-	@property void bodyWriterH2(T)(ref T writer)
+	package @property void bodyWriterH2(T)(ref T writer)
 	{
 		m_data.bodyWriterH2(writer);
 	}
@@ -2142,16 +2140,22 @@ struct HTTPServerResponseData {
 		 * requested, such as a HEAD request. For an empty body, just use writeBody,
 		 * as this method causes problems with some keep-alive connections.
 		 */
-		void writeVoidBody()
-			@safe {
-				if (!m_isHeadResponse) {
-					assert("Content-Length" !in headers);
-					assert("Transfer-Encoding" !in headers);
-				}
-				assert(!headerWritten);
-				writeHeader();
-				m_conn.flush();
+		void writeVoidBody() @safe
+		{
+			writeVoidBody(m_conn);
+		}
+		/// ditto
+		void writeVoidBody(Stream)(Stream stream) @safe
+			if(isOutputStream!Stream)
+		{
+			if (!m_isHeadResponse) {
+				assert("Content-Length" !in headers);
+				assert("Transfer-Encoding" !in headers);
 			}
+			assert(!headerWritten);
+			writeHeader(stream);
+			stream.flush();
+		}
 
 		/** A stream for writing the body of the HTTP response.
 
@@ -2501,7 +2505,7 @@ struct HTTPServerResponseData {
 
 	// accept a destination stream
 	private void writeHeader(Stream)(Stream conn) @safe
-		if(isStream!Stream || isOutputStream!Stream)
+		if(isOutputStream!Stream)
 	{
 			import vibe.stream.wrapper;
 
