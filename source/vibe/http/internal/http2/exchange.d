@@ -20,6 +20,7 @@ import vibe.stream.wrapper : ConnectionProxyStream, createConnectionProxyStream,
 import vibe.utils.string;
 import vibe.stream.memory;
 import vibe.inet.url;
+import vibe.inet.message;
 
 import std.range;
 import std.string;
@@ -28,6 +29,7 @@ import std.traits;
 import std.typecons;
 import std.datetime;
 import std.exception;
+import std.format;
 import std.algorithm.iteration;
 import std.algorithm.mutation;
 import std.algorithm.searching;
@@ -44,7 +46,7 @@ private alias H2F = HTTP2HeaderTableField;
 alias DataOutputStream = MemoryOutputStream;
 
 /// accepts a HTTP/1.1 header list, converts it to an HTTP/2 header frame and encodes it
-ubyte[] buildHeaderFrame(alias type)(string[] h1header, HTTP2ServerContext context, ref IndexingTable table, scope IAllocator alloc) @safe
+ubyte[] buildHeaderFrame(alias type)(string statusLine, InetHeaderMap headers, HTTP2ServerContext context, ref IndexingTable table, scope IAllocator alloc) @safe
 {
 	// frame header + frame payload
 	FixedAppender!(ubyte[], 9) hbuf;
@@ -52,14 +54,17 @@ ubyte[] buildHeaderFrame(alias type)(string[] h1header, HTTP2ServerContext conte
 	auto res = AllocAppender!(ubyte[])(alloc);
 
 	// split the start line of each req / res into pseudo-headers
-	convertStartMessage(h1header[0], pbuf, table, type, context.isTLS);
-	h1header.popFront();
+	convertStartMessage(statusLine, pbuf, table, type, context.isTLS);
 
-	// convert and encode the range of headers from HTTP1 to HTTP2
-	h1header
-		.map!(s => s.strip('\n').replace("Host", ":authority").toLower)
-		.filter!(s => !s.empty)
-		.each!(s => s.split(": ").H2F.encodeHPACK(pbuf, table));
+	// "Host" header does not exist in HTTP/2, use ":authority" pseudo-header
+	if("Host" in headers) {
+		headers[":authority"] = headers["Host"];
+		headers.remove("Host");
+	}
+
+	foreach(k,v; headers) {
+		H2F(k,v).encodeHPACK(pbuf, table);
+	}
 
 	// TODO padding
 	hbuf.createHTTP2FrameHeader(cast(uint)pbuf.data.length, HTTP2FrameType.HEADERS, 0x0, context.next_sid);
@@ -68,10 +73,12 @@ ubyte[] buildHeaderFrame(alias type)(string[] h1header, HTTP2ServerContext conte
 	return res.data;
 }
 
-/// DITTO
-ubyte[] buildHeaderFrame(alias type)(string h1header, HTTP2ServerContext context, ref IndexingTable table, scope IAllocator alloc) @safe
+/// DITTO for first request in case of h2c
+ubyte[] buildHeaderFrame(alias type)(string statusLine, InetHeaderMap headers,
+		HTTP2ServerContext context, scope IAllocator alloc) @trusted
 {
-	return buildHeaderFrame!type(h1header.split('\r'), context, table, alloc);
+	auto table = IndexingTable(context.settings.headerTableSize);
+	return buildHeaderFrame!type(statusLine, headers, context, table, alloc);
 }
 
 /// generates an HTTP/2 pseudo-header representation to encode a HTTP/1.1 start message line
@@ -103,7 +110,7 @@ private void convertStartMessage(T)(string src, ref T dst, ref IndexingTable tab
 	}
 
 	// consider each chunk of the start message line
-	src.splitter(' ').each!(s => toPseudo(s));
+	src.strip("\r\n").splitter(' ').each!(s => toPseudo(s));
 }
 
 unittest {
@@ -116,15 +123,21 @@ unittest {
 	auto table = IndexingTable(settings.headerTableSize);
 	scope alloc = new RegionListAllocator!(shared(Mallocator), false)(1024, Mallocator.instance);
 
-	string header = "GET / HTTP/2\r\nHost: www.example.com\r\n";
+	string statusline = "GET / HTTP/2\r\n\r\n";
+	InetHeaderMap hmap;
+	hmap["Host"] = "www.example.com";
 	ubyte[] expected = [0x82, 0x86, 0x84, 0x41, 0x8c, 0xf1 , 0xe3, 0xc2 , 0xe5, 0xf2 , 0x3a, 0x6b , 0xa0, 0xab , 0x90, 0xf4 , 0xff];
 	// [9..$] excludes the HTTP/2 Frame header
-	auto res = buildHeaderFrame!(StartLine.REQUEST)(header, context, table, alloc)[9..$];
+	auto res = buildHeaderFrame!(StartLine.REQUEST)(statusline, hmap, context, table, alloc)[9..$];
+	import std.stdio;
+	writeln(res);
+	writeln(expected);
 	assert(res == expected);
 
-	string resHeader = "HTTP/2 200 OK";
+	statusline = "HTTP/2 200 OK";
+	InetHeaderMap hmap1;
 	expected = [0x88];
-	res = buildHeaderFrame!(StartLine.RESPONSE)(resHeader, context, table, alloc)[9..$];
+	res = buildHeaderFrame!(StartLine.RESPONSE)(statusline, hmap1, context, table, alloc)[9..$];
 
 	assert(res == expected);
 }
@@ -234,8 +247,9 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 	if (auto pv = "Expect" in req.headers) {
 		if (icmp2(*pv, "100-continue") == 0) {
 			logTrace("sending 100 continue");
+			InetHeaderMap hmap;
 			auto cres =	buildHeaderFrame!(StartLine.RESPONSE)(
-					"HTTP/1.1 100 Continue\r\n\r\n", h2context, table, alloc);
+					"HTTP/1.1 100 Continue\r\n\r\n", hmap, h2context, table, alloc);
 			// TODO return / send header
 		}
 	}
@@ -271,12 +285,26 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 	//keep_alive = req.persistent;
 
 	// create HEADERS frame
-	auto headerWriter = createHeaderOutputStream(alloc);
-	res.writeVoidBody(headerWriter);
+	auto statusLine = AllocAppender!string(alloc);
+	void writeLine(T...)(string fmt, T args)
+		@safe {
+			formattedWrite(() @trusted { return &statusLine; } (), fmt, args);
+			statusLine.put("\r\n");
+			logTrace(fmt, args);
+		}
+	// write the status line
+	writeLine("%s %d %s",
+			getHTTPVersionString(res.httpVersion),
+			res.statusCode,
+			res.statusPhrase.length ? res.statusPhrase : httpStatusText(res.statusCode));
+
+	h2context.next_sid = stream.streamId;
+	ubyte[] headerFrame;
+	() @trusted {
+		headerFrame = buildHeaderFrame!(StartLine.RESPONSE)(statusLine.data, res.headers, h2context, table, alloc);
+	} ();
 
 	// send HEADERS frame
-	h2context.next_sid = stream.streamId;
-	auto headerFrame = buildHeaderFrame!(StartLine.RESPONSE)(headerWriter.data, h2context, table, alloc);
 	if(headerFrame.length < h2context.settings.maxFrameSize)
 	{
 		headerFrame[4] += 0x4; // set END_HEADERS flag (sending complete header)

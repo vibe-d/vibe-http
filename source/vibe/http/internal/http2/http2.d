@@ -493,10 +493,10 @@ private void handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 
 	//ulong leastSize() @property @safe { return 0; }
 	// in case of H2C protocol switching
-	if(!context.isTLS && !context.resHeader.isNull) { // h2c first request
+	if(!context.isTLS && !context.resFrame.isNull) { // h2c first request
 		// response is sent on stream ID 1
 		context.next_sid = 1;
-		auto headerFrame = buildHeaderFrame!(StartLine.RESPONSE)(cast(string)context.resHeader.get, context, table, alloc);
+		auto headerFrame = context.resFrame.get;
 		if(headerFrame.length < context.settings.maxFrameSize)
 		{
 			headerFrame[4] += 0x4; // set END_HEADERS flag (sending complete header)
@@ -509,7 +509,7 @@ private void handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 			// TODO CONTINUATION frames
 			assert(false);
 		}
-		context.resHeader.nullify;
+		context.resFrame.nullify;
 
 		// send DATA (body) if present
 		if(!context.resBody.isNull) {
