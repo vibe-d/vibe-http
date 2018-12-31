@@ -289,7 +289,7 @@ struct HTTP2ServerContext
 	}
 
 	// used to mantain the first request in case of `h2c` protocol switching
-	Nullable!(ubyte[]) resHeader;
+	Nullable!(ubyte[]) resFrame;
 	Nullable!(ubyte[]) resBody;
 
 	this(HTTPServerContext ctx, HTTP2Settings settings) @safe

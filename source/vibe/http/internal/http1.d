@@ -335,6 +335,7 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 
 		// handle the request
 		logTrace("handle request (body %d)", req.bodyReader.leastSize);
+		res.httpVersion = req.httpVersion;
 
 		/**
 		 * UPGRADE TO HTTP/2 for cleartext HTTP/1
@@ -344,17 +345,19 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 		 */
 		if(req.headers.get("Upgrade") == "h2c" ) {
 			// write the original response to a buffer
-			void createResBuffer(IAllocator alloc, ref HTTP2ServerContext ctx) @safe
+			void createResBuffer(IAllocator alloc, ref HTTP2ServerContext ctx) @trusted
 			{
 				import vibe.stream.memory;
+				import vibe.http.internal.http2.exchange;
 				MemoryOutputStream buf = createMemoryOutputStream(alloc);
 
 				res.bodyWriterH2(buf);
-				ctx.resHeader = buf.data.nullable;
-
+				auto statusLine = (cast(string)buf.data).split("\r\n")[0];
+				auto hlen = buf.data.length;
+				ctx.resFrame = buildHeaderFrame!(StartLine.RESPONSE)(statusLine, res.headers, ctx, alloc);
 				if(req.method != HTTPMethod.HEAD) {
 					request_task(req, res);
-					ctx.resBody = buf.data[ctx.resHeader.length..$].nullable;
+					ctx.resBody = buf.data[hlen..$].nullable;
 				}
 			}
 
@@ -376,7 +379,6 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 		}
 
 
-		res.httpVersion = req.httpVersion;
 		request_task(req, res);
 
 
