@@ -1,250 +1,33 @@
 module vibe.http.internal.http2.http2;
 
 import vibe.http.internal.http2.frame;
-
+import vibe.http.internal.http2.settings;
+import vibe.http.internal.http2.exchange;
+import vibe.http.internal.http2.hpack.tables;
+import vibe.http.internal.http2.hpack.hpack;
+import vibe.http.internal.http2.hpack.exception;
 import vibe.http.server;
-import vibe.core.stream;
+
 import vibe.core.log;
 import vibe.core.net;
+import vibe.core.core;
+import vibe.core.stream;
 import vibe.stream.tls;
+import vibe.internal.array;
+import vibe.internal.allocator;
+import vibe.internal.freelistref;
+import vibe.internal.interfaceproxy;
 
+import std.range;
 import std.base64;
-import std.bitmanip; // read from ubyte (decoding)
 import std.traits;
-import std.range : empty;
-import std.exception : enforce;
+import std.bitmanip; // read from ubyte (decoding)
+import std.typecons;
 import std.conv : to;
+import std.exception : enforce;
 import std.algorithm : canFind; // alpn callback
-/*
- *  6.5.1.  SETTINGS Format
- *
- *   The payload of a SETTINGS frame consists of zero or more parameters,
- *   each consisting of an unsigned 16-bit setting identifier and an
- *   unsigned 32-bit value.
- *
- *   +-------------------------------+
- *   |	   IDentifier (16)		 |
- *   +-------------------------------+-------------------------------+
- *   |						Value (32)							 |
- *   +---------------------------------------------------------------+
- *						Figure 10: Setting Format
- *
- *   6.5.2.  Defined SETTINGS Parameters
- *
- *   The following parameters are defined:
- *
- *   SETTINGS_HEADER_TABLE_SIZE (0x1):  Allows the sender to inform the
- *	 remote endpoint of the maximum size of the header compression
- *	 table used to decode header blocks, in octets.  The encoder can
- *	 select any size equal to or less than this value by using
- *	 signaling specific to the header compression format inside a
- *	 header block (see [COMPRESSION]).  The initial value is 4,096
- *	 octets.
- *
- *   SETTINGS_ENABLE_PUSH (0x2):  This setting can be used to disable
- *	  server push (Section 8.2).  An endpoint MUST NOT send a
- *	  PUSH_PROMISE frame if it receives this parameter set to a value of
- *	  0.  An endpoint that has both set this parameter to 0 and had it
- *	  acknowledged MUST treat the receipt of a PUSH_PROMISE frame as a
- *	  connection error (Section 5.4.1) of type PROTOCOL_ERROR.
- *
- *	  The initial value is 1, which indicates that server push is
- *	  permitted.  Any value other than 0 or 1 MUST be treated as a
- *	  connection error (Section 5.4.1) of type PROTOCOL_ERROR.
- *
- *	SETTINGS_MAX_CONCURRENT_STREAMS (0x3):  Indicates the maximum number
- *	  of concurrent streams that the sender will allow.  This limit is
- *	  directional: it applies to the number of streams that the sender
- *	  permits the receiver to create.  Initially, there is no limit to
- *	  this value.  It is recommended that this value be no smaller than
- *	  100, so as to not unnecessarily limit parallelism.
- *
- *	  A value of 0 for SETTINGS_MAX_CONCURRENT_STREAMS SHOULD NOT be
- *	  treated as special by endpoints.  A zero value does prevent the
- *	  creation of new streams; however, this can also happen for any
- *	  limit that is exhausted with active streams.  Servers SHOULD only
- *	  set a zero value for short durations; if a server does not wish to
- *	  accept requests, closing the connection is more appropriate.
- *
- *	SETTINGS_INITIAL_WINDOW_SIZE (0x4):  Indicates the sender's initial
- *	   window size (in octets) for stream-level flow control.  The
- *	   initial value is 2^16-1 (65,535) octets.
- *
- *	   This setting affects the window size of all streams (see
- *	   Section 6.9.2).
- *
- *	   Values above the maximum flow-control window size of 2^31-1 MUST
- *	   be treated as a connection error (Section 5.4.1) of type
- *	   FLOW_CONTROL_ERROR.
- *
- *	SETTINGS_MAX_FRAME_SIZE (0x5):  Indicates the size of the largest
- *	   frame payload that the sender is willing to receive, in octets.
- *
- *	   The initial value is 2^14 (16,384) octets.  The value advertised
- *	   by an endpoint MUST be between this initial value and the maximum
- *	   allowed frame size (2^24-1 or 16,777,215 octets), inclusive.
- *	   Values outside this range MUST be treated as a connection error
- *	   (Section 5.4.1) of type PROTOCOL_ERROR.
- *
- *	SETTINGS_MAX_HEADER_LIST_SIZE (0x6):  This advisory setting informs a
- *	   peer of the maximum size of header list that the sender is
- *	   prepared to accept, in octets.  The value is based on the
- *	   uncompressed size of header fields, including the length of the
- *	   name and value in octets plus an overhead of 32 octets for each
- *	   header field.
- *
- *	   For any given request, a lower limit than what is advertised MAY
- *	   be enforced.  The initial value of this setting is unlimited.
- *
- *   An endpoint that receives a SETTINGS frame with any unknown or
- *   unsupported identifier MUST ignore that setting.
-*/
-alias HTTP2SettingID = ushort;
-alias HTTP2SettingValue = uint;
-
-// useful for bound checking
-const HTTP2SettingID minID = 0x1;
-const HTTP2SettingID maxID = 0x6;
-
-enum  HTTP2SettingsParameter {
-	headerTableSize				 = 0x1,
-	enablePush					  = 0x2,
-	maxConcurrentStreams			= 0x3,
-	initialWindowSize			   = 0x4,
-	maxFrameSize					= 0x5,
-	maxHeaderListSize			   = 0x6
-}
-
-// UDAs
-struct HTTP2Setting {
-	HTTP2SettingID id;
-	string name;
-}
-
-// UDAs
-HTTP2Setting http2Setting(HTTP2SettingID id, string name) {
-	if (!__ctfe) assert(false, "May only be used as a UDA");
-	return HTTP2Setting(id, name);
-}
-
-
-struct HTTP2Settings {
-
-	// no limit specified in the RFC
-	@http2Setting(0x1, "SETTINGS_HEADER_TABLE_SIZE")
-	HTTP2SettingValue headerTableSize = 4096;
-
-	// TODO {0,1} otherwise CONNECTION_ERROR
-	@http2Setting(0x2, "SETTINGS_ENABLE_PUSH")
-	HTTP2SettingValue enablePush = 1;
-
-	/* set to the max value (UNLIMITED)
-	 * TODO manage connection with value == 0
-	 * might be closed as soon as possible
-	 */
-	@http2Setting(0x3, "SETTINGS_MAX_CONCURRENT_STREAMS")
-	HTTP2SettingValue maxConcurrentStreams = HTTP2SettingValue.max;
-
-	// TODO FLOW_CONTROL_ERRROR on values > 2^31-1
-	@http2Setting(0x4, "SETTINGS_INITIAL_WINDOW_SIZE")
-	HTTP2SettingValue initialWindowSize = 65535;
-
-	// TODO PROTOCOL_ERROR on values > 2^24-1
-	@http2Setting(0x5, "SETTINGS_MAX_FRAME_SIZE")
-	HTTP2SettingValue maxFrameSize = 16384;
-
-	// set to the max value (UNLIMITED)
-	@http2Setting(0x6, "SETTINGS_MAX_HEADER_LIST_SIZE")
-	HTTP2SettingValue maxHeaderListSize = HTTP2SettingValue.max;
-
-	/**
-	 * Use Decoder to decode a string and set the corresponding settings
-	 * The decoder must follow the base64url encoding
-	 * `bool` since the handler must ignore the Upgrade request
-	 * if the settings cannot be decoded
-	 */
-	bool decode(alias Decoder)(string encodedSettings) @safe
-		if (isInstanceOf!(Base64Impl, Decoder))
-	{
-		ubyte[] uset;
-		try {
-			// the Base64URL decoder throws a Base64exception if it fails
-			uset = Decoder.decode(encodedSettings);
-			enforce!Base64Exception(uset.length % 6 == 0, "Invalid SETTINGS payload length");
-		} catch (Base64Exception e) {
-			logDiagnostic("Failed to decode SETTINGS payload: " ~ e.msg);
-			return false;
-		}
-
-		// set values
-		while(!uset.empty) m_set(uset.read!HTTP2SettingID, uset.read!HTTP2SettingValue);
-		return true;
-	}
-
-	/*
-	 * Set parameter 'id' to 'value'
-	 * private overload for decoded parameters assignment
-	 */
-	void set(HTTP2SettingID id)(HTTP2SettingValue value) @safe
-		if(id <= maxID && id >= minID)
-	{
-		m_set(id,value);
-	}
-
-	private void m_set(HTTP2SettingID id, HTTP2SettingValue value) @safe
-	{
-		// must use labeled break w. static foreach
-		assign: switch(id) {
-			default: logWarn("Unsupported SETTINGS code:" ~ to!string(id)); return;
-			static foreach(c; __traits(allMembers, HTTP2SettingsParameter)) {
-				case __traits(getMember, HTTP2SettingsParameter, c):
-					__traits(getMember, this, c) = value;
-					break assign;
-			}
-		}
-	}
-
-}
-
-unittest {
-
-	HTTP2Settings settings;
-
-	// retrieve a value
-	assert(settings.headerTableSize == 4096);
-
-	//set a SETTINGS value using the enum table
-	settings.set!(HTTP2SettingsParameter.headerTableSize)(2048);
-	assert(settings.headerTableSize == 2048);
-
-	//set a SETTINGS value using the code directly
-	settings.set!0x4(1024);
-	assert(settings.initialWindowSize == 1024);
-
-	// SHOULD NOT COMPILE
-	//settings.set!0x7(1);
-
-	// get a HTTP2Setting struct containing the code and the parameter name
-	import std.traits : getUDAs;
-	assert(getUDAs!(settings.headerTableSize, HTTP2Setting)[0] == HTTP2Setting(0x1,
-				"SETTINGS_HEADER_TABLE_SIZE"));
-
-	// test decoding from base64url
-	// h2settings contains:
-	// 0x2 -> 0
-	// 0x3 -> 100
-	// 0x4 -> 1073741824
-	string h2settings = "AAMAAABkAARAAAAAAAIAAAAA";
-	assert(settings.decode!Base64URL(h2settings));
-
-	assert(settings.enablePush == 0);
-	assert(settings.maxConcurrentStreams == 100);
-	assert(settings.initialWindowSize == 1073741824);
-
-	// should throw a Base64Exception error (caught) and a logWarn
-	assert(!settings.decode!Base64URL("a|b+*-c"));
-}
-
+import std.algorithm.iteration;
+import std.variant : Algebraic;
 
 /*
    3.2.  Starting HTTP/2 for "http" URIs
@@ -355,18 +138,19 @@ unittest {
  * if !valid, close connection and refuse to upgrade (RFC) - TODO discuss
  * if valid, send SWITCHING_PROTOCOL response and start an HTTP/2 connection handler
  */
-bool startHTTP2Connection(ConnectionStream)(ConnectionStream connection, string h2settings, HTTPServerResponse switchRes) @safe
+bool startHTTP2Connection(ConnectionStream)(ConnectionStream connection, string h2settings,
+		HTTP2ServerContext context, HTTPServerResponse switchRes) @safe
 	if (isConnectionStream!ConnectionStream)
 {
-	logInfo("Starting HTTP/2 connection");
-
 	// init settings
-	// the server should mantain them through the connection
 	HTTP2Settings settings;
+	logInfo("Starting HTTP/2 connection");
 
 	// try decoding settings
 	if (settings.decode!Base64URL(h2settings)) {
-		switchRes.switchToHTTP2!(handleHTTP2Connection!HTTP2ConnectionStream)(settings);
+		// send response
+		context.settings = settings;
+		switchRes.switchToHTTP2(&handleHTTP2Connection!ConnectionStream, context);
 		return true;
 	} else {
 		// reply with a 400 (bad request) header
@@ -377,13 +161,12 @@ bool startHTTP2Connection(ConnectionStream)(ConnectionStream connection, string 
 }
 
 unittest {
-	//import vibe.core.core : runApplication;
-
+	import vibe.core.core : runApplication;
 	// empty handler, just to test if protocol switching works
 	void handleReq(HTTPServerRequest req, HTTPServerResponse res)
 	@safe {
-		//if (req.path == "/")
-		//res.writeBody("Hello, World! This is an HTTP/1.1 connection response.");
+		if (req.path == "/")
+			res.writeBody("Hello, World! This response is sent through HTTP/2");
 	}
 
 	auto settings = HTTPServerSettings();
@@ -395,7 +178,6 @@ unittest {
 }
 
 unittest {
-
 	//import vibe.core.core : runApplication;
 
 	void handleRequest (HTTPServerRequest req, HTTPServerResponse res)
@@ -418,58 +200,497 @@ unittest {
 	//runApplication();
 }
 
-
 /**
   * an ALPN callback which can be used to detect the "h2" protocol
   * must be set before initializing the server with 'listenHTTP'
   * if the protocol is not set, it replies with HTTP/1.1
   */
-private TLSALPNCallback http2Callback = (string[] choices) {
+TLSALPNCallback http2Callback = (string[] choices) {
+	//logInfo("http2Callback");
 	if (choices.canFind("h2")) return "h2";
 	else return "http/1.1";
 };
 
+private alias TLSStreamType = ReturnType!(createTLSStreamFL!(InterfaceProxy!Stream));
 
-// TODO dummy for now
-void handleHTTP2Connection(ConnectionStream)(ConnectionStream connection, HTTP2Settings settings)
-	if (is(ConnectionStream == HTTP2ConnectionStream))
+/** server & client should send a connection preface
+  * server should receive a connection preface from the client
+  * server connection preface consists of a SETTINGS Frame
+  */
+void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream, TCPConnection connection, HTTP2ServerContext context) @safe
+	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStreamType))
 {
-	// start sending frames
-	// the HTTP/1 UPGRADE should initialize a stream with ID 1
-	// server & client should send a connection preface
-	// before starting HTTP/2 communication
+	logInfo("HTTP/2 Connection Handler");
+
+	// read the connection preface
+	ubyte[24] h2connPreface;
+	stream.read(h2connPreface);
+
+	if(h2connPreface != "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n") {
+		logWarn("Ignoring invalid HTTP/2 client connection preface");
+		return;
+	}
+	logInfo("Received client http2 connection preface");
+
+	// initialize Frame handler
+	handleHTTP2FrameChain(stream, connection, context);
 }
 
-// TODO dummy for now
-// should extend ConnectionStream
-// added methods for compliance with the Stream class
-struct HTTP2ConnectionStream {
+/// async frame handler
+private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TCPConnection connection, HTTP2ServerContext context) @safe
+	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStream))
+{
+	logInfo("HTTP/2 Frame Chain Handler");
 
-	//bool empty() @property @safe { return false; }
+	static struct CB {
+		ConnectionStream stream;
+		TCPConnection connection;
+		HTTP2ServerContext context;
+
+		void opCall(bool st)
+		{
+			if (!st) connection.close;
+			else runTask(&handleHTTP2FrameChain, stream, connection, context);
+		}
+	}
+
+	while(true) {
+		CB cb = {stream, connection, context};
+		auto st = connection.waitForDataAsync(cb);
+
+		final switch(st) {
+			case WaitForDataAsyncStatus.waiting:
+				logWarn("Waiting for data");
+				return;
+			case WaitForDataAsyncStatus.noMoreData:
+				stream.finalize();
+				connection.close();
+				logWarn("Reached end of stream.");
+				return;
+			case WaitForDataAsyncStatus.dataAvailable:
+				handleHTTP2Frame(stream, connection, context);
+				if(stream.empty) {
+					logWarn("No available data in TLS stream. Closing connection.");
+					stream.finalize();
+					connection.close();
+					return;
+				}
+				break;
+		}
+	}
+}
+/// initializes an allocator and handles stream / connection closing
+private void handleHTTP2Frame(ConnectionStream)(ConnectionStream stream, TCPConnection
+		connection, ref HTTP2ServerContext context) @safe
+	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStream))
+{
+	logInfo("HTTP/2 Frame Handler");
+
+	() @trusted {
+
+		import vibe.internal.utilallocator: RegionListAllocator;
+		version (VibeManualMemoryManagement)
+			scope alloc = new RegionListAllocator!(shared(Mallocator), false)(1024, Mallocator.instance);
+		else
+			scope alloc = new RegionListAllocator!(shared(GCAllocator), true)(1024, GCAllocator.instance);
+		auto h2stream = HTTP2ConnectionStream!ConnectionStream(stream, 0, alloc);
+		while(true) {
+			handleFrameAlloc(h2stream, connection, context, alloc);
+			if(h2stream.state == HTTP2StreamState.CLOSED) break;
+		}
+	} ();
+
+	logInfo("Stream lifecycle ended. Closing stream");
+}
+
+/** Receives an HTTP2ConnectionStream, and handles the data received by decoding frames
+  * Currently supports simple requests / responses
+  * Stream Lifecycle is treated according to RFC 7540, Section 5.1
+  * TODO flow control through WINDOW_UPDATE frames
+*/
+private void handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCPConnection connection,
+		ref HTTP2ServerContext context, IAllocator alloc) @trusted
+{
+	logInfo("HTTP/2 Frame Handler (Alloc)");
+
+	// TODO determine if an actor as an encoder / decoder would be useful
+	IndexingTable table = IndexingTable(context.settings.headerTableSize);
+	uint len = 0;
+
+	// payload buffer
+	auto rawBuf = AllocAppender!(ubyte[])(alloc);
+	auto payload = AllocAppender!(ubyte[])(alloc);
+
+	// Frame properties
+	bool endStream = false;
+	bool endHeaders = false;
+	bool isAck = false;
+	HTTP2FrameStreamDependency sdep;
+
+	// read header
+	if(stream.canRead) {
+		try {
+			len = stream.readHeader(rawBuf);
+		} catch (UncaughtException e) {
+			logWarn("Failed reading from HTTP/2 stream");
+			stream.state = HTTP2StreamState.CLOSED;
+			return;
+		}
+	} else {
+		stream.state = HTTP2StreamState.CLOSED;
+		return;
+	}
+
+	// adjust buffer sizes
+	rawBuf.reserve(len);
+	payload.reserve(len);
+
+	// read payload if needed
+	if(len) stream.readPayload(rawBuf, len);
+
+	// parse frame
+	auto header = payload.unpackHTTP2Frame(rawBuf.data, endStream, endHeaders, isAck, sdep);
+	stream.streamId = header.streamId;
+
+	logInfo("Received: "~to!string(header.type)~" on streamID "~to!string(header.streamId));
+
+	// build reply according to frame type
+	final switch(header.type) {
+		case HTTP2FrameType.DATA:
+			if(endStream) {
+				if(stream.state == HTTP2StreamState.HALF_CLOSED_LOCAL) {
+					stream.state = HTTP2StreamState.CLOSED;
+				} else if(stream.state == HTTP2StreamState.OPEN) {
+					stream.state = HTTP2StreamState.HALF_CLOSED_REMOTE;
+				} else if(stream.state == HTTP2StreamState.IDLE) {
+					stream.state = HTTP2StreamState.OPEN;
+				}
+			}
+			// TODO process payload
+			break;
+
+		case HTTP2FrameType.HEADERS:
+			stream.state = HTTP2StreamState.OPEN;
+			if(sdep.isSet) {
+				// update stream dependency with data in `sdep`
+			}
+			if(endStream) {
+				if(stream.state == HTTP2StreamState.HALF_CLOSED_LOCAL) {
+					stream.state = HTTP2StreamState.CLOSED;
+				} else {
+					stream.state = HTTP2StreamState.HALF_CLOSED_REMOTE;
+				}
+				logInfo("Setting CLOSE_STREAM");
+			}
+			// parse headers in payload
+			if(endHeaders) {
+				logInfo("Received full HEADERS block");
+				auto hdec = appender!(HTTP2HeaderTableField[]);
+				try {
+					decodeHPACK(cast(immutable(ubyte)[])payload.data, hdec, table, alloc);
+				} catch (HPACKException e) {
+					logWarn(e.message);
+					// send GOAWAY frame
+				} catch (Exception e) {
+					assert(false);
+				}
+				// insert data in table
+				hdec.data.each!((h) { if(h.index) table.insert(h); });
+				// write a response (HEADERS + DATA according to request method)
+				handleHTTP2Request(stream, connection, context, hdec.data, table, alloc);
+			} else {
+				// wait for the next CONTINUATION frame until end_headers flag is set
+				// END_STREAM flag does not count in this case
+				logInfo("Incomplete HEADERS block, waiting for CONTINUATION frame.");
+				stream.putHeaderBlock(payload.data);
+				handleFrameAlloc(stream, connection, context, alloc);
+				return;
+			}
+			break;
+
+		case HTTP2FrameType.PRIORITY:
+			// update stream dependency with data in `sdep`
+			break;
+
+		case HTTP2FrameType.RST_STREAM:
+			// reset stream in `closed` state
+			// payload contains error code
+			stream.state = HTTP2StreamState.CLOSED;
+			break;
+
+		case HTTP2FrameType.SETTINGS:
+			if(!isAck) {
+				handleHTTP2SettingsFrame(stream, payload.data, header, context);
+			} else {
+				logInfo("Received SETTINGS ACK");
+			}
+			break;
+
+		case HTTP2FrameType.PUSH_PROMISE:
+			// SHOULD NOT be received (only servers send PUSH_PROMISES
+			// reserve a streamId to be created (in payload)
+			// if not possible, CONNECTION_ERROR (invalid stream id)
+			//
+			// process header sent (in payload)
+			if(endHeaders) {
+				// wait for the next header frame until end_headers flag is set
+			}
+			break;
+
+		case HTTP2FrameType.PING:
+			if(!isAck) {
+				// acknowledge ping with PING ACK Frame
+				FixedAppender!(ubyte[], 17) buf;
+				buf.createHTTP2FrameHeader(len, header.type, 0x1, header.streamId);
+				buf.buildHTTP2Frame(payload.data);
+
+				stream.write(buf.data);
+			}
+			break;
+
+		case HTTP2FrameType.GOAWAY:
+			// GOAWAY is used to close connection (in case of errors)
+			// TODO proper closing
+			// set LAST_STREAM_ID to the received value
+			// report error code & additional debug info
+			// respond with GOAWAY
+			//rawBuf.reserve(HTTP2HeaderLength + len);
+			//rawBuf.createHTTP2FrameHeader(len, header.type, 0x0, 0);
+			//rawBuf.buildHTTP2Frame(payload.data);
+			//stream.write(rawBuf.data);
+			// terminate connection
+			//stream.close();
+			stream.state = HTTP2StreamState.CLOSED;
+			break;
+
+		case HTTP2FrameType.WINDOW_UPDATE:
+			// TODO per-stream and connection-based flow control
+			// window size is a uint (31) in payload
+			// update window size for DATA Frames flow control
+			break;
+
+		case HTTP2FrameType.CONTINUATION:
+			// process header block fragment in payload
+			stream.putHeaderBlock(payload.data);
+			if(endHeaders) {
+				logInfo("Received full HEADERS block");
+				auto hdec = appender!(HTTP2HeaderTableField[]);
+				try {
+					decodeHPACK(cast(immutable(ubyte)[])payload.data, hdec, table, alloc);
+				} catch (HPACKException e) {
+					logWarn(e.message);
+					// send GOAWAY frame
+				} catch (Exception e) {
+					assert(false);
+				}
+				handleHTTP2Request(stream, connection, context, hdec.data, table, alloc);
+			} else {
+				logInfo("Incomplete HEADERS block, waiting for CONTINUATION frame.");
+				handleFrameAlloc(stream, connection, context, alloc);
+			}
+			break;
+	}
 
 	//ulong leastSize() @property @safe { return 0; }
+	// in case of H2C protocol switching
+	if(!context.isTLS && !context.resFrame.isNull) { // h2c first request
+		// response is sent on stream ID 1
+		context.next_sid = 1;
+		auto headerFrame = context.resFrame.get;
+		if(headerFrame.length < context.settings.maxFrameSize)
+		{
+			headerFrame[4] += 0x4; // set END_HEADERS flag (sending complete header)
+			try {
+				stream.write(headerFrame);
+			} catch (Exception e) {
+				logWarn("Unable to write HEADERS Frame to stream");
+			}
+		} else {
+			// TODO CONTINUATION frames
+			assert(false);
+		}
+		context.resFrame.nullify;
 
-	//bool dataAvailableForRead() @property @safe { return false; }
+		// send DATA (body) if present
+		if(!context.resBody.isNull) {
+			auto dataFrame = AllocAppender!(ubyte[])(alloc);
 
-	//const(ubyte)[] peek() @safe  { return []; }
+			// create DATA Frame with END_STREAM (0x1) flag
+			dataFrame.createHTTP2FrameHeader(context.resBody.get.length.to!uint, HTTP2FrameType.DATA, 0x1, context.next_sid);
+			dataFrame.put(context.resBody.get);
+			try {
+				stream.write(dataFrame.data);
+			} catch(Exception e) {
+				logWarn("Unable to write DATA Frame to stream.");
+			}
 
-	//ulong read(scope ubyte[] dst, IOMode mode) @safe { return 0; }
+			logTrace("Sent DATA frame on streamID %s", stream.streamId);
+			context.resBody.nullify;
+		}
+		logInfo("Sent first HTTP/2 response to H2C connection");
+	}
+}
 
-	//ulong write(const(ubyte[]) bytes, IOMode mode) @safe { return 0; }
+/// handle SETTINGS frame exchange (new connection)
+void handleHTTP2SettingsFrame(Stream)(ref Stream stream, ubyte[] data, HTTP2FrameHeader header, ref HTTP2ServerContext context, bool isConnectionPreface = true) @safe
+{
+	// parse settings payload
+	context.settings.unpackSettings(data);
 
-	//void flush() @safe  {}
+	// acknowledge settings with SETTINGS ACK Frame
+	FixedAppender!(ubyte[], 9) ackReply;
+	ackReply.createHTTP2FrameHeader(0, header.type, 0x1, header.streamId);
 
-	//void finalize() @safe  {}
+	if(isConnectionPreface) sendHTTP2SettingsFrame(stream, context);
 
-	//bool connected() const @property @safe { return false; }
+	stream.write(ackReply.data);
+	logInfo("Sent SETTINGS ACK");
+}
 
-	//void close() @safe  {}
+void sendHTTP2SettingsFrame(Stream)(ref Stream stream, HTTP2ServerContext context) @safe
+{
+	FixedAppender!(ubyte[], HTTP2HeaderLength+36) settingDst;
+	settingDst.createHTTP2FrameHeader(36, HTTP2FrameType.SETTINGS, 0x0, 0);
+	settingDst.serializeSettings(context.settings);
+	stream.write(settingDst.data);
+	logInfo("Sent SETTINGS Frame");
+}
 
-	//bool waitForData() @safe { return false; }
+enum HTTP2StreamState {
+	IDLE,
+	RESERVED_LOCAL,
+	RESERVED_REMOTE,
+	OPEN,
+	HALF_CLOSED_LOCAL,
+	HALF_CLOSED_REMOTE,
+	CLOSED
+}
 
-	//ulong write(const(ubyte[]) bytes, IOMode mode) @safe { return 0; }
+/** Represent a HTTP/2 Stream
+  * The underlying connection can be TCPConnection or TLSStream
+  * TODO: stream dependency, proper handling of stream IDs
+  * approach: mantain a union of IDs so that only correct streams are initialized
+*/
+struct HTTP2ConnectionStream(CS)
+{
+	static assert(isConnectionStream!CS || is(CS : TLSStream) || isOutputStream!Stream);
 
-	//void flush() @safe {}
+	private {
+		enum Parse { HEADER, PAYLOAD };
+		CS m_conn;
+		uint m_streamId; // streams initiated by the server must be even-numbered
+		Parse toParse = Parse.HEADER;
+		HTTP2StreamState m_state;
+		AllocAppender!(ubyte[]) m_headerBlock;
 
-	//void finalize() @safe  {}
+		// Stream dependency TODO
+		HTTP2FrameStreamDependency m_dependency;
+	}
+
+	alias m_conn this;
+
+	this(CS)(ref CS conn, uint sid, IAllocator alloc) @safe
+	{
+		m_conn = conn;
+		m_streamId = sid;
+		m_state = HTTP2StreamState.IDLE;
+		m_headerBlock = AllocAppender!(ubyte[])(alloc);
+	}
+
+	this(CS)(ref CS conn, IAllocator alloc) @safe
+	{
+		this(conn, 0, alloc);
+	}
+
+	@property CS connection() @safe { return m_conn; }
+
+	@property HTTP2StreamState state() @safe @nogc { return m_state; }
+
+	@property bool canRead() @safe @nogc
+	{
+		return (m_state == HTTP2StreamState.OPEN || m_state == HTTP2StreamState.IDLE);
+	}
+
+	/// set state according to Stream lifecycle (RFC 7540 section 5.1)
+	@property void state(HTTP2StreamState st) @safe @nogc
+	{
+		switch(st) {
+			case HTTP2StreamState.OPEN:
+				if(m_state == HTTP2StreamState.IDLE) m_state = st;
+				else assert(false, "Invalid state");
+				break;
+			case HTTP2StreamState.HALF_CLOSED_LOCAL:
+				if(m_state == HTTP2StreamState.OPEN ||
+						m_state == HTTP2StreamState.RESERVED_REMOTE)
+					m_state = st;
+				else assert(false, "Invalid state");
+				break;
+			case HTTP2StreamState.HALF_CLOSED_REMOTE:
+				if(m_state == HTTP2StreamState.OPEN ||
+						m_state == HTTP2StreamState.RESERVED_LOCAL)
+					m_state = st;
+				else assert(false, "Invalid state");
+				break;
+			case HTTP2StreamState.CLOSED:
+				m_state = st;
+				break;
+			case HTTP2StreamState.RESERVED_LOCAL:
+			case HTTP2StreamState.RESERVED_REMOTE:
+				if(m_state == HTTP2StreamState.IDLE) m_state = st;
+				else assert(false, "Invalid state");
+				break;
+			default:
+				assert(false, "Unrecognized state");
+ 		}
+	}
+
+	@property uint streamId() @safe @nogc { return m_streamId; }
+
+	@property void streamId(uint sid) @safe @nogc { m_streamId = sid; }
+
+	@property HTTP2FrameStreamDependency dependency() @safe @nogc { return m_dependency; }
+
+	@property ubyte[] headerBlock() @safe
+	{
+		assert(!m_headerBlock.data.empty, "No data in header block buffer");
+		return m_headerBlock.data;
+	}
+
+	uint readHeader(R)(ref R dst) @safe
+	{
+		assert(toParse == Parse.HEADER);
+
+		ubyte[9] buf;
+		m_conn.read(buf);
+		dst.put(buf);
+		auto len = dst.data[0..3].fromBytes(3);
+		if(len > 0) toParse = Parse.PAYLOAD;
+		return len;
+	}
+
+	void readPayload(R)(ref R dst, int len) @safe
+	{
+		assert(toParse == Parse.PAYLOAD);
+		toParse = Parse.HEADER;
+
+		ubyte[8] buf = void;
+		while(len > 0) {
+			auto end = (len < buf.length) ? len : buf.length;
+			len -= m_conn.read(buf[0..end], IOMode.all);
+			dst.put(buf[0..end]);
+		}
+	}
+
+	void finalize() @safe
+	{
+		// TODO register streamID in USED set
+		//m_conn.finalize();
+	}
+
+	void putHeaderBlock(T)(T src) @safe
+		if(isInputRange!T && is(ElementType!T : ubyte))
+	{
+		// TODO check header block length
+		m_headerBlock.put(src);
+	}
 }

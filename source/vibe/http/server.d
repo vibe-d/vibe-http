@@ -3,7 +3,8 @@ module vibe.http.server;
 public import vibe.core.net;
 import vibe.core.stream;
 import vibe.http.internal.http1;
-import vibe.http.internal.http2.http2;
+import vibe.http.internal.http2.settings;
+import vibe.http.internal.http2.exchange;
 
 public import vibe.http.log;
 public import vibe.http.common;
@@ -35,6 +36,7 @@ import std.format;
 import std.parallelism;
 import std.exception;
 import std.string;
+import std.traits;
 import std.encoding : sanitize;
 
 version (VibeNoSSL) version = HaveNoTLS;
@@ -745,7 +747,6 @@ struct HTTPServerRequest {
 		DictionaryList!(string, true, 8) params;
 
 		@property scope string requestURI() const @safe { return m_data.requestURI; }
-
 		// ditto
 		@property void requestURI(string uri) @safe { m_data.requestURI = uri; }
 
@@ -1005,10 +1006,20 @@ struct HTTPServerResponse {
 	{
 		m_data.writeVoidBody();
 	}
+	/// ditto
+	@property void writeVoidBody(Stream)(Stream stream)
+	{
+		m_data.writeVoidBody(stream);
+	}
 
 	@property InterfaceProxy!OutputStream bodyWriter()
 	{
 		return m_data.bodyWriter;
+	}
+
+	package @property void bodyWriterH2(T)(ref T writer)
+	{
+		m_data.bodyWriterH2(writer);
 	}
 
 	/** Sends a redirect request to the client.
@@ -1043,9 +1054,9 @@ struct HTTPServerResponse {
 		m_data.switchProtocol(protocol, del);
 	}
 	/// ditto
-	package void switchToHTTP2(alias connection_handler)(HTTP2Settings settings)
-	{
-		m_data.switchToHTTP2!connection_handler(settings);
+	package void switchToHTTP2(HANDLER)(HANDLER handler, HTTP2ServerContext context)
+	@safe {
+		m_data.switchToHTTP2(handler, context);
 	}
 
 	// Send a BadRequest and close connection (failed switch to HTTP/2)
@@ -1376,7 +1387,7 @@ private HTTPListener listenHTTPPlain(HTTPServerSettings settings, HTTPServerRequ
 			TCPListenOptions options = TCPListenOptions.defaults;
 			if(reusePort) options |= TCPListenOptions.reusePort; else options &= ~TCPListenOptions.reusePort;
 			auto ret = listenTCP(listen_info.bindPort, (TCPConnection conn) nothrow @safe {
-					logInfo("ListenHTTP");
+					//logInfo("ListenHTTP");
 					try { handleHTTP1Connection(conn, listen_info);
 					} catch (Exception e) {
 						logError("HTTP connection handler has thrown: %s", e.msg);
@@ -1477,7 +1488,7 @@ unittest {
 
 	//void write(alias HeaderCallback, alias BodyCallback)()
 	//{
-		//connection.writeHeaders!HeaderCallback();
+		//connection.writeHeader!HeaderCallback();
 		//connection.writeBody!BodyCallback();
 	//}
 //}
@@ -1562,6 +1573,11 @@ struct HTTPServerRequestData {
 				_path = urlDecode(requestPath.toString);
 			}
 			return _path.get;
+		}
+
+		void path(string st) @safe {
+			assert(_path.isNull, "Unable to set request path");
+			_path = st;
 		}
 
 		private Nullable!string _path;
@@ -1890,6 +1906,7 @@ struct HTTPServerResponseData {
 	}
 
 	protected {
+
 		/// The protocol version of the response - should not be changed
 		HTTPVersion httpVersion = HTTPVersion.HTTP_1_1;
 
@@ -2123,16 +2140,22 @@ struct HTTPServerResponseData {
 		 * requested, such as a HEAD request. For an empty body, just use writeBody,
 		 * as this method causes problems with some keep-alive connections.
 		 */
-		void writeVoidBody()
-			@safe {
-				if (!m_isHeadResponse) {
-					assert("Content-Length" !in headers);
-					assert("Transfer-Encoding" !in headers);
-				}
-				assert(!headerWritten);
-				writeHeader();
-				m_conn.flush();
+		void writeVoidBody() @safe
+		{
+			writeVoidBody(m_conn);
+		}
+		/// ditto
+		void writeVoidBody(Stream)(Stream stream) @safe
+			if(isOutputStream!Stream)
+		{
+			if (!m_isHeadResponse) {
+				assert("Content-Length" !in headers);
+				assert("Transfer-Encoding" !in headers);
 			}
+			assert(!headerWritten);
+			writeHeader(stream);
+			stream.flush();
+		}
 
 		/** A stream for writing the body of the HTTP response.
 
@@ -2191,8 +2214,29 @@ struct HTTPServerResponseData {
 					}
 				}
 
+
+
 				return m_bodyWriter;
 			}
+
+		/**
+		  * Used to change the bodyWriter during a HTTP/2 connection
+		  */
+		import vibe.stream.memory;
+		@property void bodyWriterH2(T)(ref T writer) @safe
+			if(isOutputStream!T)
+		{
+			assert(!m_bodyWriter, "Unable to set bodyWriter");
+			// write the current set headers before initiating the bodyWriter
+			if(!m_headerWritten) writeHeader(writer);
+
+			static if(!is(T == InterfaceProxy!OutputStream)) {
+				InterfaceProxy!OutputStream bwriter = writer;
+				m_bodyWriter = bwriter;
+			} else {
+				m_bodyWriter = writer;
+			}
+		}
 
 		/** Sends a redirect request to the client.
 
@@ -2271,28 +2315,23 @@ struct HTTPServerResponseData {
 					m_rawConnection.close(); // connection not reusable after a protocol upgrade
 			}
 
-		package void switchToHTTP2(alias connection_handler)(HTTP2Settings settings) @safe
-			if (isCallable!connection_handler &&
-				is(ReturnType!connection_handler == void))
-			{
+		package void switchToHTTP2(HANDLER)(HANDLER handler, HTTP2ServerContext context)
+			@safe {
+				//logInfo("sending SWITCHING_PROTOCOL response");
 
-				// send SWITCHING_PROTOCOL request
 				statusCode = HTTPStatus.switchingProtocols;
 				headers["Upgrade"] = "h2c";
 
-				logInfo("sending SWITCHING_PROTOCOL response");
 				writeVoidBody();
 
-				// handle HTTP2 connection
-				// TODO will be properly initialized once streams are implemented
-				HTTP2ConnectionStream h2conn;
-				connection_handler(h2conn, settings);
+				// TODO improve handler (handleHTTP2Connection) connection management
+				auto tcp_conn = m_rawConnection.extract!TCPConnection;
+				handler(tcp_conn, tcp_conn, context);
 
-				// close the existing connection
 				finalize();
+				// close the existing connection
 				if (m_rawConnection && m_rawConnection.connected)
-					m_rawConnection.close(); // connection not reusable after a protocol upgrade
-
+				m_rawConnection.close(); // connection not reusable after a protocol upgrade
 			}
 
 		// send a badRequest error response and close the connection
@@ -2460,12 +2499,19 @@ struct HTTPServerResponseData {
 	}
 
 	private void writeHeader()
-		@safe {
+	@safe {
+		writeHeader(m_conn);
+	}
+
+	// accept a destination stream
+	private void writeHeader(Stream)(Stream conn) @safe
+		if(isOutputStream!Stream)
+	{
 			import vibe.stream.wrapper;
 
 			assert(!m_bodyWriter && !m_headerWritten, "Try to write header after body has already begun.");
 			m_headerWritten = true;
-			auto dst = streamOutputRange!1024(m_conn);
+			auto dst = streamOutputRange!1024(conn);
 
 			void writeLine(T...)(string fmt, T args)
 				@safe {
@@ -2550,6 +2596,33 @@ unittest
 	  assert(cvm[""] == "");
 }
 
+void parseHTTP2RequestHeader(R)(ref R headers, ref HTTPServerRequest reqStruct) @safe
+{
+	import std.algorithm.searching : find, startsWith;
+	import std.algorithm.iteration : filter;
+	auto req = reqStruct.m_data;
+
+	//Method
+	req.method = cast(HTTPMethod)headers.find!((h,m) => h.name == m)(":method")[0].value;
+
+	//Host
+	req.host = cast(string)headers.find!((h,m) => h.name == m)(":authority")[0].value;
+
+	//Path
+	req.path = cast(string)headers.find!((h,m) => h.name == m)(":path")[0].value;
+
+	//URI
+	req.requestURI = req.host;
+
+	//HTTP version
+	req.httpVersion = HTTPVersion.HTTP_2;
+
+
+	//headers
+	foreach(h; headers.filter!(f => !f.name.startsWith(":"))) {
+		req.headers[h.name] = cast(string)h.value;
+	}
+}
 
 void parseRequestHeader(InputStream)(HTTPServerRequest reqStruct, InputStream http_stream, IAllocator alloc, ulong max_header_size)
 	if (isInputStream!InputStream)
