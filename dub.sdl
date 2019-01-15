@@ -10,5 +10,3 @@ dependency "diet-ng" version="~>1.1"
 dependency "taggedalgebraic" version="~>0.10.9"
 
 targetType "library"
-/*versions "VibeForceALPN"*/
-/*versions "VibeUseOpenSSL11"*/
