@@ -1,8 +1,8 @@
 name "vibe-http"
 description "HTTP server and client implementation and higher level HTTP functionality"
 
-dependency "vibe-d:crypto" version="~>0.8.4"
-dependency "vibe-d:tls" version="*"
+dependency "vibe-d:crypto" version=">0.8.4"
+dependency "vibe-d:tls" version=">0.8.4"
 dependency "vibe-d:inet" version="*"
 dependency "vibe-d:stream" version="*"
 dependency "vibe-d:textfilter" version="*"

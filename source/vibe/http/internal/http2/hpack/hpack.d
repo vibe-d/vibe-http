@@ -12,6 +12,7 @@ import std.array; // appender
 import std.algorithm.iteration;
 
 
+/// interface for the HPACK encoder
 void encodeHPACK(I,R)(I src, ref R dst, ref IndexingTable table, bool huffman = true) @safe
 	if(is(I == HTTP2HeaderTableField) || is(ElementType!I : HTTP2HeaderTableField))
 {
@@ -234,6 +235,15 @@ unittest {
 	foreach(i,h; decR2.data.enumerate(0)) {
 		assert(h == expected[i]);
 	}
+
+	/** Cookie header
+	  * cookie: filter=downloading
+	*/
+	auto ckexp = HTTP2HeaderTableField("cookie", "filter=downloading");
+	block = [96, 141, 148, 212, 36, 182, 65, 33, 252, 85, 65, 199, 33, 170, 155];
+	auto ckdec = appender!(HTTP2HeaderTableField[]);
+	block.decodeHPACK(ckdec, table, alloc);
+	assert(ckdec.data.front == ckexp);
 }
 
 
