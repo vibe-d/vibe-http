@@ -1,5 +1,6 @@
 module vibe.http.internal.http2.settings;
 
+import vibe.http.internal.http2.multiplexing;
 import vibe.http.internal.http2.frame;
 import vibe.http.internal.http2.hpack.tables;
 import vibe.http.server;
@@ -285,7 +286,7 @@ struct HTTP2ServerContext
 		HTTPServerContext m_context;
 		Nullable!HTTP2Settings m_settings;
 		uint m_sid = 0;
-		bool m_isTLS = true;
+		IndexingTable* m_table;
 	}
 
 	// used to mantain the first request in case of `h2c` protocol switching
@@ -296,6 +297,7 @@ struct HTTP2ServerContext
 	{
 		m_context = ctx;
 		m_settings = settings;
+		m_table = new IndexingTable(settings.headerTableSize);
 	}
 
 	this(HTTPServerContext ctx) @safe
@@ -306,15 +308,13 @@ struct HTTP2ServerContext
 
 	alias m_context this;
 
+	@property IndexingTable* table() { return m_table; }
+
 	@property HTTPServerContext h1context() @safe @nogc { return m_context; }
 
 	@property uint next_sid() @safe @nogc { return m_sid; }
 
 	@property void next_sid(uint sid) @safe @nogc { m_sid = sid; }
-
-	@property bool isTLS() @safe @nogc { return m_isTLS; }
-
-	@property void setNoTLS() @safe @nogc { m_isTLS = false; }
 
 	@property ref HTTP2Settings settings() @safe @nogc
 	{
