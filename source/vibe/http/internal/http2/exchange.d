@@ -46,7 +46,9 @@ private alias H2F = HTTP2HeaderTableField;
 alias DataOutputStream = MemoryOutputStream;
 
 /// accepts a HTTP/1.1 header list, converts it to an HTTP/2 header frame and encodes it
-ubyte[] buildHeaderFrame(alias type)(string statusLine, InetHeaderMap headers, HTTP2ServerContext context, ref IndexingTable table, scope IAllocator alloc) @safe
+ubyte[] buildHeaderFrame(alias type)(string statusLine, InetHeaderMap headers,
+		HTTP2ServerContext context, IndexingTable* table, scope IAllocator alloc, bool
+		isTLS = true) @safe
 {
 	// frame header + frame payload
 	FixedAppender!(ubyte[], 9) hbuf;
@@ -54,7 +56,7 @@ ubyte[] buildHeaderFrame(alias type)(string statusLine, InetHeaderMap headers, H
 	auto res = AllocAppender!(ubyte[])(alloc);
 
 	// split the start line of each req / res into pseudo-headers
-	convertStartMessage(statusLine, pbuf, table, type, context.isTLS);
+	convertStartMessage(statusLine, pbuf, table, type, isTLS);
 
 	// "Host" header does not exist in HTTP/2, use ":authority" pseudo-header
 	if("Host" in headers) {
@@ -77,12 +79,11 @@ ubyte[] buildHeaderFrame(alias type)(string statusLine, InetHeaderMap headers, H
 ubyte[] buildHeaderFrame(alias type)(string statusLine, InetHeaderMap headers,
 		HTTP2ServerContext context, scope IAllocator alloc) @trusted
 {
-	auto table = IndexingTable(context.settings.headerTableSize);
-	return buildHeaderFrame!type(statusLine, headers, context, table, alloc);
+	return buildHeaderFrame!type(statusLine, headers, context, context.table, alloc);
 }
 
 /// generates an HTTP/2 pseudo-header representation to encode a HTTP/1.1 start message line
-private void convertStartMessage(T)(string src, ref T dst, ref IndexingTable table, StartLine type, bool isTLS = true) @safe
+private void convertStartMessage(T)(string src, ref T dst, IndexingTable* table, StartLine type, bool isTLS = true) @safe
 {
 	void toPseudo(string buf) @safe
 	{
@@ -119,8 +120,7 @@ unittest {
 	HTTP2Settings settings;
 	HTTPServerContext ctx;
 	auto context = HTTP2ServerContext(ctx, settings);
-	context.setNoTLS();
-	auto table = IndexingTable(settings.headerTableSize);
+	auto table = new IndexingTable(settings.headerTableSize);
 	scope alloc = new RegionListAllocator!(shared(Mallocator), false)(1024, Mallocator.instance);
 
 	string statusline = "GET / HTTP/2\r\n\r\n";
@@ -128,16 +128,15 @@ unittest {
 	hmap["Host"] = "www.example.com";
 	ubyte[] expected = [0x82, 0x86, 0x84, 0x41, 0x8c, 0xf1 , 0xe3, 0xc2 , 0xe5, 0xf2 , 0x3a, 0x6b , 0xa0, 0xab , 0x90, 0xf4 , 0xff];
 	// [9..$] excludes the HTTP/2 Frame header
-	auto res = buildHeaderFrame!(StartLine.REQUEST)(statusline, hmap, context, table, alloc)[9..$];
-	import std.stdio;
-	writeln(res);
-	writeln(expected);
+	auto res = buildHeaderFrame!(StartLine.REQUEST)(statusline, hmap, context, table, alloc,
+			false)[9..$];
 	assert(res == expected);
 
 	statusline = "HTTP/2 200 OK";
 	InetHeaderMap hmap1;
 	expected = [0x88];
-	res = buildHeaderFrame!(StartLine.RESPONSE)(statusline, hmap1, context, table, alloc)[9..$];
+	res = buildHeaderFrame!(StartLine.RESPONSE)(statusline, hmap1, context, table, alloc,
+			false)[9..$];
 
 	assert(res == expected);
 }
@@ -148,7 +147,7 @@ unittest {
   * once the HTTPServerResponse is built, HEADERS frame and optionally DATA Frame is sent
   * TODO: CONTINUATION frames in case headers exceed maximum size allowed
 */
-bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPConnection tcp_connection, HTTP2ServerContext h2context, HTTP2HeaderTableField[] headers, ref IndexingTable table, scope IAllocator alloc) @safe
+bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPConnection tcp_connection, HTTP2ServerContext h2context, HTTP2HeaderTableField[] headers, IndexingTable* table, scope IAllocator alloc) @safe
 {
 	SysTime reqtime = Clock.currTime(UTC());
 	HTTPServerContext listen_info = h2context.h1context;
@@ -177,7 +176,12 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 	InterfaceProxy!Stream cstream = stream.connection; // TCPConnection / TLSStream
 	auto res = HTTPServerResponse(cstream, cproxy, settings, alloc);
 	// check for TLS encryption
-	auto istls = h2context.isTLS;
+	bool istls;
+	static if(is(UStream : TLSStream)) {
+		istls = true;
+	} else {
+		istls = false;
+	}
 	req.tls = istls;
 	res.tls = istls;
 
@@ -249,7 +253,7 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 			logTrace("sending 100 continue");
 			InetHeaderMap hmap;
 			auto cres =	buildHeaderFrame!(StartLine.RESPONSE)(
-					"HTTP/1.1 100 Continue\r\n\r\n", hmap, h2context, table, alloc);
+					"HTTP/1.1 100 Continue\r\n\r\n", hmap, h2context, table, alloc, istls);
 			// TODO return / send header
 		}
 	}
@@ -301,7 +305,8 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 	h2context.next_sid = stream.streamId;
 	ubyte[] headerFrame;
 	() @trusted {
-		headerFrame = buildHeaderFrame!(StartLine.RESPONSE)(statusLine.data, res.headers, h2context, table, alloc);
+		headerFrame = buildHeaderFrame!(StartLine.RESPONSE)(statusLine.data, res.headers,
+				h2context, table, alloc, istls);
 	} ();
 
 	// send HEADERS frame
