@@ -22,10 +22,11 @@ import std.experimental.allocator.mallocator;
 */
 alias HTTP2SettingValue = uint;
 
-void decode(I, R, T)(ref I src, ref R dst, ref IndexingTable table,  ref T alloc) @trusted
+void decode(I, R, T)(ref I src, ref R dst, IndexingTable* ptable,  ref T alloc) @trusted
 {
 	ubyte bbuf = src[0];
 	src = src[1..$];
+	auto table = *ptable;
 
 	if(bbuf & 128) {
 		auto res = decodeInteger(src, bbuf, 7);

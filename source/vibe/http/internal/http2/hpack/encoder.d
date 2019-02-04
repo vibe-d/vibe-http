@@ -9,7 +9,7 @@ import std.typecons;
 import std.conv;
 import std.array;
 
-void encode(R)(HTTP2HeaderTableField header, ref R dst, ref IndexingTable table, bool huffman = true)
+void encode(R)(HTTP2HeaderTableField header, ref R dst, IndexingTable* table, bool huffman = true)
 @safe
 {
 	// try to encode as integer
@@ -19,8 +19,8 @@ void encode(R)(HTTP2HeaderTableField header, ref R dst, ref IndexingTable table,
 }
 
 /// encode a pure integer (present in table) or integer name + literal value
-private bool encodeInteger(R)(const HTTP2HeaderTableField header, ref R dst, ref IndexingTable table, bool huffman = true)
-@safe
+private bool encodeInteger(R)(const HTTP2HeaderTableField header, ref R dst, IndexingTable* table, bool huffman = true)
+@trusted
 {
 	// check table for indexed headers
 	size_t idx = 1;
@@ -29,7 +29,7 @@ private bool encodeInteger(R)(const HTTP2HeaderTableField header, ref R dst, ref
 
 	while(idx < table.size) {
 		// encode both name / value as index
-		auto h = table[idx];
+		auto h = (*table)[idx];
 		if(h.name == header.name && h.value == header.value) {
 			found = true;
 			partialFound = false;
@@ -98,7 +98,7 @@ unittest {
 	// encode integer
 	import vibe.internal.array : BatchBuffer;
 	import vibe.http.common;
-	IndexingTable table = IndexingTable(4096);
+	auto table = new IndexingTable(4096);
 
 	BatchBuffer!(ubyte, 1) bres;
 	bres.putN(1);
