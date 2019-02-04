@@ -345,7 +345,7 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 		 */
 		if(req.headers.get("Upgrade") == "h2c" ) {
 			// write the original response to a buffer
-			void createResBuffer(IAllocator alloc, ref HTTP2ServerContext ctx) @trusted
+			string createResBuffer(IAllocator alloc, ref HTTP2ServerContext ctx) @trusted
 			{
 				import vibe.stream.memory;
 				import vibe.http.internal.http2.exchange;
@@ -354,11 +354,12 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 				res.bodyWriterH2(buf);
 				auto statusLine = (cast(string)buf.data).split("\r\n")[0];
 				auto hlen = buf.data.length;
-				ctx.resFrame = buildHeaderFrame!(StartLine.RESPONSE)(statusLine, res.headers, ctx, alloc);
+
 				if(req.method != HTTPMethod.HEAD) {
 					request_task(req, res);
 					ctx.resBody = buf.data[hlen..$].nullable;
 				}
+				return statusLine;
 			}
 
 			auto psettings = "HTTP2-Settings" in req.headers;
@@ -366,16 +367,16 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 					include HTTP2-Settings");
 			auto h2settings = *psettings;
 
-			logDebug("Switching to HTTP/2");
+			logInfo("Switching to HTTP/2");
 			logTrace("handle request (body %d)", req.bodyReader.leastSize);
 
 			// initialize the request handler
 			auto h2context = HTTP2ServerContext(listen_info);
-			h2context.setNoTLS;
-			createResBuffer(request_allocator, h2context);
+			auto st = createResBuffer(request_allocator, h2context);
 			auto switchRes = HTTPServerResponse(http_stream, cproxy, settings, request_allocator);
 
-			return startHTTP2Connection(tcp_connection, h2settings, h2context, switchRes);
+			return startHTTP2Connection(tcp_connection, h2settings, h2context, switchRes,
+					res.headers, st, request_allocator);
 		}
 
 
