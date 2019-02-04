@@ -13,7 +13,7 @@ import std.algorithm.iteration;
 
 
 /// interface for the HPACK encoder
-void encodeHPACK(I,R)(I src, ref R dst, ref IndexingTable table, bool huffman = true) @safe
+void encodeHPACK(I,R)(I src, ref R dst, IndexingTable* table, bool huffman = true) @safe
 	if(is(I == HTTP2HeaderTableField) || is(ElementType!I : HTTP2HeaderTableField))
 {
 	static if(is(I == HTTP2HeaderTableField)) {
@@ -23,7 +23,7 @@ void encodeHPACK(I,R)(I src, ref R dst, ref IndexingTable table, bool huffman = 
 	}
 }
 
-void decodeHPACK(I,R,T)(I src, ref R dst, ref IndexingTable table, ref T alloc) @safe
+void decodeHPACK(I,R,T)(I src, ref R dst, IndexingTable* table, ref T alloc) @safe
 	if(isInputRange!I && (is(ElementType!I : immutable(ubyte)) || is(ElementType!I : immutable(char))))
 {
 	while(!src.empty) src.decode(dst, table, alloc);
@@ -38,7 +38,7 @@ unittest {
 	import std.experimental.allocator;
 	import std.experimental.allocator.gc_allocator;
 
-	IndexingTable table = IndexingTable(4096);
+	auto table = new IndexingTable(4096);
 	scope alloc = new RegionListAllocator!(shared(GCAllocator), false)(1024, GCAllocator.instance);
 
 	/** 1. Literal header field w. indexing (raw)
@@ -145,7 +145,7 @@ unittest {
 	import std.experimental.allocator;
 	import std.experimental.allocator.gc_allocator;
 
-	IndexingTable table = IndexingTable(4096);
+	auto table = new IndexingTable(4096);
 	scope alloc = new RegionListAllocator!(shared(GCAllocator), false)(1024, GCAllocator.instance);
 
 	/** 1. Literal header field w. indexing (raw)
@@ -253,7 +253,7 @@ unittest {
 	import std.experimental.allocator;
 	import std.experimental.allocator.mallocator;
 	import std.experimental.allocator.gc_allocator;
-	auto table = IndexingTable(4096);
+	auto table = new IndexingTable(4096);
 	/** 1bis. Literal header field w. indexing (huffman encoded)
 	  * :authority: www.example.com
 	  */

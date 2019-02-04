@@ -6,6 +6,7 @@ import vibe.http.internal.http2.hpack.exception;
 import vibe.http.status;
 import vibe.http.common;
 import vibe.core.log;
+import vibe.core.sync;
 import vibe.internal.array : FixedRingBuffer;
 
 import std.variant;
@@ -283,12 +284,14 @@ unittest {
 struct IndexingTable {
 	private {
 		DynamicTable m_dynamic;
+		RecursiveTaskMutex m_lock;
 	}
 
 	// requires the maximum size for the dynamic table
 	this(HTTP2SettingValue ms) @trusted
 	{
 		m_dynamic = DynamicTable(ms);
+		m_lock = new RecursiveTaskMutex;
 	}
 
 	~this()
@@ -305,12 +308,16 @@ struct IndexingTable {
 	@property void popFront() @safe
 	{
 		assert(!empty, "Cannot call popFront on an empty dynamic table");
-		m_dynamic.remove();
+		m_lock.performLocked!({
+			m_dynamic.remove();
+		});
 	}
 
 	// element retrieval
 	HTTP2HeaderTableField opIndex(size_t idx) @safe
 	{
+		import std.stdio;
+		writeln(idx);
 		enforceHPACK(idx > 0 && idx <= size(), "Invalid HPACK table index");
 
 		if (idx < STATIC_TABLE_SIZE+1) return getStaticTableEntry(idx);
@@ -327,13 +334,17 @@ struct IndexingTable {
 	// assignment can only be done on the dynamic table
 	void insert(HTTP2HeaderTableField hf) @safe
 	{
-		m_dynamic.insert(hf);
+		m_lock.performLocked!({
+			m_dynamic.insert(hf);
+		});
 	}
 
 	// update max dynamic table size
-	void updateSize(HTTP2SettingValue sz) @safe @nogc
+	void updateSize(HTTP2SettingValue sz) @safe
 	{
-		m_dynamic.updateSize(sz);
+		m_lock.performLocked!({
+			m_dynamic.updateSize(sz);
+		});
 	}
 }
 
