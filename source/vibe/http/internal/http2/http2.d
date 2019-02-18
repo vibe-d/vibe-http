@@ -579,8 +579,6 @@ void handleHTTP2HeadersFrame(Stream)(ref Stream stream, TCPConnection connection
 {
 	auto hdec = appender!(HTTP2HeaderTableField[]);
 	try {
-		import std.stdio;
-		writeln(stream.headerBlock);
 		decodeHPACK(cast(immutable(ubyte)[])stream.headerBlock, hdec, context.table, alloc);
 		// insert data in table
 		hdec.data.each!((h) { if(h.index) context.table.insert(h); });
