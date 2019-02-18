@@ -233,7 +233,7 @@ private struct DynamicTable {
 	// evict an entry
 	void remove() @safe
 	{
-		assert(!m_table.empty, "Cannot remove element from empty table");
+		enforceHPACK(!m_table.empty, "Cannot remove element from empty table");
 		m_size -= computeEntrySize(m_table.back);
 		m_table.popFront();
 		m_index--;
@@ -316,9 +316,7 @@ struct IndexingTable {
 	// element retrieval
 	HTTP2HeaderTableField opIndex(size_t idx) @safe
 	{
-		import std.stdio;
-		writeln(idx);
-		enforceHPACK(idx > 0 && idx <= size(), "Invalid HPACK table index");
+		enforceHPACK(idx > 0 && idx < size(), "Invalid HPACK table index");
 
 		if (idx < STATIC_TABLE_SIZE+1) return getStaticTableEntry(idx);
 		else return m_dynamic[m_dynamic.index - (idx - STATIC_TABLE_SIZE) + 1];
