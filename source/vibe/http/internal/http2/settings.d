@@ -303,6 +303,7 @@ struct HTTP2ServerContext
 	this(HTTPServerContext ctx) @safe
 	{
 		m_context = ctx;
+		m_table = new IndexingTable(4096); // default value for headertablesize
 	}
 
 
@@ -322,10 +323,15 @@ struct HTTP2ServerContext
 		return m_settings;
 	}
 
-	@property void settings(ref HTTP2Settings settings) @safe @nogc
+	@property void settings(ref HTTP2Settings settings) @safe
 	{
 		assert(m_settings.isNull);
 		m_settings = settings;
+		() @trusted {
+			if (settings.headerTableSize != 4096) {
+				m_table.updateSize(settings.headerTableSize);
+			}
+		} ();
 	}
 }
 
