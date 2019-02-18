@@ -1,5 +1,6 @@
 module vibe.http.internal.http2.exchange;
 
+import vibe.http.internal.http2.multiplexing;
 import vibe.http.internal.http2.settings;
 import vibe.http.internal.http2.http2 : HTTP2ConnectionStream, HTTP2StreamState;
 import vibe.http.internal.http2.hpack.hpack;
@@ -11,6 +12,7 @@ import vibe.http.status;
 import vibe.http.server;
 import vibe.core.log;
 import vibe.core.stream;
+import vibe.core.core : yield;
 import vibe.internal.interfaceproxy;
 import vibe.stream.tls;
 import vibe.internal.allocator;
@@ -287,6 +289,7 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 	parsed = true;
 	logTrace("persist: %s", req.persistent);
 	//keep_alive = req.persistent;
+	logInfo("Received %s request on stream ID %d", req.method, stream.streamId);
 
 	// create HEADERS frame
 	auto statusLine = AllocAppender!string(alloc);
@@ -319,10 +322,10 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 		assert(false);
 	}
 
-	logTrace("Sent HEADERS frame on streamID " ~ stream.streamId.to!string);
+	logInfo("Sent HEADERS frame on streamID " ~ stream.streamId.to!string);
 
-	if(req.method != HTTPMethod.HEAD) {
-		// handle payload
+	if(req.method != HTTPMethod.HEAD && isOpenStream(tcp_connection, stream.streamId)) {
+		// handle payload (DATA frame)
 		auto dataWriter = createDataOutputStream(alloc);
 		auto dataFrame = AllocAppender!(ubyte[])(alloc);
 		res.bodyWriterH2 = dataWriter;
@@ -334,9 +337,15 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 		dataFrame.createHTTP2FrameHeader(dataWriter.data.length.to!uint,
 				HTTP2FrameType.DATA, 0x1, stream.streamId);
 		dataFrame.put(dataWriter.data);
-		cstream.write(dataFrame.data);
 
-		logTrace("Sent DATA frame on streamID " ~ stream.streamId.to!string);
+		// check that DATA frame(s) can be sent
+		// TODO timeout on retry
+		if(!canSendWindow(tcp_connection, stream.streamId, dataFrame.data.length)) yield();
+
+		cstream.write(dataFrame.data);
+		updateWindow(tcp_connection, stream.streamId, dataFrame.data.length);
+
+		logInfo("Sent DATA frame on streamID " ~ stream.streamId.to!string);
 	}
 
 	if(stream.state == HTTP2StreamState.HALF_CLOSED_REMOTE) {
@@ -348,10 +357,25 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 
 	// if no one has written anything, return 404
 	if (!res.headerWritten) {
-		assert(false);
+		//assert(false);
 	}
 
 	return true;
+}
+
+bool canSendWindow(Conn)(Conn connection, const uint sid, const ulong len) @safe
+{
+	if(connectionWindow(connection) >= len && streamConnectionWindow(connection, sid) >= len) return true;
+	else return false;
+}
+
+void updateWindow(Conn)(Conn connection, const uint sid, const ulong sent) @safe
+{
+	auto cw = connectionWindow(connection) - sent;
+	auto scw = streamConnectionWindow(connection, sid) - sent;
+
+	updateConnectionWindow(connection, cw);
+	updateStreamConnectionWindow(connection, sid, cw);
 }
 
 private DataOutputStream createDataOutputStream(IAllocator alloc = vibeThreadAllocator())
