@@ -37,6 +37,7 @@ void decode(I, R, T)(ref I src, ref R dst, IndexingTable* ptable,  ref T alloc) 
 		auto adst = AllocAppender!string(alloc);
 
 		if (bbuf & 64) { // inserted in dynamic table
+			//size_t idx = decodeInteger(src, bbuf, 2);
 			size_t idx = bbuf.toInteger(2);
 			if(idx > 0) {  // name == table[index].name, value == literal
 				hres.name = table[idx].name;
@@ -48,6 +49,12 @@ void decode(I, R, T)(ref I src, ref R dst, IndexingTable* ptable,  ref T alloc) 
 			hres.value.setReset(adst);
 			hres.index = true;
 			hres.neverIndex = false;
+
+		} else if(bbuf & 32) {
+			update = true;
+			auto nsize = decodeInteger(src, bbuf, 3);
+			logInfo("Updating dynamic table size to: %d octets", nsize);
+			table.updateSize(cast(HTTP2SettingValue)nsize);
 
 		} else if(bbuf & 16) { // NEVER inserted in dynamic table
 			size_t idx = decodeInteger(src, bbuf, 4);
@@ -62,7 +69,7 @@ void decode(I, R, T)(ref I src, ref R dst, IndexingTable* ptable,  ref T alloc) 
 			hres.index = false;
 			hres.neverIndex = true;
 
-		} else if(!(bbuf & 32)) { // this occourrence is not inserted in dynamic table
+		} else { // this occourrence is not inserted in dynamic table
 			size_t idx = decodeInteger(src, bbuf, 4);
 			if(idx > 0) {  // name == table[index].name, value == literal
 				hres.name = table[idx].name;
@@ -74,10 +81,6 @@ void decode(I, R, T)(ref I src, ref R dst, IndexingTable* ptable,  ref T alloc) 
 			hres.value.setReset(adst);
 			hres.index = hres.neverIndex = false;
 
-		} else { // dynamic table size update (bbuf[2] is set)
-			update = true;
-			auto nsize = bbuf.toInteger(3);
-			table.updateSize(cast(HTTP2SettingValue)nsize);
 		}
 		assert(!(hres.index && hres.neverIndex), "Invalid header indexing information");
 
@@ -107,13 +110,15 @@ private size_t decodeInteger(I)(ref I src, ubyte bbuf, uint nbits) @safe @nogc
 			// concatenate it to the result
 			res = res + bbuf.toInteger(1)*(1 << m);
 			m += 7;
-		} while(bbuf == 1);
+		} while((bbuf & 128) == 128);
 		return res;
 	}
 }
 
 private void decodeLiteral(I,R)(ref I src, ref R dst) @safe
 {
+ 	enforceHPACK(!src.empty, "Invalid literal header block");
+
 	ubyte bbuf = src[0];
 	src = src[1..$];
 
