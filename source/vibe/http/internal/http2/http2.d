@@ -687,18 +687,22 @@ struct HTTP2ConnectionStream(CS)
 	{
 		switch(st) {
 			case HTTP2StreamState.OPEN:
-				if(m_state == HTTP2StreamState.IDLE) m_state = st;
+				if(m_state == HTTP2StreamState.IDLE ||
+						m_state == HTTP2StreamState.OPEN)
+					m_state = st;
 				else assert(false, "Invalid state");
 				break;
 			case HTTP2StreamState.HALF_CLOSED_LOCAL:
 				if(m_state == HTTP2StreamState.OPEN ||
-						m_state == HTTP2StreamState.RESERVED_REMOTE)
+						m_state == HTTP2StreamState.RESERVED_REMOTE ||
+						m_state == HTTP2StreamState.HALF_CLOSED_LOCAL)
 					m_state = st;
 				else assert(false, "Invalid state");
 				break;
 			case HTTP2StreamState.HALF_CLOSED_REMOTE:
 				if(m_state == HTTP2StreamState.OPEN ||
-						m_state == HTTP2StreamState.RESERVED_LOCAL)
+						m_state == HTTP2StreamState.RESERVED_LOCAL ||
+						m_state == HTTP2StreamState.HALF_CLOSED_REMOTE)
 					m_state = st;
 				else assert(false, "Invalid state");
 				break;
@@ -752,16 +756,17 @@ struct HTTP2ConnectionStream(CS)
 		}
 	}
 
-	void finalize() @safe
-	{
-		// TODO register streamID in USED set
-		//m_conn.finalize();
-	}
-
 	void putHeaderBlock(T)(T src) @safe
 		if(isInputRange!T && is(ElementType!T : ubyte))
 	{
 		// TODO check header block length
 		m_headerBlock.put(src);
 	}
+
+	void resetHeaderBlock() @trusted
+	{
+		m_headerBlock.reset(AppenderResetMode.freeData);
+	}
+
+	void finalize() @safe { }
 }
