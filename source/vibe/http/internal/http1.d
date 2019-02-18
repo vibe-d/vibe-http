@@ -335,7 +335,6 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 
 		// handle the request
 		logTrace("handle request (body %d)", req.bodyReader.leastSize);
-		res.httpVersion = req.httpVersion;
 
 		/**
 		 * UPGRADE TO HTTP/2 for cleartext HTTP/1
@@ -380,6 +379,7 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 		}
 
 
+		res.httpVersion = req.httpVersion;
 		request_task(req, res);
 
 
