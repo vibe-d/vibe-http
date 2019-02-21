@@ -19,10 +19,9 @@ import std.traits;
 import std.bitmanip; // read from ubyte (decoding)
 import std.typecons;
 import std.conv : to;
-import std.exception : enforce;
+import std.exception;
 import std.algorithm : canFind; // alpn callback
 import std.algorithm.iteration;
-import std.variant : Algebraic;
 
 enum HTTP2Error {
 	NO_ERROR 			= 0x0,
@@ -49,7 +48,37 @@ void buildGOAWAYFrame(R)(ref R buf, const uint streamId, HTTP2Error error)
 {
 	assert(buf.length == GOAWAYFrameLength, "Unable to create GOAWAY frame");
 
+	// last stream processed by the server (client-initiated)
+	uint sid = (streamId > 1) ? streamId - 2 : 0;
+
 	buf.createHTTP2FrameHeader(8, HTTP2FrameType.GOAWAY, 0x0, 0x0);
-	buf.putBytes!4(streamId & 127); // last stream ID
+	buf.putBytes!4(sid & 127); // last stream ID
 	buf.putBytes!4(error);
+}
+/// ditto
+auto buildGOAWAYFrame(uint sid, HTTP2Error code) @safe
+{
+	BatchBuffer!(ubyte, GOAWAYFrameLength) gbuf;
+
+	gbuf.putN(GOAWAYFrameLength);
+	gbuf.buildGOAWAYFrame(sid, code);
+
+	return gbuf.peekDst;
+}
+
+
+/// exceptions
+T enforceHTTP2(T)(T condition, string message = null, HTTP2Error h2e = HTTP2Error.NO_ERROR, string file = __FILE__, typeof(__LINE__) line = __LINE__) @trusted
+{
+	return enforce(condition, new HTTP2Exception(message, h2e, file, line));
+}
+
+class HTTP2Exception : Exception
+{
+	HTTP2Error code;
+
+	this(string msg, HTTP2Error h2e = HTTP2Error.NO_ERROR, string file = __FILE__, size_t line = __LINE__) {
+		code = h2e;
+		super(msg, file, line);
+	}
 }
