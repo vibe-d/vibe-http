@@ -10,6 +10,7 @@ import vibe.internal.allocator;
 import vibe.internal.utilallocator: RegionListAllocator;
 
 import std.exception;
+import std.container : RedBlackTree;
 
 
 /** Stream multiplexing in HTTP/2
@@ -28,7 +29,12 @@ private {
 	__gshared HTTP2Multiplexer[string] multiplexers;
 }
 
-private const string index = "auto idx = connection.peerAddress; enforce(idx != \"<UNSPEC>\",\"Unable to test stream, is the connection open?\");";
+// multiplexer index is SRCIP:SRCPORT~DESTIP:DESTPORT (unique representation of a TCP socket
+private const string index = "
+				auto pa = connection.peerAddress;
+				if(pa == \"<UNSPEC>\")
+					enforce(false, \"Unable to find multiplexer. Closing task.\");
+				auto idx = connection.localAddress.toString~pa;";
 
 // init the multiplexer
 void multiplexer(Conn)(Conn connection, const uint max, const uint wsize, const uint tsize=4096) @trusted
@@ -36,7 +42,7 @@ void multiplexer(Conn)(Conn connection, const uint max, const uint wsize, const 
 {
 	mixin(index);
 
-	logWarn("Initializing multiplexer with idx: "~idx);
+	logInfo("Initializing multiplexer with idx: "~idx);
 	assert(!(idx in multiplexers));
 
 	version (VibeManualMemoryManagement)
@@ -54,7 +60,7 @@ void removeMux(Conn)(Conn connection) @trusted
 {
 	mixin(index);
 
-	logWarn("Removing multiplexer with id: "~idx);
+	logInfo("Removing multiplexer with id: "~idx);
 	multiplexers.remove(idx);
 }
 
@@ -64,7 +70,7 @@ auto registerStream(Conn)(Conn connection, const uint sid) @trusted
 {
 	mixin(index);
 
-	if(sid > 0) logWarn("MUX: Registering stream %d on mux[%s]", sid, idx);
+	if(sid > 0) logInfo("MUX: Registering stream %d on mux[%s]", sid, idx);
 	return async({
 			return multiplexers[idx].register(sid);
 		});
@@ -76,7 +82,10 @@ auto closeStream(Conn)(Conn connection, const uint sid) @trusted
 {
 	mixin(index);
 
-	if(sid > 0) logWarn("MUX: Closing stream %d on mux[%s]", sid, idx);
+	// do not remove stream if pending send is due
+	if(checkCondition(connection)) return false;
+
+	if(sid > 0) logInfo("MUX: Closing stream %d on mux[%s]", sid, idx);
 	return async({
 			return multiplexers[idx].close(sid);
 		});
@@ -121,6 +130,37 @@ bool updateStreamConnectionWindow(Conn)(Conn connection, const uint sid, const u
 			return multiplexers[idx].updateStreamConnWindow(sid, newWin);
 		});
 }
+
+bool isConnectionPreface(Conn)(Conn connection) @trusted
+{
+	mixin(index);
+
+	return multiplexers[idx].isConnPreface();
+}
+
+void waitCondition(Conn)(Conn connection) @trusted
+{
+	mixin(index);
+	multiplexers[idx].wait();
+}
+
+void notifyCondition(Conn)(Conn connection) @trusted
+{
+	mixin(index);
+	multiplexers[idx].notify();
+}
+
+uint checkCondition(Conn)(Conn connection) @trusted
+{
+	mixin(index);
+	return multiplexers[idx].checkCond();
+}
+
+void doneCondition(Conn)(Conn connection) @trusted
+{
+	mixin(index);
+	multiplexers[idx].endWait();
+}
 //unittest {
 	//string id = "localhost:80";
 	//multiplexer(id, 2);
@@ -136,7 +176,7 @@ bool updateStreamConnectionWindow(Conn)(Conn connection, const uint sid, const u
 	//assert(multiplexers.length == 0);
 //}
 
-private alias H2Queue = ArraySet!uint;
+private alias H2Queue = RedBlackTree!uint;
 
 struct HTTP2Multiplexer {
 	private {
@@ -146,17 +186,70 @@ struct HTTP2Multiplexer {
 		uint m_max;			// maximum number of streams open at the same time
 		uint m_countOpen;   // current number of open streams (in m_open)
 		TaskMutex m_lock;
+		TaskCondition m_cond;
+		uint m_waiting = 0;
 		ulong m_wsize;
 		ulong[uint] m_streamWSize;
+		bool m_connPreface = true;
 	}
 
 	this(Alloc)(Alloc alloc, const uint max, const ulong wsize, const uint tsize=4096) @trusted
 	{
 		m_lock = new TaskMutex;
-		m_open.setAllocator(alloc);
+		m_cond = new TaskCondition(m_lock);
+		m_open = new H2Queue();
 		m_last = 0;
 		m_max = max;
 		m_wsize = wsize;
+	}
+
+	@property void wait() @trusted
+	{
+		synchronized(m_lock) {
+			m_waiting++;
+			m_cond.wait();
+		}
+	}
+
+	@property void endWait() @trusted
+	{
+		synchronized(m_lock) {
+			m_waiting--;
+		}
+	}
+
+	@property void notify() @trusted
+	{
+		m_cond.notify();
+	}
+
+	@property uint checkCond() @safe
+	{
+		return m_waiting;
+	}
+
+	@property ulong connWindow() @safe
+	{
+		return m_wsize;
+	}
+
+	@property ulong streamConnWindow(const uint sid) @safe
+	{
+		if(!(sid in m_streamWSize)) return 0;
+
+		return m_streamWSize[sid];
+	}
+
+	@property bool isConnPreface() @safe
+	{
+		// can only be true once per connection
+		auto b = m_connPreface;
+
+		m_lock.performLocked!({
+			m_connPreface = false;
+		});
+
+		return b;
 	}
 
 	// register a new open stream
@@ -178,11 +271,12 @@ struct HTTP2Multiplexer {
 	// close an open stream
 	bool close(const uint sid) @safe
 	{
-		if(!m_open.contains(sid)) return false; //Cannot close a stream which is not open
+		if(!(sid in m_open)) return false; //Cannot close a stream which is not open
+		if(m_waiting) return false; 	   //Cannot close a stream which is blocked
 
 		m_lock.performLocked!({
 			m_countOpen--;
-			m_open.remove(sid);
+			m_open.removeKey(sid);
 			m_streamWSize.remove(sid);
 		});
 		return true;
@@ -191,38 +285,34 @@ struct HTTP2Multiplexer {
 	// open streams are present in m_open
 	bool isOpen(const uint sid) @safe
 	{
-		return m_open.contains(sid);
-	}
-
-	@property ulong connWindow() @safe
-	{
-		return m_wsize;
-	}
-
-	@property ulong streamConnWindow(const uint sid) @safe
-	{
-		return m_streamWSize[sid];
+		return sid in m_open;
 	}
 
 	bool updateConnWindow(const ulong newWin) @safe
 	{
 		if(newWin > ulong.max || newWin < 0) return false;
-		logWarn("MUX: updating window size from %d to %d bytes", m_wsize, newWin);
+		logInfo("MUX: CONTROL FLOW WINDOW: from %d to %d bytes", m_wsize, newWin);
 
 		m_lock.performLocked!({
 			m_wsize = newWin;
 		});
+
 		return true;
 	}
 
 	bool updateStreamConnWindow(const uint sid, const ulong newWin) @safe
 	{
 		if(newWin > ulong.max || newWin < 0) return false;
-		logWarn("MUX: updating window size of stream %d from %d to %d bytes", sid, m_streamWSize[sid], newWin);
+		if(sid == 0) return true;
+
+		logInfo("MUX: CONTROL FLOW WINDOW: stream %d from %d to %d bytes",
+				sid, (sid in m_streamWSize) ? m_streamWSize[sid] : m_wsize, newWin);
 
 		m_lock.performLocked!({
 				m_streamWSize[sid] = newWin;
 		});
+
 		return true;
 	}
+
 }
