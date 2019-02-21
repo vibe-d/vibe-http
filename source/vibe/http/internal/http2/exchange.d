@@ -12,7 +12,7 @@ import vibe.http.status;
 import vibe.http.server;
 import vibe.core.log;
 import vibe.core.stream;
-import vibe.core.core : yield;
+import vibe.core.core; 
 import vibe.internal.interfaceproxy;
 import vibe.stream.tls;
 import vibe.internal.allocator;
@@ -35,6 +35,7 @@ import std.format;
 import std.algorithm.iteration;
 import std.algorithm.mutation;
 import std.algorithm.searching;
+import std.algorithm.comparison;
 
 /**
   * HTTP/2 message exchange module as documented in:
@@ -67,11 +68,14 @@ ubyte[] buildHeaderFrame(alias type)(string statusLine, InetHeaderMap headers,
 	}
 
 	foreach(k,v; headers) {
-		H2F(k,v).encodeHPACK(pbuf, table);
+		H2F(k.toLower,v).encodeHPACK(pbuf, table);
 	}
 
 	// TODO padding
+	if(context.next_sid == 0) context.next_sid = 1;
+
 	hbuf.createHTTP2FrameHeader(cast(uint)pbuf.data.length, HTTP2FrameType.HEADERS, 0x0, context.next_sid);
+
 	res.put(hbuf.data);
 	res.put(pbuf.data);
 	return res.data;
@@ -324,7 +328,8 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 
 	logInfo("Sent HEADERS frame on streamID " ~ stream.streamId.to!string);
 
-	if(req.method != HTTPMethod.HEAD && isOpenStream(tcp_connection, stream.streamId)) {
+
+	if(req.method != HTTPMethod.HEAD) {
 		// handle payload (DATA frame)
 		auto dataWriter = createDataOutputStream(alloc);
 		auto dataFrame = AllocAppender!(ubyte[])(alloc);
@@ -338,35 +343,96 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 				HTTP2FrameType.DATA, 0x1, stream.streamId);
 		dataFrame.put(dataWriter.data);
 
-		// check that DATA frame(s) can be sent
-		// TODO timeout on retry
-		if(!canSendWindow(tcp_connection, stream.streamId, dataFrame.data.length)) yield();
+		auto connection = tcp_connection;
 
-		cstream.write(dataFrame.data);
-		updateWindow(tcp_connection, stream.streamId, dataFrame.data.length);
+		void sendDataTask()
+		@safe {
 
-		logInfo("Sent DATA frame on streamID " ~ stream.streamId.to!string);
-	}
+			scope(exit) {
+				if(stream.state == HTTP2StreamState.HALF_CLOSED_REMOTE) {
+					stream.state = HTTP2StreamState.CLOSED;
+				} else {
+					stream.state = HTTP2StreamState.HALF_CLOSED_LOCAL;
+				}
+			}
 
-	if(stream.state == HTTP2StreamState.HALF_CLOSED_REMOTE) {
-		stream.state = HTTP2StreamState.CLOSED;
+			logInfo("[DATA] Starting dispatch task");
+
+			try {
+				auto wlen = sendWindowLength(connection, stream.streamId, dataFrame.data.length);
+				auto dw = dataFrame.data;
+				auto cstr = cstream;
+				auto abort = false;
+
+				while(wlen <= dw.length) {
+					// send is over
+					if(dw.length == 0) {
+						logInfo("[DATA] Completed DATA frame dispatch");
+						// remove task from waiting state
+						doneCondition(connection);
+						break;
+					}
+
+					// wait to resume and retry
+					if(wlen == 0) {
+						logInfo("[DATA] Dispatch task waiting for WINDOW_UPDATE");
+
+						// after 60 seconds waiting, terminate dispatch
+						() @trusted {
+							auto timer = setTimer(60.seconds, {
+									logInfo("[DATA] timer expired, aborting dispatch");
+									notifyCondition(connection);
+									abort = true;
+									});
+
+							// wait until a new WINDOW_UPDATE is received (or timer expires)
+							waitCondition(connection);
+
+							// task resumed: cancel timer
+							if(!abort) timer.stop;
+							else return;
+						} ();
+
+						logInfo("[DATA] Dispatch task resumed");
+
+					} else {
+						// write chunk that can be sent
+						cstr.write(dw[0..wlen]);
+
+						logInfo("[DATA] Sent frame chunk (%d/%d bytes) on streamID %d",
+								wlen, dw.length, stream.streamId);
+						dw.popFrontN(wlen);
+						updateWindow(connection, stream.streamId, wlen);
+					}
+
+					// compute new window length
+					wlen = sendWindowLength(connection, stream.streamId, dw.length);
+				}
+			} catch (Exception e) {
+				return;
+			}
+		}
+
+		runTask(&sendDataTask);
+
 	} else {
-		stream.state = HTTP2StreamState.HALF_CLOSED_LOCAL;
-	}
-
-
-	// if no one has written anything, return 404
-	if (!res.headerWritten) {
-		//assert(false);
+		if(stream.state == HTTP2StreamState.HALF_CLOSED_REMOTE) {
+			stream.state = HTTP2StreamState.CLOSED;
+		} else {
+			stream.state = HTTP2StreamState.HALF_CLOSED_LOCAL;
+		}
 	}
 
 	return true;
 }
 
-bool canSendWindow(Conn)(Conn connection, const uint sid, const ulong len) @safe
+
+ulong sendWindowLength(Conn)(Conn connection, const uint sid, const ulong len) @safe
 {
-	if(connectionWindow(connection) >= len && streamConnectionWindow(connection, sid) >= len) return true;
-	else return false;
+	if(connectionWindow(connection) >= len &&
+			streamConnectionWindow(connection, sid) >= len) return len;
+
+	else return min(connectionWindow(connection), streamConnectionWindow(connection,sid));
 }
 
 void updateWindow(Conn)(Conn connection, const uint sid, const ulong sent) @safe
