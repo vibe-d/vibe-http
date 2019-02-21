@@ -3,6 +3,8 @@ module vibe.http.internal.http2.settings;
 import vibe.http.internal.http2.multiplexing;
 import vibe.http.internal.http2.frame;
 import vibe.http.internal.http2.hpack.tables;
+import vibe.http.internal.http2.error;
+
 import vibe.http.server;
 import vibe.core.log;
 import vibe.core.net;
@@ -205,6 +207,7 @@ struct HTTP2Settings {
 					break assign;
 			}
 		}
+
 	}
 
 }
@@ -219,11 +222,18 @@ void serializeSettings(R)(ref R dst, HTTP2Settings settings) @safe @nogc
 	}
 }
 
-void unpackSettings(R)(ref HTTP2Settings settings, R src) @safe @nogc
+void unpackSettings(R)(ref HTTP2Settings settings, R src) @safe
 {
 	while(!src.empty) {
 		auto id = src.takeExactly(2).fromBytes(2);
 		src.popFrontN(2);
+
+		// invalid IDs: ignore setting
+		if(!(id >= minID && id <= maxID)) {
+			src.popFrontN(4);
+			continue;
+		}
+
 		static foreach(s; __traits(allMembers, HTTP2Settings)) {
 			static if(is(typeof(__traits(getMember, HTTP2Settings, s)) == HTTP2SettingValue)) {
 				mixin("if(id == ((getUDAs!(settings."~s~",HTTP2Setting)[0]).id)) {
@@ -234,6 +244,15 @@ void unpackSettings(R)(ref HTTP2Settings settings, R src) @safe @nogc
 			}
 		}
 	}
+
+	enforceHTTP2(settings.enablePush == 0 || settings.enablePush == 1,
+			"Invalid value for ENABLE_PUSH setting.", HTTP2Error.PROTOCOL_ERROR);
+
+	enforceHTTP2(settings.initialWindowSize < (1 << 31),
+			"Invalid value for INITIAL_WINDOW_SIZE setting.", HTTP2Error.FLOW_CONTROL_ERROR);
+
+	enforceHTTP2(settings.maxFrameSize >= (1 << 14) && settings.maxFrameSize < (1 << 24),
+			"Invalid value for MAX_FRAME_SIZE setting.", HTTP2Error.FLOW_CONTROL_ERROR);
 }
 
 unittest {
