@@ -23,10 +23,10 @@ void encodeHPACK(I,R)(I src, ref R dst, IndexingTable* table, bool huffman = tru
 	}
 }
 
-void decodeHPACK(I,R,T)(I src, ref R dst, IndexingTable* table, ref T alloc) @safe
+void decodeHPACK(I,R,T)(I src, ref R dst, IndexingTable* table, ref T alloc, uint maxTableSize = 4096) @safe
 	if(isInputRange!I && (is(ElementType!I : immutable(ubyte)) || is(ElementType!I : immutable(char))))
 {
-	while(!src.empty) src.decode(dst, table, alloc);
+	while(!src.empty) src.decode(dst, table, alloc, maxTableSize);
 }
 
 /// ENCODER
