@@ -12,6 +12,7 @@ import std.range; // Decoder
 import std.string;
 import std.experimental.allocator;
 import std.experimental.allocator.mallocator;
+import std.exception;
 
 /** Module to implement an header decoder consistent with HPACK specifications (RFC 7541)
   * The detailed description of the decoding process, examples and binary format details can
@@ -22,7 +23,7 @@ import std.experimental.allocator.mallocator;
 */
 alias HTTP2SettingValue = uint;
 
-void decode(I, R, T)(ref I src, ref R dst, IndexingTable* ptable,  ref T alloc) @trusted
+void decode(I, R, T)(ref I src, ref R dst, IndexingTable* ptable,  ref T alloc, ulong maxTableSize=4096) @trusted
 {
 	ubyte bbuf = src[0];
 	src = src[1..$];
@@ -37,8 +38,7 @@ void decode(I, R, T)(ref I src, ref R dst, IndexingTable* ptable,  ref T alloc) 
 		auto adst = AllocAppender!string(alloc);
 
 		if (bbuf & 64) { // inserted in dynamic table
-			//size_t idx = decodeInteger(src, bbuf, 2);
-			size_t idx = bbuf.toInteger(2);
+			size_t idx = decodeInteger(src, bbuf, 6);
 			if(idx > 0) {  // name == table[index].name, value == literal
 				hres.name = table[idx].name;
 			} else {   // name == literal, value == literal
@@ -53,8 +53,10 @@ void decode(I, R, T)(ref I src, ref R dst, IndexingTable* ptable,  ref T alloc) 
 		} else if(bbuf & 32) {
 			update = true;
 			auto nsize = decodeInteger(src, bbuf, 3);
-			logInfo("Updating dynamic table size to: %d octets", nsize);
+			enforce(nsize <= maxTableSize, "Invalid table size update");
+
 			table.updateSize(cast(HTTP2SettingValue)nsize);
+			logInfo("Updated dynamic table size to: %d octets", nsize);
 
 		} else if(bbuf & 16) { // NEVER inserted in dynamic table
 			size_t idx = decodeInteger(src, bbuf, 4);
@@ -127,7 +129,7 @@ private void decodeLiteral(I,R)(ref I src, ref R dst) @safe
 	assert(!src.empty, "Cannot decode from empty range block");
 
 	// take a buffer of remaining octets
-	auto vlen = bbuf.toInteger(1); // value length
+	auto vlen = decodeInteger(src, bbuf, 7); // value length
 	enforceHPACK(vlen <= src.length, "Invalid literal decoded");
 
 	auto buf = src[0..vlen];
