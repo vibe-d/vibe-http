@@ -1,6 +1,7 @@
 module vibe.http.internal.http2.frame;
 
 import vibe.http.internal.http2.settings;
+import vibe.http.internal.http2.error;
 
 import vibe.internal.array;
 
@@ -88,6 +89,7 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref
 			if(header.flags & 0x8) { // padding is set, first bit is pad length
 				len -= cast(size_t)src.front + 1;
 				src.popFront();
+				enforceHTTP2(src.length >= len, "Invalid pad length", HTTP2Error.PROTOCOL_ERROR);
 			}
 			foreach(b; src.takeExactly(len)) {
 				payloadDst.put(b);
@@ -101,6 +103,7 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref
 			if(header.flags & 0x8) { // padding is set, first bit is pad length
 				len -= cast(size_t)src.front + 1;
 				src.popFront();
+				enforceHTTP2(src.length >= len, "Invalid pad length", HTTP2Error.PROTOCOL_ERROR);
 			}
 			if(header.flags & 0x20) { // priority is set, fill `sdep`
 				sdep.fill(src);
@@ -116,12 +119,12 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref
 			break;
 
 		case HTTP2FrameType.PRIORITY:
-			enforce(len == 5, "Invalid PRIORITY Frame");
+			enforceHTTP2(len == 5, "Invalid PRIORITY Frame", HTTP2Error.PROTOCOL_ERROR);
 			sdep.fill(src);
 			break;
 
 		case HTTP2FrameType.RST_STREAM:
-			enforce(len == 4, "Invalid RST_STREAM Frame");
+			enforceHTTP2(len == 4, "Invalid RST_STREAM Frame", HTTP2Error.PROTOCOL_ERROR);
 			foreach(b; src.takeExactly(len)) {
 				payloadDst.put(b);
 				src.popFront();
@@ -129,10 +132,10 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref
 			break;
 
 		case HTTP2FrameType.SETTINGS:
-			enforce(len % 6 == 0, "Invalid SETTINGS Frame (FRAME_SIZE error)");
-			enforce(header.streamId == 0, "Invalid streamId for SETTINGS Frame");
+			enforceHTTP2(len % 6 == 0, "Invalid SETTINGS Frame (FRAME_SIZE error)", HTTP2Error.PROTOCOL_ERROR);
+			enforceHTTP2(header.streamId == 0, "Invalid streamId for SETTINGS Frame", HTTP2Error.PROTOCOL_ERROR);
 			if(header.flags & 0x1) { // this is an ACK frame
-				enforce(len == 0, "Invalid SETTINGS ACK Frame (FRAME_SIZE error)");
+				enforceHTTP2(len == 0, "Invalid SETTINGS ACK Frame (FRAME_SIZE error)", HTTP2Error.PROTOCOL_ERROR);
 				ack = true;
 				break;
 			}
@@ -146,6 +149,7 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref
 			if(header.flags & 0x8) { // padding is set, first bit is pad length
 				len -= cast(size_t)src.front + 1;
 				src.popFront();
+				enforceHTTP2(src.length >= len, "Invalid pad length", HTTP2Error.PROTOCOL_ERROR);
 			}
 			sdep.isPushPromise = true;
 			sdep.fill(src);
@@ -159,8 +163,10 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref
 			break;
 
 		case HTTP2FrameType.PING:
-			enforce(len == 8, "Invalid PING Frame (FRAME_SIZE error)");
-			enforce(header.streamId == 0, "Invalid streamId for PING Frame");
+			enforceHTTP2(len == 8, "Invalid PING Frame (FRAME_SIZE error)",
+					HTTP2Error.PROTOCOL_ERROR);
+			enforceHTTP2(header.streamId == 0, "Invalid streamId for PING Frame",
+					HTTP2Error.PROTOCOL_ERROR);
 			if(header.flags & 0x1) {
 				ack = true;
 			}
@@ -171,8 +177,10 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref
 			break;
 
 		case HTTP2FrameType.GOAWAY: // GOAWAY is used to close connection (in handler)
-			enforce(len >= 8, "Invalid GOAWAY Frame (FRAME_SIZE error)");
-			enforce(header.streamId == 0, "Invalid streamId for GOAWAY Frame");
+			enforceHTTP2(len >= 8, "Invalid GOAWAY Frame (FRAME_SIZE error)",
+					HTTP2Error.PROTOCOL_ERROR);
+			enforceHTTP2(header.streamId == 0, "Invalid streamId for GOAWAY Frame",
+					HTTP2Error.PROTOCOL_ERROR);
 			foreach(b; src.takeExactly(len)) {
 				payloadDst.put(b);
 				src.popFront();
@@ -180,7 +188,8 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref
 			break;
 
 		case HTTP2FrameType.WINDOW_UPDATE:
-			enforce(len == 4, "Invalid WINDOW_UPDATE Frame (FRAME_SIZE error)");
+			enforceHTTP2(len == 4, "Invalid WINDOW_UPDATE Frame (FRAME_SIZE error)",
+					HTTP2Error.PROTOCOL_ERROR);
 			foreach(i,b; src.takeExactly(len).enumerate) {
 				if(i == 0) b &= 0x7F; // reserved bit
 				payloadDst.put(b);
@@ -189,7 +198,8 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref
 			break;
 
 		case HTTP2FrameType.CONTINUATION:
-			enforce(header.streamId != 0, "Invalid streamId for CONTINUATION frame");
+			enforceHTTP2(header.streamId != 0, "Invalid streamId for CONTINUATION frame",
+					HTTP2Error.PROTOCOL_ERROR);
 			foreach(b; src.takeExactly(len)) {
 				payloadDst.put(b);
 				src.popFront();
@@ -198,7 +208,8 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref
 			break;
 
 		default:
-			enforce(false, "Invalid frame header unpacked");
+			enforceHTTP2(false, "Invalid frame header unpacked.", HTTP2Error.PROTOCOL_ERROR);
+			break;
 	}
 }
 
@@ -372,8 +383,9 @@ struct HTTP2FrameHeader
 		m_type = cast(HTTP2FrameType)src.front; src.popFront;
 		m_flags = src.front; src.popFront;
 
-		m_streamId.put(src.take(4));
-		src.popFrontN(4);
+		m_streamId.put(src.take(1).front & 127); src.popFront; // ignore reserved bit
+		m_streamId.put(src.take(3));
+		src.popFrontN(3);
 	}
 
 	@property HTTP2FrameType type() @safe @nogc { return m_type; }
