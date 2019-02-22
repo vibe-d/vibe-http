@@ -209,6 +209,10 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 	// both status line + headers (already unpacked in `headers`)
 	// defined in vibe.http.server because of protected struct HTTPServerRequest
 	parseHTTP2RequestHeader(headers, req);
+	if(req.host.empty) {
+		req.host = tcp_connection.localAddress.toString;
+		req.requestURI = req.host;
+	}
 
 	string reqhost;
 	ushort reqport = 0;
@@ -293,7 +297,7 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 	parsed = true;
 	logTrace("persist: %s", req.persistent);
 	//keep_alive = req.persistent;
-	logInfo("Received %s request on stream ID %d", req.method, stream.streamId);
+	logDebug("Received %s request on stream ID %d", req.method, stream.streamId);
 
 	// create HEADERS frame
 	auto statusLine = AllocAppender!string(alloc);
@@ -326,7 +330,7 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 		assert(false);
 	}
 
-	logInfo("Sent HEADERS frame on streamID " ~ stream.streamId.to!string);
+	logDebug("Sent HEADERS frame on streamID " ~ stream.streamId.to!string);
 
 
 	if(req.method != HTTPMethod.HEAD) {
@@ -356,7 +360,7 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 				}
 			}
 
-			logInfo("[DATA] Starting dispatch task");
+			logDebug("[DATA] Starting dispatch task");
 
 			try {
 				auto wlen = sendWindowLength(connection, stream.streamId, dataFrame.data.length);
@@ -367,7 +371,7 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 				while(wlen <= dw.length) {
 					// send is over
 					if(dw.length == 0) {
-						logInfo("[DATA] Completed DATA frame dispatch");
+						logDebug("[DATA] Completed DATA frame dispatch");
 						// remove task from waiting state
 						doneCondition(connection);
 						break;
@@ -375,12 +379,12 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 
 					// wait to resume and retry
 					if(wlen == 0) {
-						logInfo("[DATA] Dispatch task waiting for WINDOW_UPDATE");
+						logDebug("[DATA] Dispatch task waiting for WINDOW_UPDATE");
 
 						// after 60 seconds waiting, terminate dispatch
 						() @trusted {
 							auto timer = setTimer(60.seconds, {
-									logInfo("[DATA] timer expired, aborting dispatch");
+									logDebug("[DATA] timer expired, aborting dispatch");
 									notifyCondition(connection);
 									abort = true;
 									});
@@ -393,13 +397,13 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 							else return;
 						} ();
 
-						logInfo("[DATA] Dispatch task resumed");
+						logDebug("[DATA] Dispatch task resumed");
 
 					} else {
 						// write chunk that can be sent
 						cstr.write(dw[0..wlen]);
 
-						logInfo("[DATA] Sent frame chunk (%d/%d bytes) on streamID %d",
+						logDebug("[DATA] Sent frame chunk (%d/%d bytes) on streamID %d",
 								wlen, dw.length, stream.streamId);
 						dw.popFrontN(wlen);
 						updateWindow(connection, stream.streamId, wlen);
