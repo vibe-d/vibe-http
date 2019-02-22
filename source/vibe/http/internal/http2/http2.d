@@ -147,7 +147,7 @@ bool startHTTP2Connection(ConnectionStream, H)(ConnectionStream connection, stri
 {
 	// init settings
 	HTTP2Settings settings;
-	logInfo("Starting HTTP/2 connection");
+	logDebug("Starting HTTP/2 connection");
 
 	// try decoding settings
 	if (settings.decode!Base64URL(h2settings)) {
@@ -213,7 +213,7 @@ unittest {
   * if the protocol is not set, it replies with HTTP/1.1
   */
 TLSALPNCallback http2Callback = (string[] choices) {
-	//logInfo("http2Callback");
+	//logDebug("http2Callback");
 	if (choices.canFind("h2")) return "h2";
 	else return "http/1.1";
 };
@@ -224,20 +224,23 @@ private alias TLSStreamType = ReturnType!(createTLSStreamFL!(InterfaceProxy!Stre
   * server should receive a connection preface from the client
   * server connection preface consists of a SETTINGS Frame
   */
-void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream, TCPConnection connection, HTTP2ServerContext context) @safe
+void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream,
+		TCPConnection connection, HTTP2ServerContext context, bool priorKnowledge=false) @safe
 	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStreamType))
 {
-	logInfo("HTTP/2 Connection Handler");
+	logDebug("HTTP/2 Connection Handler");
 
 	// read the connection preface
-	ubyte[24] h2connPreface;
-	stream.read(h2connPreface);
+	if(!priorKnowledge) {
+		ubyte[24] h2connPreface;
+		stream.read(h2connPreface);
 
-	if(h2connPreface != "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n") {
-		logWarn("Ignoring invalid HTTP/2 client connection preface");
-		return;
+		if(h2connPreface != "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n") {
+			logWarn("Ignoring invalid HTTP/2 client connection preface");
+			return;
+		}
 	}
-	logInfo("Received client http2 connection preface");
+	logDebug("Received client http2 connection preface");
 
 	// initialize the multiplexer
 	try {
@@ -248,6 +251,10 @@ void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream, TCPConnect
 		return;
 	}
 
+	// send connection preface
+	//logDebug("Sending server connection preface:");
+	//sendHTTP2SettingsFrame(stream, context);
+
 	// initialize Frame handler
 	handleHTTP2FrameChain(stream, connection, context);
 }
@@ -257,7 +264,7 @@ private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TC
 		connection, HTTP2ServerContext context) @safe
 	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStream))
 {
-	logInfo("HTTP/2 Frame Chain Handler");
+	logDebug("HTTP/2 Frame Chain Handler");
 
 	static struct CB {
 		ConnectionStream stream;
@@ -292,7 +299,7 @@ private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TC
 			case WaitForDataAsyncStatus.dataAvailable:
 				bool close = handleHTTP2Frame(stream, connection, context);
 				if(close || stream.empty) {
-					logWarn("Closing connection.");
+					logDebug("Closing connection.");
 					try {
 						removeMux(connection);
 					} catch (Exception e) {}
@@ -309,7 +316,7 @@ private bool handleHTTP2Frame(ConnectionStream)(ConnectionStream stream, TCPConn
 		connection, ref HTTP2ServerContext context) @safe
 	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStream))
 {
-	logInfo("HTTP/2 Frame Handler");
+	logDebug("HTTP/2 Frame Handler");
 	bool close = false;
 
 	() @trusted {
@@ -346,7 +353,7 @@ private bool handleHTTP2Frame(ConnectionStream)(ConnectionStream stream, TCPConn
 private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCPConnection connection,
 		ref HTTP2ServerContext context, IAllocator alloc) @trusted
 {
-	logInfo("HTTP/2 Frame Handler (Alloc)");
+	logDebug("HTTP/2 Frame Handler (Alloc)");
 
 	// TODO determine if an actor as an encoder / decoder would be useful
 	uint len = 0;
@@ -397,7 +404,7 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 			logWarn("%s: %s", "Sent GOAWAY Frame", e.message);
 			return true;
 		} else {
-			logInfo("Ignoring unsupported extension header.");
+			logDebug("Ignoring unsupported extension header.");
 			return false;
 		}
 	} catch (Exception e) {
@@ -407,7 +414,7 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 	try {
 		auto valid = registerStream(connection, header.streamId);
 
-		logInfo("Received: "~to!string(header.type)~" on streamID "~to!string(header.streamId));
+		logDebug("Received: "~to!string(header.type)~" on streamID "~to!string(header.streamId));
 		enforceHTTP2(header.streamId % 2 != 0 || header.streamId == 0, "Clients cannot register even streams", HTTP2Error.PROTOCOL_ERROR);
 
 		if(stream.needsContinuation) enforceHTTP2(header.type == HTTP2FrameType.CONTINUATION,
@@ -456,13 +463,13 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 
 				// parse headers in payload
 				if(endHeaders) {
-					logInfo("Received full HEADERS block");
+					logDebug("Received full HEADERS block");
 					handleHTTP2HeadersFrame(stream, connection, context, alloc);
 
 				} else {
 					// wait for the next CONTINUATION frame until end_headers flag is set
 					// END_STREAM flag does not count in this case
-					logInfo("Incomplete HEADERS block, waiting for CONTINUATION frame.");
+					logDebug("Incomplete HEADERS block, waiting for CONTINUATION frame.");
 					close = handleFrameAlloc(stream, connection, context, alloc);
 				}
 
@@ -494,7 +501,7 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 					handleHTTP2SettingsFrame(stream, connection, payload.data, header, context);
 				} else {
 					enforceHTTP2(payload.data.length == 0, "Invalid SETTINGS ACK (payload not empty)", HTTP2Error.FRAME_SIZE_ERROR);
-					logInfo("Received SETTINGS ACK");
+					logDebug("Received SETTINGS ACK");
 				}
 				break;
 
@@ -515,7 +522,7 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 					FixedAppender!(ubyte[], 17) buf;
 					buf.createHTTP2FrameHeader(len, header.type, 0x1, header.streamId);
 
-					logInfo("Sent PING ACK response");
+					logDebug("Sent PING ACK response");
 					stream.write(buf.data);
 					stream.write(payload.data);
 				}
@@ -533,7 +540,7 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 				//stream.write(rawBuf.data);
 				// terminate connection
 				//stream.close();
-				logWarn("Received GOAWAY Frame. Closing connection");
+				logDebug("Received GOAWAY Frame. Closing connection");
 				stream.state = HTTP2StreamState.CLOSED;
 				closeStream(connection, stream.streamId);
 				close = true;
@@ -566,7 +573,7 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 
 				// notify waiting threads if needed
 				if(checkCondition(connection)) {
-					logInfo("Notifying stopped tasks");
+					logDebug("Notifying stopped tasks");
 					notifyCondition(connection);
 					yield();
 				}
@@ -579,10 +586,10 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 				stream.putHeaderBlock(payload.data);
 				// process header block fragment in payload
 				if(endHeaders) {
-					logInfo("Received full HEADERS block");
+					logDebug("Received full HEADERS block");
 					handleHTTP2HeadersFrame(stream, connection, context, alloc);
 				} else {
-					logInfo("Incomplete HEADERS block, waiting for CONTINUATION frame.");
+					logDebug("Incomplete HEADERS block, waiting for CONTINUATION frame.");
 					handleFrameAlloc(stream, connection, context, alloc);
 				}
 				break;
@@ -626,7 +633,7 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 					logTrace("Sent DATA frame on streamID %s", stream.streamId);
 					context.resBody.nullify;
 				}
-				logInfo("Sent first HTTP/2 response to H2C connection");
+				logDebug("Sent first HTTP/2 response to H2C connection");
 				closeStream(connection, stream.streamId);
 			}
 		}
@@ -680,9 +687,10 @@ void handleHTTP2SettingsFrame(Stream)(ref Stream stream, TCPConnection connectio
 	if(stream.streamId == 0) updateConnectionWindow(connection, context.settings.initialWindowSize);
 	updateStreamConnectionWindow(connection, stream.streamId, context.settings.initialWindowSize);
 
+
 	// notify waiting threads if needed
 	if(checkCondition(connection)) {
-		logInfo("Notifying stopped tasks");
+		logDebug("Notifying stopped tasks");
 		notifyCondition(connection);
 		yield();
 	}
@@ -694,7 +702,7 @@ void handleHTTP2SettingsFrame(Stream)(ref Stream stream, TCPConnection connectio
 	if(isConnectionPreface(connection)) sendHTTP2SettingsFrame(stream, context);
 
 	stream.write(ackReply.data);
-	logInfo("Sent SETTINGS ACK");
+	logDebug("Sent SETTINGS ACK");
 }
 
 void sendHTTP2SettingsFrame(Stream)(ref Stream stream, HTTP2ServerContext context) @safe
@@ -703,7 +711,7 @@ void sendHTTP2SettingsFrame(Stream)(ref Stream stream, HTTP2ServerContext contex
 	settingDst.createHTTP2FrameHeader(36, HTTP2FrameType.SETTINGS, 0x0, 0);
 	settingDst.serializeSettings(context.settings);
 	stream.write(settingDst.data);
-	logInfo("Sent SETTINGS Frame");
+	logDebug("Sent SETTINGS Frame");
 }
 
 enum HTTP2StreamState {
@@ -796,7 +804,7 @@ struct HTTP2ConnectionStream(CS)
 			default:
 				enforceHTTP2(false, "Invalid state", HTTP2Error.PROTOCOL_ERROR);
  		}
-		logInfo("Stream: %d state: %s", m_streamId, st);
+		logDebug("Stream: %d state: %s", m_streamId, st);
 	}
 
 	@property uint streamId() @safe @nogc { return m_streamId; }
