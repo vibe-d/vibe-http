@@ -220,7 +220,7 @@ private struct DynamicTable {
 		auto nsize = computeEntrySize(header);
 		// ensure that the new entry does not exceed table capacity
 		while(m_size + nsize > m_maxsize) {
-			//logInfo("Maximum header table size exceeded"); // requires gc
+			//logDebug("Maximum header table size exceeded"); // requires gc
 			remove();
 		}
 
