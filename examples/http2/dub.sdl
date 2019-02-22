@@ -1,0 +1,6 @@
+name "prova_app"
+
+dependency "vibe-http" version="*"
+
+targetType "executable"
+versions "VibeForceALPN"
