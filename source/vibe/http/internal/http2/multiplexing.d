@@ -5,6 +5,7 @@ import vibe.utils.array : ArraySet;
 import vibe.core.sync;
 import vibe.core.log;
 import vibe.core.net;
+import vibe.core.core : yield;
 import vibe.core.concurrency : async;
 import vibe.internal.allocator;
 import vibe.internal.utilallocator: RegionListAllocator;
@@ -80,15 +81,13 @@ auto registerStream(Conn)(Conn connection, const uint sid) @trusted
 auto closeStream(Conn)(Conn connection, const uint sid) @trusted
 	if(is(Conn : TCPConnection))
 {
+	import vibe.core.core : sleep;
+	import std.datetime;
+
 	mixin(index);
 
 	// do not remove stream if pending send is due
-	if(checkCondition(connection)) return false;
-
-	if(sid > 0) logDebug("MUX: Closing stream %d on mux[%s]", sid, idx);
-	return async({
-			return multiplexers[idx].close(sid);
-		});
+	return multiplexers[idx].close(sid);
 }
 
 bool isOpenStream(Conn)(Conn connection, const uint sid) @trusted
@@ -138,10 +137,10 @@ bool isConnectionPreface(Conn)(Conn connection) @trusted
 	return multiplexers[idx].isConnPreface();
 }
 
-void waitCondition(Conn)(Conn connection) @trusted
+void waitCondition(Conn)(Conn connection, const uint sid) @trusted
 {
 	mixin(index);
-	multiplexers[idx].wait();
+	multiplexers[idx].wait(sid);
 }
 
 void notifyCondition(Conn)(Conn connection) @trusted
@@ -150,16 +149,16 @@ void notifyCondition(Conn)(Conn connection) @trusted
 	multiplexers[idx].notify();
 }
 
-uint checkCondition(Conn)(Conn connection) @trusted
+uint checkCondition(Conn)(Conn connection, const uint sid) @trusted
 {
 	mixin(index);
-	return multiplexers[idx].checkCond();
+	return multiplexers[idx].checkCond(sid);
 }
 
-void doneCondition(Conn)(Conn connection) @trusted
+void doneCondition(Conn)(Conn connection, const uint sid) @trusted
 {
 	mixin(index);
-	multiplexers[idx].endWait();
+	multiplexers[idx].endWait(sid);
 }
 //unittest {
 	//string id = "localhost:80";
@@ -187,7 +186,7 @@ struct HTTP2Multiplexer {
 		uint m_countOpen;   // current number of open streams (in m_open)
 		TaskMutex m_lock;
 		TaskCondition m_cond;
-		uint m_waiting = 0;
+		uint[uint] m_waiting;
 		ulong m_wsize;
 		ulong[uint] m_streamWSize;
 		bool m_connPreface = true;
@@ -203,18 +202,20 @@ struct HTTP2Multiplexer {
 		m_wsize = wsize;
 	}
 
-	@property void wait() @trusted
+	@property void wait(const uint sid) @trusted
 	{
 		synchronized(m_lock) {
-			m_waiting++;
+			if(!(sid in m_waiting)) m_waiting[sid] = 0;
+			else m_waiting[sid]++;
 			m_cond.wait();
 		}
 	}
 
-	@property void endWait() @trusted
+	@property void endWait(const uint sid) @trusted
 	{
 		synchronized(m_lock) {
-			m_waiting--;
+			if(!(sid in m_waiting)) m_waiting[sid] = 0;
+			else m_waiting[sid]--;
 		}
 	}
 
@@ -223,9 +224,10 @@ struct HTTP2Multiplexer {
 		m_cond.notify();
 	}
 
-	@property uint checkCond() @safe
+	@property uint checkCond(const uint sid) @safe
 	{
-		return m_waiting;
+		if(!(sid in m_waiting)) return 0;
+		return m_waiting[sid] > 0 && isOpen(sid);
 	}
 
 	@property ulong connWindow() @safe
@@ -272,7 +274,7 @@ struct HTTP2Multiplexer {
 	bool close(const uint sid) @safe
 	{
 		if(!(sid in m_open)) return false; //Cannot close a stream which is not open
-		if(m_waiting) return false; 	   //Cannot close a stream which is blocked
+		if(m_waiting[sid]) return false; 	   //Cannot close a stream which is blocked
 
 		m_lock.performLocked!({
 			m_countOpen--;
