@@ -42,7 +42,7 @@ void multiplexer(Conn)(Conn connection, const uint max, const uint wsize, const 
 {
 	mixin(index);
 
-	logInfo("Initializing multiplexer with idx: "~idx);
+	logDebug("Initializing multiplexer with idx: "~idx);
 	assert(!(idx in multiplexers));
 
 	version (VibeManualMemoryManagement)
@@ -60,7 +60,7 @@ void removeMux(Conn)(Conn connection) @trusted
 {
 	mixin(index);
 
-	logInfo("Removing multiplexer with id: "~idx);
+	logDebug("Removing multiplexer with id: "~idx);
 	multiplexers.remove(idx);
 }
 
@@ -70,7 +70,7 @@ auto registerStream(Conn)(Conn connection, const uint sid) @trusted
 {
 	mixin(index);
 
-	if(sid > 0) logInfo("MUX: Registering stream %d on mux[%s]", sid, idx);
+	if(sid > 0) logDebug("MUX: Registering stream %d on mux[%s]", sid, idx);
 	return async({
 			return multiplexers[idx].register(sid);
 		});
@@ -85,7 +85,7 @@ auto closeStream(Conn)(Conn connection, const uint sid) @trusted
 	// do not remove stream if pending send is due
 	if(checkCondition(connection)) return false;
 
-	if(sid > 0) logInfo("MUX: Closing stream %d on mux[%s]", sid, idx);
+	if(sid > 0) logDebug("MUX: Closing stream %d on mux[%s]", sid, idx);
 	return async({
 			return multiplexers[idx].close(sid);
 		});
@@ -291,7 +291,7 @@ struct HTTP2Multiplexer {
 	bool updateConnWindow(const ulong newWin) @safe
 	{
 		if(newWin > ulong.max || newWin < 0) return false;
-		logInfo("MUX: CONTROL FLOW WINDOW: from %d to %d bytes", m_wsize, newWin);
+		logDebug("MUX: CONTROL FLOW WINDOW: from %d to %d bytes", m_wsize, newWin);
 
 		m_lock.performLocked!({
 			m_wsize = newWin;
@@ -305,7 +305,7 @@ struct HTTP2Multiplexer {
 		if(newWin > ulong.max || newWin < 0) return false;
 		if(sid == 0) return true;
 
-		logInfo("MUX: CONTROL FLOW WINDOW: stream %d from %d to %d bytes",
+		logDebug("MUX: CONTROL FLOW WINDOW: stream %d from %d to %d bytes",
 				sid, (sid in m_streamWSize) ? m_streamWSize[sid] : m_wsize, newWin);
 
 		m_lock.performLocked!({

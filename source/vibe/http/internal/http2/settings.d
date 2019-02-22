@@ -148,7 +148,9 @@ struct HTTP2Settings {
 	 * might be closed as soon as possible
 	 */
 	@http2Setting(0x3, "SETTINGS_MAX_CONCURRENT_STREAMS")
-	HTTP2SettingValue maxConcurrentStreams = HTTP2SettingValue.max;
+	//HTTP2SettingValue maxConcurrentStreams = HTTP2SettingValue.max; // lowered
+	//to 2^16
+	HTTP2SettingValue maxConcurrentStreams = 65536;
 
 	// TODO FLOW_CONTROL_ERRROR on values > 2^31-1
 	@http2Setting(0x4, "SETTINGS_INITIAL_WINDOW_SIZE")
