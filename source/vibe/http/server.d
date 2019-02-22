@@ -2326,7 +2326,7 @@ struct HTTPServerResponseData {
 
 				// TODO improve handler (handleHTTP2Connection) connection management
 				auto tcp_conn = m_rawConnection.extract!TCPConnection;
-				handler(tcp_conn, tcp_conn, context);
+				handler(tcp_conn, tcp_conn, context, false);
 
 				finalize();
 				// close the existing connection
@@ -2606,7 +2606,8 @@ void parseHTTP2RequestHeader(R)(ref R headers, ref HTTPServerRequest reqStruct) 
 	req.method = cast(HTTPMethod)headers.find!((h,m) => h.name == m)(":method")[0].value;
 
 	//Host
-	req.host = cast(string)headers.find!((h,m) => h.name == m)(":authority")[0].value;
+	auto host = headers.find!((h,m) => h.name == m)(":authority");
+	if(!host.empty) req.host = cast(string)host[0].value;
 
 	//Path
 	req.path = cast(string)headers.find!((h,m) => h.name == m)(":path")[0].value;
@@ -2624,7 +2625,7 @@ void parseHTTP2RequestHeader(R)(ref R headers, ref HTTPServerRequest reqStruct) 
 	}
 }
 
-void parseRequestHeader(InputStream)(HTTPServerRequest reqStruct, InputStream http_stream, IAllocator alloc, ulong max_header_size)
+ulong parseRequestHeader(InputStream)(HTTPServerRequest reqStruct, InputStream http_stream, IAllocator alloc, ulong max_header_size)
 	if (isInputStream!InputStream)
 {
 	auto stream = FreeListRef!LimitedHTTPInputStream(http_stream, max_header_size);
@@ -2632,6 +2633,8 @@ void parseRequestHeader(InputStream)(HTTPServerRequest reqStruct, InputStream ht
 
 	logTrace("HTTP server reading status line");
 	auto reqln = () @trusted { return cast(string)stream.readLine(MaxHTTPHeaderLineLength, "\r\n", alloc); }();
+
+	if(reqln == "PRI * HTTP/2.0") return reqln.length;
 
 	logTrace("--------------------");
 	logTrace("HTTP server request:");
@@ -2659,6 +2662,7 @@ void parseRequestHeader(InputStream)(HTTPServerRequest reqStruct, InputStream ht
 	foreach (k, v; req.headers)
 		logTrace("%s: %s", k, v);
 	logTrace("--------------------");
+	return 0;
 }
 
 string formatRFC822DateAlloc(IAllocator alloc, SysTime time)

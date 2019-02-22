@@ -56,7 +56,7 @@ void decode(I, R, T)(ref I src, ref R dst, IndexingTable* ptable,  ref T alloc, 
 			enforce(nsize <= maxTableSize, "Invalid table size update");
 
 			table.updateSize(cast(HTTP2SettingValue)nsize);
-			logInfo("Updated dynamic table size to: %d octets", nsize);
+			logDebug("Updated dynamic table size to: %d octets", nsize);
 
 		} else if(bbuf & 16) { // NEVER inserted in dynamic table
 			size_t idx = decodeInteger(src, bbuf, 4);
