@@ -373,7 +373,8 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 					if(dw.length == 0) {
 						logDebug("[DATA] Completed DATA frame dispatch");
 						// remove task from waiting state
-						doneCondition(connection);
+						doneCondition(connection, stream.streamId);
+						closeStream(connection, stream.streamId);
 						break;
 					}
 
@@ -390,7 +391,7 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 									});
 
 							// wait until a new WINDOW_UPDATE is received (or timer expires)
-							waitCondition(connection);
+							waitCondition(connection, stream.streamId);
 
 							// task resumed: cancel timer
 							if(!abort) timer.stop;

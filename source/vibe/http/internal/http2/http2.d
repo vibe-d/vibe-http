@@ -572,7 +572,7 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 				}
 
 				// notify waiting threads if needed
-				if(checkCondition(connection)) {
+				if(checkCondition(connection, stream.streamId)) {
 					logDebug("Notifying stopped tasks");
 					notifyCondition(connection);
 					yield();
@@ -689,7 +689,7 @@ void handleHTTP2SettingsFrame(Stream)(ref Stream stream, TCPConnection connectio
 
 
 	// notify waiting threads if needed
-	if(checkCondition(connection)) {
+	if(checkCondition(connection, stream.streamId)) {
 		logDebug("Notifying stopped tasks");
 		notifyCondition(connection);
 		yield();
