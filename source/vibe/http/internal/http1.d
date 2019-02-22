@@ -230,7 +230,16 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 		}
 
 		// basic request parsing
-		parseRequestHeader(req, reqReader, request_allocator, settings.maxRequestHeaderSize);
+		auto h2 = parseRequestHeader(req, reqReader, request_allocator, settings.maxRequestHeaderSize);
+		if(h2) {
+			// start http/2 with prior knowledge
+			ubyte[] dummy; dummy.length = 22 - h2;
+			http_stream.read(dummy); // finish reading connection preface
+			auto h2settings = HTTP2Settings();
+			auto h2context = HTTP2ServerContext(listen_info, h2settings);
+			handleHTTP2Connection(tcp_connection, tcp_connection, h2context, true);
+			return true;
+		}
 
 		logTrace("Got request header.");
 
