@@ -621,35 +621,47 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 				break;
 		}
 
-		// in case of H2C protocol switching
+/* ==================================================== */
+/* 				  `h2c`: First Response
+/* ==================================================== */
 		static if(!is(ConnectionStream : TLSStream)) {
 
-			if(!context.resFrame.isNull) { // h2c first request
-				// response is sent on stream ID 1
-				context.next_sid = 1;
-				auto headerFrame = context.resFrame.get;
+			if(context.resFrame) { // h2c: first HEADER response
 
-				if(headerFrame.length < context.settings.maxFrameSize)
+				context.next_sid = 1;
+
+				if(context.resFrame.length < context.settings.maxFrameSize)
 				{
-					headerFrame[4] += 0x4; // set END_HEADERS flag (sending complete header)
+					auto isEndStream = (context.resBody && !context.resBody.empty) ? 0x0 : 0x1;
+					context.resFrame[4] += 0x4 + isEndStream;
+
 					try {
-						stream.write(headerFrame);
+						stream.write(context.resFrame);
 					} catch (Exception e) {
 						logWarn("Unable to write HEADERS Frame to stream");
 					}
+
 				} else {
 					// TODO CONTINUATION frames
 					assert(false);
 				}
-				context.resFrame.nullify;
+
+				alloc.dispose(context.resFrame);
 
 				// send DATA (body) if present
-				if(!context.resBody.isNull) {
+				// since the first response is part of HTTP/2 initialization,
+				// this task is NOT executed asynchronously (for now) TODO
+				if(context.resBody) {
+
 					auto dataFrame = AllocAppender!(ubyte[])(alloc);
 
 					// create DATA Frame with END_STREAM (0x1) flag
-					dataFrame.createHTTP2FrameHeader(context.resBody.get.length.to!uint, HTTP2FrameType.DATA, 0x1, context.next_sid);
-					dataFrame.put(context.resBody.get);
+					dataFrame.createHTTP2FrameHeader(cast(uint)context.resBody.length, HTTP2FrameType.DATA, 0x1, context.next_sid);
+
+					// append the DATA body
+					dataFrame.put(context.resBody);
+
+					// try writing data
 					try {
 						stream.write(dataFrame.data);
 					} catch(Exception e) {
@@ -657,12 +669,14 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 					}
 
 					logTrace("Sent DATA frame on streamID %s", stream.streamId);
-					context.resBody.nullify;
+
+					alloc.dispose(context.resBody);
 				}
-				logDebug("Sent first HTTP/2 response to H2C connection");
-				closeStream(connection, stream.streamId);
+
+				closeStream(context.multiplexerID, stream.streamId);
 			}
 		}
+
 	} catch(HTTP2Exception e) {
 		auto f = buildGOAWAYFrame(stream.streamId, e.code);
 		stream.write(f);
