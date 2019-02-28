@@ -292,51 +292,64 @@ private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TC
 		}
 	}
 }
-/// initializes an allocator and handles stream / connection closing
+
+/// initializes an allocator and handles stream closing
 private bool handleHTTP2Frame(ConnectionStream)(ConnectionStream stream, TCPConnection
-		connection, ref HTTP2ServerContext context) @safe
+		connection, ref HTTP2ServerContext context) @trusted
 	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStream))
 {
+	import vibe.internal.utilallocator: RegionListAllocator;
 	logDebug("HTTP/2 Frame Handler");
+
 	bool close = false;
 
-	() @trusted {
+	// init the allocator
+	version (VibeManualMemoryManagement)
+		scope alloc = new RegionListAllocator!(shared(Mallocator), false)(1024, Mallocator.instance);
+	else
+		scope alloc = new RegionListAllocator!(shared(GCAllocator), true)(1024, GCAllocator.instance);
 
-		import vibe.internal.utilallocator: RegionListAllocator;
-		version (VibeManualMemoryManagement)
-			scope alloc = new RegionListAllocator!(shared(Mallocator), false)(1024, Mallocator.instance);
-		else
-			scope alloc = new RegionListAllocator!(shared(GCAllocator), true)(1024, GCAllocator.instance);
-		auto h2stream = HTTP2ConnectionStream!ConnectionStream(stream, 0, alloc);
+	// ALPN protocol switching (h2) requires the table to be allocated now
+	// h2c: see startHTTP2Connection
+	if(!context.table)
+		context.table = alloc.make!IndexingTable(context.settings.headerTableSize);
 
-		while(true) {
-			close = handleFrameAlloc(h2stream, connection, context, alloc);
+	// create a HTTP/2 Stream
+	auto h2stream = HTTP2ConnectionStream!ConnectionStream(stream, 0, alloc);
 
-			if(h2stream.state == HTTP2StreamState.CLOSED) {
-				try {
-					closeStream(connection, h2stream.streamId);
-				} catch(Exception e) {
-					close = true;
-				}
-				break;
+	// ensures streams are processed until closed
+	while(true) {
+
+		// pass the stream to the handler
+		close = handleFrameAlloc(h2stream, connection, context, alloc);
+
+		// if stream has to be closed
+		if(h2stream.state == HTTP2StreamState.CLOSED) {
+			try {
+				closeStream(context.multiplexerID, h2stream.streamId);
+			} catch(Exception e) {
+				// error occourred: close connection
+				close = true;
 			}
+			break;
 		}
-	} ();
+	}
 
 	return close;
 }
 
+/// used (mixin) to check the validity of the received Frame w.r.to its stream ID
+private const string checkvalid = "enforceHTTP2(valid, \"Invalid stream ID\", HTTP2Error.STREAM_CLOSED);";
+
 /** Receives an HTTP2ConnectionStream, and handles the data received by decoding frames
   * Currently supports simple requests / responses
   * Stream Lifecycle is treated according to RFC 7540, Section 5.1
-  * TODO flow control through WINDOW_UPDATE frames
 */
 private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCPConnection connection,
 		ref HTTP2ServerContext context, IAllocator alloc) @trusted
 {
 	logDebug("HTTP/2 Frame Handler (Alloc)");
 
-	// TODO determine if an actor as an encoder / decoder would be useful
 	uint len = 0;
 
 	// payload buffer
@@ -348,9 +361,14 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 	bool endHeaders = false;
 	bool isAck = false;
 	bool close = false;
-	HTTP2FrameStreamDependency sdep;
+	scope HTTP2FrameStreamDependency sdep;
 
-	// read header
+	// frame struct
+	scope HTTP2FrameHeader header;
+
+/* ==================================================== */
+/* 				read received header 					*/
+/* ==================================================== */
 	if(stream.canRead) {
 		try {
 			len = stream.readHeader(rawBuf);
@@ -369,12 +387,16 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 	rawBuf.reserve(len);
 	payload.reserve(len);
 
-	// read payload if needed
+/* ==================================================== */
+/* 				read received payload 					*/
+/* ==================================================== */
 	if(len) stream.readPayload(rawBuf, len);
+	else return false;
 
-	// parse frame
-	HTTP2FrameHeader header;
 
+/* ==================================================== */
+/* 				parse received Frame 					*/
+/* ==================================================== */
 	try {
 		header = payload.unpackHTTP2Frame(rawBuf.data, endStream, endHeaders, isAck, sdep);
 	} catch (HTTP2Exception e) {
