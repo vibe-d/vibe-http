@@ -1,12 +1,10 @@
 module vibe.http.internal.http2.multiplexing;
 
-
-import vibe.utils.array : ArraySet;
+import vibe.utils.hashmap;
 import vibe.core.sync;
 import vibe.core.log;
 import vibe.core.net;
 import vibe.core.core : yield;
-import vibe.core.concurrency : async;
 import vibe.internal.allocator;
 import vibe.internal.utilallocator: RegionListAllocator;
 
@@ -26,25 +24,28 @@ import std.container : RedBlackTree;
   *	   since HTTP/2 opens only 1 tcp connection on which multiple frames can be sent.
 */
 
+
+/* ======================================================= */
+/* ========= Multiplexers (one per connection) =========== */
+/* ======================================================= */
+
 private {
 	__gshared HTTP2Multiplexer[string] multiplexers;
 }
 
-// multiplexer index is SRCIP:SRCPORT~DESTIP:DESTPORT (unique representation of a TCP socket
-private const string index = "
-				auto pa = connection.peerAddress;
-				if(pa == \"<UNSPEC>\")
-					enforce(false, \"Unable to find multiplexer. Closing task.\");
-				auto idx = connection.localAddress.toString~pa;";
-
-// init the multiplexer
-void multiplexer(Conn)(Conn connection, const uint max, const uint wsize, const uint tsize=4096) @trusted
-	if(is(Conn : TCPConnection))
+/** Multiplexer ID is SRCIP:SRCPORT~DESTIP:DESTPORT
+  * (unique representation of a TCP socket)
+  */
+string buildMultiplexerID(Conn)(Conn connection) @trusted
 {
-	mixin(index);
+	return connection.localAddress.toString ~ connection.peerAddress;
+}
 
+/// initialize the stream multiplexer
+void multiplexer(const string idx, const uint max, const uint wsize, const uint tsize=4096) @trusted
+{
+	assert(!(idx in multiplexers), "Cannot register MUX with ID: " ~ idx);
 	logDebug("Initializing multiplexer with idx: "~idx);
-	assert(!(idx in multiplexers));
 
 	version (VibeManualMemoryManagement)
 		scope alloc = new RegionListAllocator!(shared(Mallocator), false)
@@ -56,130 +57,117 @@ void multiplexer(Conn)(Conn connection, const uint max, const uint wsize, const 
 	multiplexers[idx] = HTTP2Multiplexer(alloc, max, wsize, tsize);
 }
 
-void removeMux(Conn)(Conn connection) @trusted
-	if(is(Conn : TCPConnection))
+/// remove a MUX (connection closed)
+void removeMux(const string idx) @trusted
 {
-	mixin(index);
-
 	logDebug("Removing multiplexer with id: "~idx);
 	multiplexers.remove(idx);
 }
 
-// register a stream ID
-auto registerStream(Conn)(Conn connection, const uint sid) @trusted
-	if(is(Conn : TCPConnection))
-{
-	mixin(index);
+/* ======================================================= */
+/* ================ STREAM MANAGEMENT =================== */
+/* ======================================================= */
 
+/// register a stream on a MUX
+auto registerStream(const string idx, const uint sid) @trusted
+{
 	if(sid > 0) logDebug("MUX: Registering stream %d on mux[%s]", sid, idx);
-	return async({
-			return multiplexers[idx].register(sid);
-		});
+	return multiplexers[idx].register(sid);
 }
 
-// close a stream ID
-auto closeStream(Conn)(Conn connection, const uint sid) @trusted
-	if(is(Conn : TCPConnection))
+/// close a stream on a MUX
+auto closeStream(const string idx, const uint sid) @trusted
 {
-	import vibe.core.core : sleep;
-	import std.datetime;
-
-	mixin(index);
-
-	// do not remove stream if pending send is due
 	return multiplexers[idx].close(sid);
 }
 
-bool isOpenStream(Conn)(Conn connection, const uint sid) @trusted
-	if(is(Conn : TCPConnection))
+/// check if stream is OPEN (meaning, currently registered and active)
+auto isOpenStream(const string idx, const uint sid) @trusted
 {
-	mixin(index);
-
 	return multiplexers[idx].isOpen(sid);
 }
 
-ulong connectionWindow(Conn)(Conn connection) @trusted
+/// connection preface (SETTINGS) can be received only ONCE
+auto isConnectionPreface(const string idx) @trusted
 {
-	mixin(index);
-
-	return multiplexers[idx].connWindow;
-}
-
-bool updateConnectionWindow(Conn)(Conn connection, const ulong newWin) @trusted
-{
-	mixin(index);
-
-	return async({
-			return multiplexers[idx].updateConnWindow(newWin);
-		});
-}
-
-ulong streamConnectionWindow(Conn)(Conn connection, const uint sid) @trusted
-{
-	mixin(index);
-
-	return multiplexers[idx].streamConnWindow(sid);
-}
-
-bool updateStreamConnectionWindow(Conn)(Conn connection, const uint sid, const ulong newWin) @trusted
-{
-	mixin(index);
-
-	return async({
-			return multiplexers[idx].updateStreamConnWindow(sid, newWin);
-		});
-}
-
-bool isConnectionPreface(Conn)(Conn connection) @trusted
-{
-	mixin(index);
-
 	return multiplexers[idx].isConnPreface();
 }
 
-void waitCondition(Conn)(Conn connection, const uint sid) @trusted
+/* ======================================================= */
+/* ================= FLOW CONTROL ======================== */
+/* ======================================================= */
+
+/** Per-connection window
+  * Valid for EVERY stream in MUX[idx]
+  */
+auto connectionWindow(const string idx) @trusted
 {
-	mixin(index);
+	return multiplexers[idx].connWindow;
+}
+
+/// Update the connection window value
+auto updateConnectionWindow(const string idx, const ulong newWin) @trusted
+{
+	return multiplexers[idx].updateConnWindow(newWin);
+}
+
+/** Per-stream window
+  * Valid for stream `sid` in MUX[idx]
+  */
+auto streamConnectionWindow(const string idx, const uint sid) @trusted
+{
+	return multiplexers[idx].streamConnWindow(sid);
+}
+
+/// Update the stream connection window value
+auto updateStreamConnectionWindow(const string idx, const uint sid, const ulong newWin) @trusted
+{
+	return multiplexers[idx].updateStreamConnWindow(sid, newWin);
+}
+
+/** A TaskCondition is used to synchronize DATA frame sending
+  * this enforces flow control on every outgoing DATA frame
+  * So that the client-established connection/stream window
+  * is not exceeded.
+  * Each connection (MUX) has its own condition.
+  */
+void waitCondition(const string idx, const uint sid) @trusted
+{
 	multiplexers[idx].wait(sid);
 }
 
-void notifyCondition(Conn)(Conn connection) @trusted
+/// signal the waiting task(s) that a change
+/// in the connection window has occourred
+void notifyCondition(const string idx) @trusted
 {
-	mixin(index);
 	multiplexers[idx].notify();
 }
 
-uint checkCondition(Conn)(Conn connection, const uint sid) @trusted
+/// check if waiting tasks are enqueued for this connection
+uint checkCondition(const string idx, const uint sid) @trusted
 {
-	mixin(index);
 	return multiplexers[idx].checkCond(sid);
 }
 
-void doneCondition(Conn)(Conn connection, const uint sid) @trusted
+/// signal that the DATA dispatch is over
+/// task is no longer enqueued
+void doneCondition(const string idx, const uint sid) @trusted
 {
-	mixin(index);
 	multiplexers[idx].endWait(sid);
 }
-//unittest {
-	//string id = "localhost:80";
-	//multiplexer(id, 2);
 
-	//auto reg = registerStream(id, 1);
-	//assert(reg.getResult);
-	//auto cls = closeStream(id, 1);
+/** Underlying multiplexer data structure
+  * Uses a TaskMutex to perform sensitive operations
+  * since multiple streams might be operating on the same
+  * connection (MUX)
+  */
+private struct HTTP2Multiplexer {
+	/// used to register open streams, which must be unique
+	private alias H2Queue = RedBlackTree!uint;
 
-	//assert(multiplexers.length == 1);
-	//assert(cls.getResult);
-
-	//id.removeMux();
-	//assert(multiplexers.length == 0);
-//}
-
-private alias H2Queue = RedBlackTree!uint;
-
-struct HTTP2Multiplexer {
 	private {
-		H2Queue m_open;		// buffer of open streams
+		IAllocator m_alloc;
+		H2Queue m_open;		// set of open streams
 		uint m_closed;		// index of the last closed stream
 		uint m_last;		// index of last open stream
 		uint m_max;			// maximum number of streams open at the same time
@@ -192,16 +180,23 @@ struct HTTP2Multiplexer {
 		bool m_connPreface = true;
 	}
 
+	@disable this();
+
 	this(Alloc)(Alloc alloc, const uint max, const ulong wsize, const uint tsize=4096) @trusted
 	{
-		m_lock = new TaskMutex;
-		m_cond = new TaskCondition(m_lock);
-		m_open = new H2Queue();
+		m_alloc = alloc;
+		m_lock = m_alloc.make!TaskMutex();
+		m_cond = m_alloc.make!TaskCondition(m_lock);
+		m_open = m_alloc.make!H2Queue();
 		m_last = 0;
 		m_max = max;
 		m_wsize = wsize;
 	}
 
+	/** The methods from here downwards
+	  * are not supposed to be used directly,
+	  * but through the documented wrappers above.
+	  */
 	@property void wait(const uint sid) @trusted
 	{
 		synchronized(m_lock) {
@@ -274,7 +269,7 @@ struct HTTP2Multiplexer {
 	bool close(const uint sid) @safe
 	{
 		if(!(sid in m_open)) return false; //Cannot close a stream which is not open
-		if(m_waiting[sid]) return false; 	   //Cannot close a stream which is blocked
+		if(sid in m_waiting && m_waiting[sid]) return false; //Cannot close a stream which is blocked
 
 		m_lock.performLocked!({
 			m_countOpen--;

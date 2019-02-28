@@ -307,30 +307,39 @@ struct HTTP2ServerContext
 		HTTPServerContext m_context;
 		Nullable!HTTP2Settings m_settings;
 		uint m_sid = 0;
-		IndexingTable* m_table;
+		string m_muxId;
 	}
 
+	alias m_context this;
+
 	// used to mantain the first request in case of `h2c` protocol switching
-	Nullable!(ubyte[]) resFrame;
-	Nullable!(ubyte[]) resBody;
+	// TODO find alternative approach
+	ubyte[] resFrame;
+	ubyte[] resBody;
+
+	// connection-persistent indexing table
+	IndexingTable* table;
 
 	this(HTTPServerContext ctx, HTTP2Settings settings) @safe
 	{
 		m_context = ctx;
 		m_settings = settings;
-		m_table = new IndexingTable(settings.headerTableSize);
 	}
 
 	this(HTTPServerContext ctx) @safe
 	{
 		m_context = ctx;
-		m_table = new IndexingTable(4096); // default value for headertablesize
 	}
 
+	/// the ID for the multiplexer should be persistent through the connection
+	@property string multiplexerID() @safe { assert(!m_muxId.empty); return m_muxId; }
 
-	alias m_context this;
-
-	@property IndexingTable* table() { return m_table; }
+	/// pre-allocated
+	@property void multiplexerID(string id) @safe
+	{
+		assert(m_muxId.empty);
+		m_muxId = id;
+	}
 
 	@property HTTPServerContext h1context() @safe @nogc { return m_context; }
 
@@ -350,7 +359,7 @@ struct HTTP2ServerContext
 		m_settings = settings;
 		() @trusted {
 			if (settings.headerTableSize != 4096) {
-				m_table.updateSize(settings.headerTableSize);
+				table.updateSize(settings.headerTableSize);
 			}
 		} ();
 	}
