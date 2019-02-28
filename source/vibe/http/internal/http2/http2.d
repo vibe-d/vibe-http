@@ -215,22 +215,27 @@ void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream,
 
 	// initialize the multiplexer
 	try {
-		multiplexer(connection, context.settings.maxConcurrentStreams,
-					context.settings.initialWindowSize, context.settings.headerTableSize);
+		context.multiplexerID = buildMultiplexerID(connection);
+
+		multiplexer(context.multiplexerID,
+					context.settings.maxConcurrentStreams,
+					context.settings.initialWindowSize,
+					context.settings.headerTableSize);
+
 	} catch (Exception e) {
 		logWarn(e.msg);
 		return;
 	}
 
-	// send connection preface
-	//logDebug("Sending server connection preface:");
-	//sendHTTP2SettingsFrame(stream, context);
-
 	// initialize Frame handler
 	handleHTTP2FrameChain(stream, connection, context);
 }
 
-/// async frame handler
+/* ==================================================== */
+/* 					FRAME HANDLING						*/
+/* ==================================================== */
+
+/// async frame handler: in charge of closing the connection if no data flows
 private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TCPConnection
 		connection, HTTP2ServerContext context) @safe
 	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStream))
@@ -260,20 +265,25 @@ private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TC
 
 			case WaitForDataAsyncStatus.noMoreData:
 				try {
-					removeMux(connection);
+					removeMux(context.multiplexerID);
 				} catch (Exception e) {}
+
 				stream.finalize();
 				connection.close();
 				logWarn("Reached end of stream.");
 				return;
 
 			case WaitForDataAsyncStatus.dataAvailable:
+				// start the frame handler
 				bool close = handleHTTP2Frame(stream, connection, context);
+
+				// determine if this connection needs to be closed
 				if(close || stream.empty) {
 					logDebug("Closing connection.");
 					try {
-						removeMux(connection);
+						removeMux(context.multiplexerID);
 					} catch (Exception e) {}
+
 					stream.finalize();
 					connection.close();
 					return;
