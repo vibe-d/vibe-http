@@ -147,11 +147,13 @@ unittest {
 	assert(res == expected);
 }
 
-/** Similar to originalHandleRequest but adapted to HTTP/2
-  * the main changes are parsing and reading / writing to stream
+/* ======================================================= */
+/* 					HTTP/2 REQUEST HANDLING 			   */
+/* ======================================================= */
+
+/** Similar to originalHandleRequest, adapted to HTTP/2
   * The request is converted to HTTPServerRequest through parseHTTP2RequestHeader
-  * once the HTTPServerResponse is built, HEADERS frame and optionally DATA Frame is sent
-  * TODO: CONTINUATION frames in case headers exceed maximum size allowed
+  * once the HTTPServerResponse is built, HEADERS frame and (optionally) DATA Frames are sent
 */
 bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPConnection tcp_connection, HTTP2ServerContext h2context, HTTP2HeaderTableField[] headers, IndexingTable* table, scope IAllocator alloc) @safe
 {
@@ -181,6 +183,7 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 	InterfaceProxy!ConnectionStream cproxy = tcp_connection;
 	InterfaceProxy!Stream cstream = stream.connection; // TCPConnection / TLSStream
 	auto res = HTTPServerResponse(cstream, cproxy, settings, alloc);
+
 	// check for TLS encryption
 	bool istls;
 	static if(is(UStream : TLSStream)) {
@@ -259,12 +262,12 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 
 	// handle Expect header
 	if (auto pv = "Expect" in req.headers) {
+		assert(false); // TODO determine if actually used with HTTP/2 (PUSH_PROMISE?)
 		if (icmp2(*pv, "100-continue") == 0) {
 			logTrace("sending 100 continue");
 			InetHeaderMap hmap;
 			auto cres =	buildHeaderFrame!(StartLine.RESPONSE)(
 					"HTTP/1.1 100 Continue\r\n\r\n", hmap, h2context, table, alloc, istls);
-			// TODO return / send header
 		}
 	}
 
