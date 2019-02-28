@@ -2626,7 +2626,7 @@ void parseHTTP2RequestHeader(R)(ref R headers, ref HTTPServerRequest reqStruct) 
 	}
 }
 
-ulong parseRequestHeader(InputStream)(HTTPServerRequest reqStruct, InputStream http_stream, IAllocator alloc, ulong max_header_size)
+uint parseRequestHeader(InputStream)(HTTPServerRequest reqStruct, InputStream http_stream, IAllocator alloc, ulong max_header_size)
 	if (isInputStream!InputStream)
 {
 	auto stream = FreeListRef!LimitedHTTPInputStream(http_stream, max_header_size);
@@ -2635,7 +2635,7 @@ ulong parseRequestHeader(InputStream)(HTTPServerRequest reqStruct, InputStream h
 	logTrace("HTTP server reading status line");
 	auto reqln = () @trusted { return cast(string)stream.readLine(MaxHTTPHeaderLineLength, "\r\n", alloc); }();
 
-	if(reqln == "PRI * HTTP/2.0") return reqln.length;
+	if(reqln == "PRI * HTTP/2.0") return cast(uint)reqln.length;
 
 	logTrace("--------------------");
 	logTrace("HTTP server request:");

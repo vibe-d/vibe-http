@@ -367,7 +367,7 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 			try {
 
 				auto abort = false;
-				ulong done = 0;
+				uint done = 0;
 
 				// window length
 				uint wlen = sendWindowLength(h2context.multiplexerID,

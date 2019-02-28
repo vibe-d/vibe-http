@@ -231,10 +231,12 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 		}
 
 		// basic request parsing
-		auto h2 = parseRequestHeader(req, reqReader, request_allocator, settings.maxRequestHeaderSize);
+		uint h2 = parseRequestHeader(req, reqReader, request_allocator, settings.maxRequestHeaderSize);
 		if(h2) {
 			// start http/2 with prior knowledge
-			ubyte[] dummy; dummy.length = 22 - h2;
+			uint len = 22 - h2;
+			ubyte[] dummy; dummy.length = len;
+
 			http_stream.read(dummy); // finish reading connection preface
 			auto h2settings = HTTP2Settings();
 			auto h2context = HTTP2ServerContext(listen_info, h2settings);
