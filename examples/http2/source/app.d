@@ -83,5 +83,6 @@ void main()
 	listenHTTP!bigHandleReq(bigTLSSettings);
 
 /* ========== Run both `listenHTTP` handlers ========== */
-	runApplication();
+	// UNCOMMENT to run
+	//runApplication();
 }
