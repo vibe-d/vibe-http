@@ -191,64 +191,8 @@ bool startHTTP2Connection(ConnectionStream, H)(ConnectionStream connection, stri
 	}
 }
 
-unittest {
-	import vibe.core.core : runApplication;
-	// empty handler, just to test if protocol switching works
-	void handleReq(HTTPServerRequest req, HTTPServerResponse res)
-	@safe {
-		if (req.path == "/")
-			res.writeBody("Hello, World! This response is sent through HTTP/2");
-	}
-
-	auto settings = HTTPServerSettings();
-	settings.port = 8090;
-	settings.bindAddresses = ["localhost"];
-
-	listenHTTP!handleReq(settings);
-	//runApplication();
-}
-
-unittest {
-	import vibe.core.core : runApplication;
-
-	void handleRequest (HTTPServerRequest req, HTTPServerResponse res)
-	@safe {
-		//if (req.path == "/")
-			res.writeBody("Hello, World! This response is sent through HTTP/2\n");
-	}
-
-
-	HTTPServerSettings settings;
-	settings.port = 8091;
-	settings.bindAddresses = ["127.0.0.1", "192.168.1.131"];
-	settings.tlsContext = createTLSContext(TLSContextKind.server);
-	settings.tlsContext.useCertificateChainFile("tests/server.crt");
-	settings.tlsContext.usePrivateKeyFile("tests/server.key");
-
-	// set alpn callback to support HTTP/2
-	// should accept the 'h2' protocol request
-	settings.tlsContext.alpnCallback(http2Callback);
-
-	// dummy, just for testing
-	listenHTTP!handleRequest(settings);
-	runApplication();
-}
-
-/**
-  * an ALPN callback which can be used to detect the "h2" protocol
-  * must be set before initializing the server with 'listenHTTP'
-  * if the protocol is not set, it replies with HTTP/1.1
-  */
-TLSALPNCallback http2Callback = (string[] choices) {
-	//logDebug("http2Callback");
-	if (choices.canFind("h2")) return "h2";
-	else return "http/1.1";
-};
-
-private alias TLSStreamType = ReturnType!(createTLSStreamFL!(InterfaceProxy!Stream));
-
-/** server & client should send a connection preface
-  * server should receive a connection preface from the client
+/** client AND server should send a connection preface
+  * server should receive a connection preface from the client + SETTINGS Frame
   * server connection preface consists of a SETTINGS Frame
   */
 void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream,
