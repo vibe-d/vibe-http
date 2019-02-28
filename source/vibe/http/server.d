@@ -1017,9 +1017,9 @@ struct HTTPServerResponse {
 		return m_data.bodyWriter;
 	}
 
-	package @property void bodyWriterH2(T)(ref T writer)
+	package @property void bodyWriterH2(T)(ref T writer, const bool writeH = false)
 	{
-		m_data.bodyWriterH2(writer);
+		m_data.bodyWriterH2(writer, writeH);
 	}
 
 	/** Sends a redirect request to the client.
@@ -2223,12 +2223,13 @@ struct HTTPServerResponseData {
 		  * Used to change the bodyWriter during a HTTP/2 connection
 		  */
 		import vibe.stream.memory;
-		@property void bodyWriterH2(T)(ref T writer) @safe
+		@property void bodyWriterH2(T)(ref T writer, const bool writeH = false) @safe
 			if(isOutputStream!T)
 		{
 			assert(!m_bodyWriter, "Unable to set bodyWriter");
+
 			// write the current set headers before initiating the bodyWriter
-			if(!m_headerWritten) writeHeader(writer);
+			if(writeH) writeHeader(writer);
 
 			static if(!is(T == InterfaceProxy!OutputStream)) {
 				InterfaceProxy!OutputStream bwriter = writer;
