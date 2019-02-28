@@ -12,7 +12,7 @@ import vibe.http.status;
 import vibe.http.server;
 import vibe.core.log;
 import vibe.core.stream;
-import vibe.core.core; 
+import vibe.core.core;
 import vibe.internal.interfaceproxy;
 import vibe.stream.tls;
 import vibe.internal.allocator;
@@ -262,13 +262,13 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPCo
 
 	// handle Expect header
 	if (auto pv = "Expect" in req.headers) {
-		assert(false); // TODO determine if actually used with HTTP/2 (PUSH_PROMISE?)
 		if (icmp2(*pv, "100-continue") == 0) {
 			logTrace("sending 100 continue");
 			InetHeaderMap hmap;
 			auto cres =	buildHeaderFrame!(StartLine.RESPONSE)(
 					"HTTP/1.1 100 Continue\r\n\r\n", hmap, h2context, table, alloc, istls);
 		}
+		assert(false); // TODO determine if actually used with HTTP/2 (PUSH_PROMISE?)
 	}
 
 	// eagerly parse the URL as its lightweight and defacto @nogc
