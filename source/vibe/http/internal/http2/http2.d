@@ -134,12 +134,27 @@ import std.variant : Algebraic;
 
 */
 
+/**
+  * an ALPN callback which can be used to detect the "h2" protocol
+  * must be set before initializing the server with 'listenHTTP'
+  * if the protocol is not set, it replies with HTTP/1.1
+  */
+TLSALPNCallback http2Callback = (string[] choices) {
+	//logDebug("http2Callback");
+	if (choices.canFind("h2")) return "h2";
+	else return "http/1.1";
+};
 
-/*
- * Check if SETTINGS payload is valid by trying to decode it
- * if !valid, close connection and refuse to upgrade (RFC) - TODO discuss
- * if valid, send SWITCHING_PROTOCOL response and start an HTTP/2 connection handler
- */
+private alias TLSStreamType = ReturnType!(createTLSStreamFL!(InterfaceProxy!Stream));
+
+/* ==================================================== */
+/* 				CONNECTION INITIALIZATION				*/
+/* ==================================================== */
+
+/** h2c protocol switching ONLY: Check if SETTINGS payload is valid by trying to decode it
+  * if !valid, close connection and refuse to upgrade (RFC)
+  * if valid, send SWITCHING_PROTOCOL response and start an HTTP/2 connection handler
+  */
 bool startHTTP2Connection(ConnectionStream, H)(ConnectionStream connection, string h2settings,
 		HTTP2ServerContext context, HTTPServerResponse switchRes, H headers, string st,
 		IAllocator alloc) @safe
@@ -151,11 +166,23 @@ bool startHTTP2Connection(ConnectionStream, H)(ConnectionStream connection, stri
 
 	// try decoding settings
 	if (settings.decode!Base64URL(h2settings)) {
-		// send response
+
 		context.settings = settings;
-		context.resFrame = buildHeaderFrame!(StartLine.RESPONSE)(st, headers, context, alloc);
+
+		// initialize IndexingTable (HPACK)
+		() @trusted {
+			if(!context.table)
+				context.table = alloc.make!IndexingTable(settings.headerTableSize);
+
+			// save response converted to HTTP/2
+			context.resFrame = alloc.makeArray!ubyte(buildHeaderFrame!(StartLine.RESPONSE)
+						(st, headers, context, alloc));
+		} ();
+
+		// send response
 		switchRes.switchToHTTP2(&handleHTTP2Connection!ConnectionStream, context);
 		return true;
+
 	} else {
 		// reply with a 400 (bad request) header
 		switchRes.sendBadRequest();
