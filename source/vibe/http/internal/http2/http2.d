@@ -782,7 +782,7 @@ struct HTTP2ConnectionStream(CS)
 	private {
 		enum Parse { HEADER, PAYLOAD };
 		CS m_conn;
-		uint m_streamId; // streams initiated by the server must be even-numbered
+		uint m_streamId;
 		Parse toParse = Parse.HEADER;
 		HTTP2StreamState m_state;
 		AllocAppender!(ubyte[]) m_headerBlock;
@@ -791,6 +791,7 @@ struct HTTP2ConnectionStream(CS)
 		HTTP2FrameStreamDependency m_dependency;
 	}
 
+	// embed underlying connection
 	alias m_conn this;
 
 	this(CS)(ref CS conn, uint sid, IAllocator alloc) @safe
@@ -819,12 +820,18 @@ struct HTTP2ConnectionStream(CS)
 	@property void state(HTTP2StreamState st) @safe
 	{
 		switch(st) {
+			// allowed: IDLE -> OPEN
+			//          OPEN -> OPEN
 			case HTTP2StreamState.OPEN:
 				if(m_state == HTTP2StreamState.IDLE ||
 						m_state == HTTP2StreamState.OPEN)
 					m_state = st;
 				else enforceHTTP2(false, "Invalid state", HTTP2Error.PROTOCOL_ERROR);
 				break;
+
+			// allowed: OPEN -> HCLOCAL
+			// 			RESERVED_REMOTE -> HCLOCAL
+			// 			HCLOCAL -> HCLOCAL
 			case HTTP2StreamState.HALF_CLOSED_LOCAL:
 				if(m_state == HTTP2StreamState.OPEN ||
 						m_state == HTTP2StreamState.RESERVED_REMOTE ||
@@ -832,6 +839,10 @@ struct HTTP2ConnectionStream(CS)
 					m_state = st;
 				else enforceHTTP2(false, "Invalid state", HTTP2Error.PROTOCOL_ERROR);
 				break;
+
+			// allowed: OPEN -> HCREMOTE
+			// 			RESERVED_LOCAL -> HCREMOTE
+			// 			HCREMOTE -> HCREMOTE
 			case HTTP2StreamState.HALF_CLOSED_REMOTE:
 				if(m_state == HTTP2StreamState.OPEN ||
 						m_state == HTTP2StreamState.RESERVED_LOCAL ||
@@ -839,14 +850,20 @@ struct HTTP2ConnectionStream(CS)
 					m_state = st;
 				else enforceHTTP2(false, "Invalid state", HTTP2Error.PROTOCOL_ERROR);
 				break;
+
+			// allowed: all transitions to CLOSED
+			//	(RST_STREAM, GOAWAY permit this)
 			case HTTP2StreamState.CLOSED:
 				m_state = st;
 				break;
+
+			// specific to PUSH_PROMISE Frames
 			case HTTP2StreamState.RESERVED_LOCAL:
 			case HTTP2StreamState.RESERVED_REMOTE:
 				if(m_state == HTTP2StreamState.IDLE) m_state = st;
 				else enforceHTTP2(false, "Invalid state", HTTP2Error.PROTOCOL_ERROR);
 				break;
+
 			default:
 				enforceHTTP2(false, "Invalid state", HTTP2Error.PROTOCOL_ERROR);
  		}
@@ -870,24 +887,32 @@ struct HTTP2ConnectionStream(CS)
 		return !m_headerBlock.data.empty;
 	}
 
+	/// reads from stream a frame header
 	uint readHeader(R)(ref R dst) @safe
 	{
 		assert(toParse == Parse.HEADER);
 
-		ubyte[9] buf;
+		ubyte[HTTP2HeaderLength] buf; // should always be 9
+
 		m_conn.read(buf);
 		dst.put(buf);
+
+		// length of payload
 		auto len = dst.data[0..3].fromBytes(3);
 		if(len > 0) toParse = Parse.PAYLOAD;
+
 		return len;
 	}
 
+	/// reads from stream a frame payload
 	void readPayload(R)(ref R dst, int len) @safe
 	{
 		assert(toParse == Parse.PAYLOAD);
 		toParse = Parse.HEADER;
 
 		ubyte[8] buf = void;
+
+		/// perform multiple reads until payload is over (@nogc compatibility)
 		while(len > 0) {
 			auto end = (len < buf.length) ? len : buf.length;
 			len -= m_conn.read(buf[0..end], IOMode.all);
@@ -895,10 +920,10 @@ struct HTTP2ConnectionStream(CS)
 		}
 	}
 
+	/// save a HEADERS / CONTINUATION block for processing
 	void putHeaderBlock(T)(T src) @safe
 		if(isInputRange!T && is(ElementType!T : ubyte))
 	{
-		// TODO check header block length
 		m_headerBlock.put(src);
 	}
 
@@ -909,3 +934,48 @@ struct HTTP2ConnectionStream(CS)
 
 	void finalize() @safe { }
 }
+
+unittest {
+	import vibe.core.core : runApplication;
+	// empty handler, just to test if protocol switching works
+	void handleReq(HTTPServerRequest req, HTTPServerResponse res)
+	@safe {
+		if (req.path == "/")
+			res.writeBody("Hello, World! This response is sent through HTTP/2");
+	}
+
+	auto settings = HTTPServerSettings();
+	settings.port = 8090;
+	settings.bindAddresses = ["localhost"];
+
+	listenHTTP!handleReq(settings);
+	//runApplication();
+}
+
+unittest {
+	import vibe.core.core : runApplication;
+	setLogLevel(LogLevel.debug_);
+
+	void handleRequest (HTTPServerRequest req, HTTPServerResponse res)
+	@safe {
+		if (req.path == "/")
+			res.writeBody("Hello, World! This response is sent through HTTP/2\n");
+	}
+
+
+	HTTPServerSettings settings;
+	settings.port = 8091;
+	settings.bindAddresses = ["127.0.0.1", "192.168.1.131"];
+	settings.tlsContext = createTLSContext(TLSContextKind.server);
+	settings.tlsContext.useCertificateChainFile("tests/server.crt");
+	settings.tlsContext.usePrivateKeyFile("tests/server.key");
+
+	// set alpn callback to support HTTP/2
+	// should accept the 'h2' protocol request
+	settings.tlsContext.alpnCallback(http2Callback);
+
+	// dummy, just for testing
+	listenHTTP!handleRequest(settings);
+	//runApplication();
+}
+
