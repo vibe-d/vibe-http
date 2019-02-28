@@ -134,79 +134,6 @@ import std.variant : Algebraic;
 
 */
 
-
-/*
- * Check if SETTINGS payload is valid by trying to decode it
- * if !valid, close connection and refuse to upgrade (RFC) - TODO discuss
- * if valid, send SWITCHING_PROTOCOL response and start an HTTP/2 connection handler
- */
-bool startHTTP2Connection(ConnectionStream, H)(ConnectionStream connection, string h2settings,
-		HTTP2ServerContext context, HTTPServerResponse switchRes, H headers, string st,
-		IAllocator alloc) @safe
-	if (isConnectionStream!ConnectionStream)
-{
-	// init settings
-	HTTP2Settings settings;
-	logDebug("Starting HTTP/2 connection");
-
-	// try decoding settings
-	if (settings.decode!Base64URL(h2settings)) {
-		// send response
-		context.settings = settings;
-		context.resFrame = buildHeaderFrame!(StartLine.RESPONSE)(st, headers, context, alloc);
-		switchRes.switchToHTTP2(&handleHTTP2Connection!ConnectionStream, context);
-		return true;
-	} else {
-		// reply with a 400 (bad request) header
-		switchRes.sendBadRequest();
-		connection.close;
-		return false;
-	}
-}
-
-unittest {
-	import vibe.core.core : runApplication;
-	// empty handler, just to test if protocol switching works
-	void handleReq(HTTPServerRequest req, HTTPServerResponse res)
-	@safe {
-		if (req.path == "/")
-			res.writeBody("Hello, World! This response is sent through HTTP/2");
-	}
-
-	auto settings = HTTPServerSettings();
-	settings.port = 8090;
-	settings.bindAddresses = ["localhost"];
-
-	listenHTTP!handleReq(settings);
-	//runApplication();
-}
-
-unittest {
-	import vibe.core.core : runApplication;
-
-	void handleRequest (HTTPServerRequest req, HTTPServerResponse res)
-	@safe {
-		//if (req.path == "/")
-			res.writeBody("Hello, World! This response is sent through HTTP/2\n");
-	}
-
-
-	HTTPServerSettings settings;
-	settings.port = 8091;
-	settings.bindAddresses = ["127.0.0.1", "192.168.1.131"];
-	settings.tlsContext = createTLSContext(TLSContextKind.server);
-	settings.tlsContext.useCertificateChainFile("tests/server.crt");
-	settings.tlsContext.usePrivateKeyFile("tests/server.key");
-
-	// set alpn callback to support HTTP/2
-	// should accept the 'h2' protocol request
-	settings.tlsContext.alpnCallback(http2Callback);
-
-	// dummy, just for testing
-	listenHTTP!handleRequest(settings);
-	runApplication();
-}
-
 /**
   * an ALPN callback which can be used to detect the "h2" protocol
   * must be set before initializing the server with 'listenHTTP'
@@ -220,8 +147,52 @@ TLSALPNCallback http2Callback = (string[] choices) {
 
 private alias TLSStreamType = ReturnType!(createTLSStreamFL!(InterfaceProxy!Stream));
 
-/** server & client should send a connection preface
-  * server should receive a connection preface from the client
+/* ==================================================== */
+/* 				CONNECTION INITIALIZATION				*/
+/* ==================================================== */
+
+/** h2c protocol switching ONLY: Check if SETTINGS payload is valid by trying to decode it
+  * if !valid, close connection and refuse to upgrade (RFC)
+  * if valid, send SWITCHING_PROTOCOL response and start an HTTP/2 connection handler
+  */
+bool startHTTP2Connection(ConnectionStream, H)(ConnectionStream connection, string h2settings,
+		HTTP2ServerContext context, HTTPServerResponse switchRes, H headers, string st,
+		IAllocator alloc) @safe
+	if (isConnectionStream!ConnectionStream)
+{
+	// init settings
+	HTTP2Settings settings;
+	logDebug("Starting HTTP/2 connection");
+
+	// try decoding settings
+	if (settings.decode!Base64URL(h2settings)) {
+
+		context.settings = settings;
+
+		// initialize IndexingTable (HPACK)
+		() @trusted {
+			if(!context.table)
+				context.table = alloc.make!IndexingTable(settings.headerTableSize);
+
+			// save response converted to HTTP/2
+			context.resFrame = alloc.makeArray!ubyte(buildHeaderFrame!(StartLine.RESPONSE)
+						(st, headers, context, alloc));
+		} ();
+
+		// send response
+		switchRes.switchToHTTP2(&handleHTTP2Connection!ConnectionStream, context);
+		return true;
+
+	} else {
+		// reply with a 400 (bad request) header
+		switchRes.sendBadRequest();
+		connection.close;
+		return false;
+	}
+}
+
+/** client AND server should send a connection preface
+  * server should receive a connection preface from the client + SETTINGS Frame
   * server connection preface consists of a SETTINGS Frame
   */
 void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream,
@@ -244,22 +215,27 @@ void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream,
 
 	// initialize the multiplexer
 	try {
-		multiplexer(connection, context.settings.maxConcurrentStreams,
-					context.settings.initialWindowSize, context.settings.headerTableSize);
+		context.multiplexerID = buildMultiplexerID(connection);
+
+		multiplexer(context.multiplexerID,
+					context.settings.maxConcurrentStreams,
+					context.settings.initialWindowSize,
+					context.settings.headerTableSize);
+
 	} catch (Exception e) {
 		logWarn(e.msg);
 		return;
 	}
 
-	// send connection preface
-	//logDebug("Sending server connection preface:");
-	//sendHTTP2SettingsFrame(stream, context);
-
 	// initialize Frame handler
 	handleHTTP2FrameChain(stream, connection, context);
 }
 
-/// async frame handler
+/* ==================================================== */
+/* 					FRAME HANDLING						*/
+/* ==================================================== */
+
+/// async frame handler: in charge of closing the connection if no data flows
 private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TCPConnection
 		connection, HTTP2ServerContext context) @safe
 	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStream))
@@ -289,20 +265,25 @@ private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TC
 
 			case WaitForDataAsyncStatus.noMoreData:
 				try {
-					removeMux(connection);
+					removeMux(context.multiplexerID);
 				} catch (Exception e) {}
+
 				stream.finalize();
 				connection.close();
 				logWarn("Reached end of stream.");
 				return;
 
 			case WaitForDataAsyncStatus.dataAvailable:
+				// start the frame handler
 				bool close = handleHTTP2Frame(stream, connection, context);
+
+				// determine if this connection needs to be closed
 				if(close || stream.empty) {
 					logDebug("Closing connection.");
 					try {
-						removeMux(connection);
+						removeMux(context.multiplexerID);
 					} catch (Exception e) {}
+
 					stream.finalize();
 					connection.close();
 					return;
@@ -311,51 +292,64 @@ private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TC
 		}
 	}
 }
-/// initializes an allocator and handles stream / connection closing
+
+/// initializes an allocator and handles stream closing
 private bool handleHTTP2Frame(ConnectionStream)(ConnectionStream stream, TCPConnection
-		connection, ref HTTP2ServerContext context) @safe
+		connection, ref HTTP2ServerContext context) @trusted
 	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStream))
 {
+	import vibe.internal.utilallocator: RegionListAllocator;
 	logDebug("HTTP/2 Frame Handler");
+
 	bool close = false;
 
-	() @trusted {
+	// init the allocator
+	version (VibeManualMemoryManagement)
+		scope alloc = new RegionListAllocator!(shared(Mallocator), false)(1024, Mallocator.instance);
+	else
+		scope alloc = new RegionListAllocator!(shared(GCAllocator), true)(1024, GCAllocator.instance);
 
-		import vibe.internal.utilallocator: RegionListAllocator;
-		version (VibeManualMemoryManagement)
-			scope alloc = new RegionListAllocator!(shared(Mallocator), false)(1024, Mallocator.instance);
-		else
-			scope alloc = new RegionListAllocator!(shared(GCAllocator), true)(1024, GCAllocator.instance);
-		auto h2stream = HTTP2ConnectionStream!ConnectionStream(stream, 0, alloc);
+	// ALPN protocol switching (h2) requires the table to be allocated now
+	// h2c: see startHTTP2Connection
+	if(!context.table)
+		context.table = alloc.make!IndexingTable(context.settings.headerTableSize);
 
-		while(true) {
-			close = handleFrameAlloc(h2stream, connection, context, alloc);
+	// create a HTTP/2 Stream
+	auto h2stream = HTTP2ConnectionStream!ConnectionStream(stream, 0, alloc);
 
-			if(h2stream.state == HTTP2StreamState.CLOSED) {
-				try {
-					closeStream(connection, h2stream.streamId);
-				} catch(Exception e) {
-					close = true;
-				}
-				break;
+	// ensures streams are processed until closed
+	while(true) {
+
+		// pass the stream to the handler
+		close = handleFrameAlloc(h2stream, connection, context, alloc);
+
+		// if stream has to be closed
+		if(h2stream.state == HTTP2StreamState.CLOSED) {
+			try {
+				closeStream(context.multiplexerID, h2stream.streamId);
+			} catch(Exception e) {
+				// error occourred: close connection
+				close = true;
 			}
+			break;
 		}
-	} ();
+	}
 
 	return close;
 }
 
+/// used (mixin) to check the validity of the received Frame w.r.to its stream ID
+private const string checkvalid = "enforceHTTP2(valid, \"Invalid stream ID\", HTTP2Error.STREAM_CLOSED);";
+
 /** Receives an HTTP2ConnectionStream, and handles the data received by decoding frames
   * Currently supports simple requests / responses
   * Stream Lifecycle is treated according to RFC 7540, Section 5.1
-  * TODO flow control through WINDOW_UPDATE frames
 */
 private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCPConnection connection,
 		ref HTTP2ServerContext context, IAllocator alloc) @trusted
 {
 	logDebug("HTTP/2 Frame Handler (Alloc)");
 
-	// TODO determine if an actor as an encoder / decoder would be useful
 	uint len = 0;
 
 	// payload buffer
@@ -367,9 +361,14 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 	bool endHeaders = false;
 	bool isAck = false;
 	bool close = false;
-	HTTP2FrameStreamDependency sdep;
+	scope HTTP2FrameStreamDependency sdep;
 
-	// read header
+	// frame struct
+	scope HTTP2FrameHeader header;
+
+/* ==================================================== */
+/* 				read received header 					*/
+/* ==================================================== */
 	if(stream.canRead) {
 		try {
 			len = stream.readHeader(rawBuf);
@@ -388,12 +387,16 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 	rawBuf.reserve(len);
 	payload.reserve(len);
 
-	// read payload if needed
+/* ==================================================== */
+/* 				read received payload 					*/
+/* ==================================================== */
 	if(len) stream.readPayload(rawBuf, len);
+	else return false;
 
-	// parse frame
-	HTTP2FrameHeader header;
 
+/* ==================================================== */
+/* 				parse received Frame 					*/
+/* ==================================================== */
 	try {
 		header = payload.unpackHTTP2Frame(rawBuf.data, endStream, endHeaders, isAck, sdep);
 	} catch (HTTP2Exception e) {
