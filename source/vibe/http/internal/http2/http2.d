@@ -698,18 +698,19 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 
 	return close;
 }
-
-private const string checkvalid = "enforceHTTP2(valid.getResult, \"Invalid stream ID\", HTTP2Error.STREAM_CLOSED);";
-
 /// process an HEADERS frame
 void handleHTTP2HeadersFrame(Stream)(ref Stream stream, TCPConnection connection, ref
 		HTTP2ServerContext context,  IAllocator alloc)
 {
-	auto hdec = appender!(HTTP2HeaderTableField[]);
+	// AllocAppender cannot be used here (TODO discuss)
+	auto hdec = appender!(HTTP2HeaderTableField[])();
+
+	// decode headers
 	decodeHPACK(cast(immutable(ubyte)[])stream.headerBlock, hdec, context.table, alloc, context.settings.headerTableSize);
 
 	// insert data in table
 	hdec.data.each!((h) { if(h.index) context.table.insert(h); });
+
 	// write a response (HEADERS + DATA according to request method)
 	handleHTTP2Request(stream, connection, context, hdec.data, context.table, alloc);
 
@@ -717,21 +718,20 @@ void handleHTTP2HeadersFrame(Stream)(ref Stream stream, TCPConnection connection
 	stream.resetHeaderBlock();
 }
 
-/// handle SETTINGS frame exchange (new connection)
+/// handle SETTINGS frame exchange
 void handleHTTP2SettingsFrame(Stream)(ref Stream stream, TCPConnection connection, ubyte[] data, HTTP2FrameHeader header, ref HTTP2ServerContext context) @safe
 {
 	// parse settings payload
 	context.settings.unpackSettings(data);
 
 	// update the connection window and notify waiting workers
-	if(stream.streamId == 0) updateConnectionWindow(connection, context.settings.initialWindowSize);
-	updateStreamConnectionWindow(connection, stream.streamId, context.settings.initialWindowSize);
-
+	if(stream.streamId == 0) updateConnectionWindow(context.multiplexerID, context.settings.initialWindowSize);
+	updateStreamConnectionWindow(context.multiplexerID, stream.streamId, context.settings.initialWindowSize);
 
 	// notify waiting threads if needed
-	if(checkCondition(connection, stream.streamId)) {
+	if(checkCondition(context.multiplexerID, stream.streamId)) {
 		logDebug("Notifying stopped tasks");
-		notifyCondition(connection);
+		notifyCondition(context.multiplexerID);
 		yield();
 	}
 
@@ -739,18 +739,24 @@ void handleHTTP2SettingsFrame(Stream)(ref Stream stream, TCPConnection connectio
 	FixedAppender!(ubyte[], 9) ackReply;
 	ackReply.createHTTP2FrameHeader(0, header.type, 0x1, header.streamId);
 
-	if(isConnectionPreface(connection)) sendHTTP2SettingsFrame(stream, context);
+	// new connection: must send a SETTINGS Frame as preface
+	if(isConnectionPreface(context.multiplexerID)) sendHTTP2SettingsFrame(stream, context);
 
+	// write SETTINGS ACK
 	stream.write(ackReply.data);
+
 	logDebug("Sent SETTINGS ACK");
 }
 
+/// send a SETTINGS Frame
 void sendHTTP2SettingsFrame(Stream)(ref Stream stream, HTTP2ServerContext context) @safe
 {
 	FixedAppender!(ubyte[], HTTP2HeaderLength+36) settingDst;
+
 	settingDst.createHTTP2FrameHeader(36, HTTP2FrameType.SETTINGS, 0x0, 0);
 	settingDst.serializeSettings(context.settings);
 	stream.write(settingDst.data);
+
 	logDebug("Sent SETTINGS Frame");
 }
 
