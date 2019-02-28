@@ -1,4 +1,4 @@
-name "prova_app"
+name "http2-example"
 
 dependency "vibe-http" version="*"
 
