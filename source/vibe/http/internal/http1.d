@@ -186,6 +186,7 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 			else if (is(typeof(http_stream) : TLSStream))
 				req.clientCertificate = http_stream.extract!TLSStreamType.peerCertificate;
 			else
+				// TODO fix: no client certificate
 				assert(false);
 		}
 	}
@@ -359,14 +360,23 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 				import vibe.http.internal.http2.exchange;
 				MemoryOutputStream buf = createMemoryOutputStream(alloc);
 
-				res.bodyWriterH2(buf);
+				res.bodyWriterH2(buf, true);
 				auto statusLine = (cast(string)buf.data).split("\r\n")[0];
 				auto hlen = buf.data.length;
 
-				if(req.method != HTTPMethod.HEAD) {
-					request_task(req, res);
-					ctx.resBody = buf.data[hlen..$].nullable;
+				// write body to buffer
+				request_task(req, res);
+
+				// no matching path in handler
+				if(buf.data.length == hlen && req.method != HTTPMethod.HEAD) {
+					return "HTTP/2 404 Not Found\r\n";
 				}
+
+				// matching path, data needs to be saved
+				if(req.method != HTTPMethod.HEAD) {
+					ctx.resBody = request_allocator.makeArray!ubyte(buf.data[hlen..$]);
+				}
+
 				return statusLine;
 			}
 
@@ -386,7 +396,6 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 			return startHTTP2Connection(tcp_connection, h2settings, h2context, switchRes,
 					res.headers, st, request_allocator);
 		}
-
 
 		res.httpVersion = req.httpVersion;
 		request_task(req, res);
