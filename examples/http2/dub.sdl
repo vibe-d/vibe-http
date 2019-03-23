@@ -3,4 +3,3 @@ name "http2-example"
 dependency "vibe-http" path="../../../vibe-http"
 
 targetType "executable"
-versions "VibeForceALPN"
