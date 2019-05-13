@@ -233,6 +233,15 @@ void unpackSettings(R)(ref HTTP2Settings settings, R src) @safe @nogc
 			}
 		}
 	}
+
+	enforceHTTP2(settings.enablePush == 0 || settings.enablePush == 1,
+			"Invalid value for ENABLE_PUSH setting.", HTTP2Error.PROTOCOL_ERROR);
+
+	enforceHTTP2(settings.initialWindowSize < (1 << 31),
+			"Invalid value for INITIAL_WINDOW_SIZE setting.", HTTP2Error.FLOW_CONTROL_ERROR);
+
+	enforceHTTP2(settings.maxFrameSize >= (1 << 14) && settings.maxFrameSize < (1 << 24),
+			"Invalid value for MAX_FRAME_SIZE setting.", HTTP2Error.FLOW_CONTROL_ERROR);
 }
 
 unittest {

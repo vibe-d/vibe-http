@@ -12,6 +12,7 @@ import std.range; // Decoder
 import std.string;
 import std.experimental.allocator;
 import std.experimental.allocator.mallocator;
+import std.exception;
 
 /** Module to implement an header decoder consistent with HPACK specifications (RFC 7541)
   * The detailed description of the decoding process, examples and binary format details can
@@ -106,13 +107,15 @@ private size_t decodeInteger(I)(ref I src, ubyte bbuf, uint nbits) @safe @nogc
 			// concatenate it to the result
 			res = res + bbuf.toInteger(1)*(1 << m);
 			m += 7;
-		} while(bbuf == 1);
+		} while((bbuf & 128) == 128);
 		return res;
 	}
 }
 
 private void decodeLiteral(I,R)(ref I src, ref R dst) @safe
 {
+ 	enforceHPACK(!src.empty, "Invalid literal header block");
+
 	ubyte bbuf = src[0];
 	src = src[1..$];
 
