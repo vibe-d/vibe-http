@@ -23,7 +23,7 @@ import std.exception;
 */
 alias HTTP2SettingValue = uint;
 
-void decode(I, R, T)(ref I src, ref R dst, ref IndexingTable table,  ref T alloc) @trusted
+void decode(I, R, T)(ref I src, ref R dst, ref IndexingTable table,  ref T alloc, ulong maxTableSize=4096) @trusted
 {
 	ubyte bbuf = src[0];
 	src = src[1..$];
@@ -37,7 +37,7 @@ void decode(I, R, T)(ref I src, ref R dst, ref IndexingTable table,  ref T alloc
 		auto adst = AllocAppender!string(alloc);
 
 		if (bbuf & 64) { // inserted in dynamic table
-			size_t idx = bbuf.toInteger(2);
+			size_t idx = decodeInteger(src, bbuf, 6);
 			if(idx > 0) {  // name == table[index].name, value == literal
 				hres.name = table[idx].name;
 			} else {   // name == literal, value == literal
@@ -48,6 +48,14 @@ void decode(I, R, T)(ref I src, ref R dst, ref IndexingTable table,  ref T alloc
 			hres.value.setReset(adst);
 			hres.index = true;
 			hres.neverIndex = false;
+
+		} else if(bbuf & 32) {
+			update = true;
+			auto nsize = decodeInteger(src, bbuf, 3);
+			enforce(nsize <= maxTableSize, "Invalid table size update");
+
+			table.updateSize(cast(HTTP2SettingValue)nsize);
+			logDebug("Updated dynamic table size to: %d octets", nsize);
 
 		} else if(bbuf & 16) { // NEVER inserted in dynamic table
 			size_t idx = decodeInteger(src, bbuf, 4);
@@ -62,7 +70,7 @@ void decode(I, R, T)(ref I src, ref R dst, ref IndexingTable table,  ref T alloc
 			hres.index = false;
 			hres.neverIndex = true;
 
-		} else if(!(bbuf & 32)) { // this occourrence is not inserted in dynamic table
+		} else { // this occourrence is not inserted in dynamic table
 			size_t idx = decodeInteger(src, bbuf, 4);
 			if(idx > 0) {  // name == table[index].name, value == literal
 				hres.name = table[idx].name;
@@ -74,10 +82,6 @@ void decode(I, R, T)(ref I src, ref R dst, ref IndexingTable table,  ref T alloc
 			hres.value.setReset(adst);
 			hres.index = hres.neverIndex = false;
 
-		} else { // dynamic table size update (bbuf[2] is set)
-			update = true;
-			auto nsize = bbuf.toInteger(3);
-			table.updateSize(cast(HTTP2SettingValue)nsize);
 		}
 		assert(!(hres.index && hres.neverIndex), "Invalid header indexing information");
 
@@ -124,7 +128,7 @@ private void decodeLiteral(I,R)(ref I src, ref R dst) @safe
 	assert(!src.empty, "Cannot decode from empty range block");
 
 	// take a buffer of remaining octets
-	auto vlen = bbuf.toInteger(1); // value length
+	auto vlen = decodeInteger(src, bbuf, 7); // value length
 	enforceHPACK(vlen <= src.length, "Invalid literal decoded");
 
 	auto buf = src[0..vlen];

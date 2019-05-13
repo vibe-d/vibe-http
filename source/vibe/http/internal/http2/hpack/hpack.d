@@ -23,10 +23,10 @@ void encodeHPACK(I,R)(I src, ref R dst, ref IndexingTable table, bool huffman = 
 	}
 }
 
-void decodeHPACK(I,R,T)(I src, ref R dst, ref IndexingTable table, ref T alloc) @safe
+void decodeHPACK(I,R,T)(I src, ref R dst, ref IndexingTable table, ref T alloc, uint maxTableSize = 4096) @safe
 	if(isInputRange!I && (is(ElementType!I : immutable(ubyte)) || is(ElementType!I : immutable(char))))
 {
-	while(!src.empty) src.decode(dst, table, alloc);
+	while(!src.empty) src.decode(dst, table, alloc, maxTableSize);
 }
 
 /// ENCODER
@@ -38,7 +38,7 @@ unittest {
 	import std.experimental.allocator;
 	import std.experimental.allocator.gc_allocator;
 
-	IndexingTable table = IndexingTable(4096);
+	auto table = IndexingTable(4096);
 	scope alloc = new RegionListAllocator!(shared(GCAllocator), false)(1024, GCAllocator.instance);
 
 	/** 1. Literal header field w. indexing (raw)
@@ -145,7 +145,7 @@ unittest {
 	import std.experimental.allocator;
 	import std.experimental.allocator.gc_allocator;
 
-	IndexingTable table = IndexingTable(4096);
+	auto table = IndexingTable(4096);
 	scope alloc = new RegionListAllocator!(shared(GCAllocator), false)(1024, GCAllocator.instance);
 
 	/** 1. Literal header field w. indexing (raw)
