@@ -185,8 +185,14 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream,
 	InterfaceProxy!ConnectionStream cproxy = tcp_connection;
 	InterfaceProxy!Stream cstream = stream.connection; // TCPConnection / TLSStream
 	auto res = HTTPServerResponse(cstream, cproxy, settings, alloc);
+
 	// check for TLS encryption
-	auto istls = h2context.isTLS;
+	bool istls;
+	static if(is(UStream : TLSStream)) {
+		istls = true;
+	} else {
+		istls = false;
+	}
 	req.tls = istls;
 	res.tls = istls;
 
@@ -208,6 +214,10 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream,
 	// both status line + headers (already unpacked in `headers`)
 	// defined in vibe.http.server because of protected struct HTTPServerRequest
 	parseHTTP2RequestHeader(headers, req);
+	if(req.host.empty) {
+		req.host = tcp_connection.localAddress.toString;
+		req.requestURI = req.host ~ req.path;
+	}
 
 	string reqhost;
 	ushort reqport = 0;
@@ -258,9 +268,9 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream,
 			logTrace("sending 100 continue");
 			InetHeaderMap hmap;
 			auto cres =	buildHeaderFrame!(StartLine.RESPONSE)(
-					"HTTP/1.1 100 Continue\r\n\r\n", hmap, h2context, table, alloc);
-			// TODO return / send header
+					"HTTP/1.1 100 Continue\r\n\r\n", hmap, h2context, table, alloc, istls);
 		}
+		assert(false); // TODO determine if actually used with HTTP/2 (PUSH_PROMISE?)
 	}
 
 	// eagerly parse the URL as its lightweight and defacto @nogc
@@ -292,70 +302,224 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream,
 	parsed = true;
 	logTrace("persist: %s", req.persistent);
 	//keep_alive = req.persistent;
+	logDebug("Received %s request on stream ID %d", req.method, stream.streamId);
 
-	// create HEADERS frame
+	// utility to format the status line
 	auto statusLine = AllocAppender!string(alloc);
+
 	void writeLine(T...)(string fmt, T args)
 		@safe {
 			formattedWrite(() @trusted { return &statusLine; } (), fmt, args);
 			statusLine.put("\r\n");
 			logTrace(fmt, args);
 		}
-	// write the status line
-	writeLine("%s %d %s",
-			getHTTPVersionString(res.httpVersion),
-			res.statusCode,
-			res.statusPhrase.length ? res.statusPhrase : httpStatusText(res.statusCode));
 
-	h2context.next_sid = stream.streamId;
+	// header frame to be sent
 	ubyte[] headerFrame;
-	() @trusted {
-		headerFrame = buildHeaderFrame!(StartLine.RESPONSE)(statusLine.data, res.headers, h2context, table, alloc);
-	} ();
 
-	// send HEADERS frame
-	if(headerFrame.length < h2context.settings.maxFrameSize)
-	{
-		headerFrame[4] += 0x4; // set END_HEADERS flag (sending complete header)
-		cstream.write(headerFrame);
-	} else {
-		// TODO CONTINUATION frames
-		assert(false);
-	}
+	// handle payload (DATA frame)
+	auto dataWriter = createDataOutputStream(alloc);
+	res.bodyWriterH2 = dataWriter;
+	h2context.next_sid = stream.streamId;
 
-	logTrace("Sent HEADERS frame on streamID " ~ stream.streamId.to!string);
+	// run task (writes body)
+	request_task(req, res);
 
-	if(req.method != HTTPMethod.HEAD) {
-		// handle payload
-		auto dataWriter = createDataOutputStream(alloc);
-		auto dataFrame = AllocAppender!(ubyte[])(alloc);
-		res.bodyWriterH2 = dataWriter;
+	if(req.method != HTTPMethod.HEAD && dataWriter.data.length > 0) { // HEADERS + DATA
 
-		// run task (writes body)
-		request_task(req, res);
+		// write the status line
+		writeLine("%s %d %s",
+				getHTTPVersionString(res.httpVersion),
+				res.statusCode,
+				res.statusPhrase.length ? res.statusPhrase : httpStatusText(res.statusCode));
 
-		// create DATA Frame with END_STREAM (0x1) flag
-		dataFrame.createHTTP2FrameHeader(dataWriter.data.length.to!uint,
-				HTTP2FrameType.DATA, 0x1, stream.streamId);
-		dataFrame.put(dataWriter.data);
-		cstream.write(dataFrame.data);
+		// build the HEADERS frame
+		() @trusted {
+			headerFrame = buildHeaderFrame!(StartLine.RESPONSE)(statusLine.data, res.headers,
+					h2context, table, alloc, istls);
+		} ();
 
-		logTrace("Sent DATA frame on streamID " ~ stream.streamId.to!string);
-	}
+		// send HEADERS frame
+		if(headerFrame.length < h2context.settings.maxFrameSize) {
+			headerFrame[4] += 0x4; // set END_HEADERS flag (sending complete header)
+			cstream.write(headerFrame);
 
-	if(stream.state == HTTP2StreamState.HALF_CLOSED_REMOTE) {
-		stream.state = HTTP2StreamState.CLOSED;
-	} else {
-		stream.state = HTTP2StreamState.HALF_CLOSED_LOCAL;
-	}
+		} else {
+			// TODO CONTINUATION frames
+			assert(false);
+		}
 
+		logDebug("Sent HEADERS frame on streamID " ~ stream.streamId.to!string);
 
-	// if no one has written anything, return 404
-	if (!res.headerWritten) {
-		assert(false);
+		auto tlen = dataWriter.data.length;
+
+		// multiple DATA Frames might be required
+		void sendDataTask()
+		@safe {
+			logDebug("[DATA] Starting dispatch task");
+
+			scope(exit) {
+				if(stream.state == HTTP2StreamState.HALF_CLOSED_REMOTE) {
+					stream.state = HTTP2StreamState.CLOSED;
+				} else {
+					stream.state = HTTP2StreamState.HALF_CLOSED_LOCAL;
+				}
+			}
+
+			try {
+
+				auto abort = false;
+				uint done = 0;
+
+				// window length
+				uint wlen = sendWindowLength(h2context.multiplexer,
+						stream.streamId, h2context.settings.maxFrameSize, tlen);
+
+				// until the whole payload is sent
+				while(done <= tlen) {
+					auto dataFrame = AllocAppender!(ubyte[])(alloc);
+
+					dataFrame.createHTTP2FrameHeader(
+								wlen,
+								HTTP2FrameType.DATA,
+								(done+wlen >= tlen) ? 0x1 : 0x0, // END_STREAM 0x1
+								stream.streamId
+							);
+
+					// send is over
+					if(done == tlen) {
+						logDebug("[DATA] Completed DATA frame dispatch");
+						// remove task from waiting state
+						doneCondition(h2context.multiplexer, stream.streamId);
+						closeStream(h2context.multiplexer, stream.streamId);
+						break;
+					}
+
+					// wait to resume and retry
+					if(wlen == 0) {
+						logDebug("[DATA] Dispatch task waiting for WINDOW_UPDATE");
+
+						// after 60 seconds waiting, terminate dispatch
+						() @trusted {
+							auto timer = setTimer(600.seconds, {
+									logDebug("[DATA] timer expired, aborting dispatch");
+									notifyCondition(h2context.multiplexer);
+									abort = true;
+									});
+
+							// wait until a new WINDOW_UPDATE is received (or timer expires)
+							waitCondition(h2context.multiplexer, stream.streamId);
+
+							// task resumed: cancel timer
+							if(!abort) timer.stop;
+							else return;
+						} ();
+
+						logDebug("[DATA] Dispatch task resumed");
+
+					} else {
+						// write
+
+						dataFrame.put(dataWriter.data[done..done+wlen]);
+						cstream.write(dataFrame.data);
+
+						done += wlen;
+
+						logDebug("[DATA] Sent frame chunk (%d/%d bytes) on streamID %d",
+								done, tlen, stream.streamId);
+
+						updateWindow(h2context.multiplexer, stream.streamId, wlen);
+
+						// return control to the event loop
+						yield();
+					}
+
+					// compute new window length
+					wlen = sendWindowLength(h2context.multiplexer,
+							stream.streamId, h2context.settings.maxFrameSize, tlen - done);
+				}
+
+			} catch (Exception e) {
+				logDebug("[DATA] "~e.msg);
+				return;
+			}
+		}
+
+		// spawn the asynchronous data sender
+		sendDataTask();
+
+	} else if(dataWriter.data.length > 0) { // HEAD response, HEADERS frame, no DATA
+
+		// write the status line
+		writeLine("%s %d %s",
+				getHTTPVersionString(res.httpVersion),
+				res.statusCode,
+				res.statusPhrase.length ? res.statusPhrase : httpStatusText(res.statusCode));
+
+		// build the HEADERS frame
+		() @trusted {
+			headerFrame = buildHeaderFrame!(StartLine.RESPONSE)(statusLine.data, res.headers,
+					h2context, table, alloc, istls);
+		} ();
+
+		// send HEADERS frame
+		if(headerFrame.length < h2context.settings.maxFrameSize) {
+			headerFrame[4] += 0x5; // set END_HEADERS, END_STREAM flag
+			cstream.write(headerFrame);
+		} else {
+			// TODO CONTINUATION frames
+			assert(false);
+		}
+
+		logDebug("Sent HEADERS frame on streamID " ~ stream.streamId.to!string);
+
+		logDebug("[Data] No DATA frame to send");
+
+		if(stream.state == HTTP2StreamState.HALF_CLOSED_REMOTE) {
+			stream.state = HTTP2StreamState.CLOSED;
+		} else {
+			stream.state = HTTP2StreamState.HALF_CLOSED_LOCAL;
+		}
+		closeStream(h2context.multiplexer, stream.streamId);
+
+	} else { // 404: no DATA for the given path
+
+		writeLine("%s %d %s",
+				"HTTP/2",
+				404,
+				"Not Found");
+
+		// build the HEADERS frame
+		() @trusted {
+			headerFrame = buildHeaderFrame!(StartLine.RESPONSE)(statusLine.data, res.headers,
+					h2context, table, alloc, istls);
+		} ();
+
+		if(headerFrame.length < h2context.settings.maxFrameSize) {
+			headerFrame[4] += 0x5; // set END_HEADERS, END_STREAM flag
+			cstream.write(headerFrame);
+		}
+
+		logDebug("No response: sent 404 HEADERS frame");
+
 	}
 
 	return true;
+}
+
+
+uint sendWindowLength(Mux)(ref Mux multiplexer, const uint sid, const uint maxfsize, const ulong len) @safe
+{
+	return min(connectionWindow(multiplexer), streamConnectionWindow(multiplexer, sid), maxfsize, len);
+}
+
+void updateWindow(Mux)(ref Mux multiplexer, const uint sid, const ulong sent) @safe
+{
+	auto cw = connectionWindow(multiplexer) - sent;
+	auto scw = streamConnectionWindow(multiplexer, sid) - sent;
+
+	updateConnectionWindow(multiplexer, cw);
+	updateStreamConnectionWindow(multiplexer, sid, cw);
 }
 
 private DataOutputStream createDataOutputStream(IAllocator alloc = vibeThreadAllocator())
