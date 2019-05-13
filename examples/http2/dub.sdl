@@ -2,6 +2,6 @@ name "http2-example"
 
 dependency "vibe-http" path="../../../vibe-http"
 
-versions "VibeForceALPN"
+/*versions "VibeForceALPN"*/
 targetType "executable"
 /*buildOptions "profileGC"*/
