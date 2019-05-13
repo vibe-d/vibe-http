@@ -309,12 +309,18 @@ struct HTTP2ServerContext
 		HTTPServerContext m_context;
 		Nullable!HTTP2Settings m_settings;
 		uint m_sid = 0;
-		bool m_isTLS = true;
+		FreeListRef!IndexingTable m_table;
+		FreeListRef!HTTP2Multiplexer m_multiplexer;
+		bool m_initializedT = false;
+		bool m_initializedM = false;
+
 	}
 
+	alias m_context this;
+
 	// used to mantain the first request in case of `h2c` protocol switching
-	Nullable!(ubyte[]) resFrame;
-	Nullable!(ubyte[]) resBody;
+	// TODO find alternative approach
+	ubyte[] resFrame = void;
 
 	this(HTTPServerContext ctx, HTTP2Settings settings) @safe
 	{
@@ -327,8 +333,29 @@ struct HTTP2ServerContext
 		m_context = ctx;
 	}
 
+	@property auto ref table() @safe { return m_table.get; }
 
-	alias m_context this;
+	@property bool hasTable() @safe { return m_initializedT; }
+
+	@property void table(T)(T table) @safe
+		if(is(T == typeof(m_table)))
+	{
+		assert(!m_initializedT);
+		m_table = table;
+		m_initializedT = true;
+	}
+
+	@property auto ref multiplexer() @safe { return m_multiplexer.get; }
+
+	@property bool hasMultiplexer() @safe { return m_initializedM; }
+
+	@property void multiplexer(T)(T multiplexer) @safe
+		if(is(T == typeof(m_multiplexer)))
+	{
+		assert(!m_initializedM);
+		m_multiplexer = multiplexer;
+		m_initializedM = true;
+	}
 
 	@property HTTPServerContext h1context() @safe @nogc { return m_context; }
 
@@ -336,20 +363,21 @@ struct HTTP2ServerContext
 
 	@property void next_sid(uint sid) @safe @nogc { m_sid = sid; }
 
-	@property bool isTLS() @safe @nogc { return m_isTLS; }
-
-	@property void setNoTLS() @safe @nogc { m_isTLS = false; }
-
 	@property ref HTTP2Settings settings() @safe @nogc
 	{
 		assert(!m_settings.isNull);
 		return m_settings;
 	}
 
-	@property void settings(ref HTTP2Settings settings) @safe @nogc
+	@property void settings(ref HTTP2Settings settings) @safe
 	{
 		assert(m_settings.isNull);
 		m_settings = settings;
+		() @trusted {
+			if (settings.headerTableSize != 4096) {
+				table.updateSize(settings.headerTableSize);
+			}
+		} ();
 	}
 }
 
