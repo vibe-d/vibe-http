@@ -1,5 +1,6 @@
 module vibe.http.internal.http2.exchange;
 
+import vibe.http.internal.http2.multiplexing;
 import vibe.http.internal.http2.settings;
 import vibe.http.internal.http2.http2 : HTTP2ConnectionStream, HTTP2StreamState;
 import vibe.http.internal.http2.hpack.hpack;
@@ -11,6 +12,7 @@ import vibe.http.status;
 import vibe.http.server;
 import vibe.core.log;
 import vibe.core.stream;
+import vibe.core.core;
 import vibe.internal.interfaceproxy;
 import vibe.stream.tls;
 import vibe.internal.allocator;
@@ -33,6 +35,7 @@ import std.format;
 import std.algorithm.iteration;
 import std.algorithm.mutation;
 import std.algorithm.searching;
+import std.algorithm.comparison;
 
 /**
   * HTTP/2 message exchange module as documented in:
@@ -46,7 +49,9 @@ private alias H2F = HTTP2HeaderTableField;
 alias DataOutputStream = MemoryOutputStream;
 
 /// accepts a HTTP/1.1 header list, converts it to an HTTP/2 header frame and encodes it
-ubyte[] buildHeaderFrame(alias type)(string statusLine, InetHeaderMap headers, HTTP2ServerContext context, ref IndexingTable table, scope IAllocator alloc) @safe
+ubyte[] buildHeaderFrame(alias type)(string statusLine, InetHeaderMap headers,
+		HTTP2ServerContext context, ref IndexingTable table, scope IAllocator alloc, bool
+		isTLS = true) @safe
 {
 	// frame header + frame payload
 	FixedAppender!(ubyte[], 9) hbuf;
@@ -54,7 +59,7 @@ ubyte[] buildHeaderFrame(alias type)(string statusLine, InetHeaderMap headers, H
 	auto res = AllocAppender!(ubyte[])(alloc);
 
 	// split the start line of each req / res into pseudo-headers
-	convertStartMessage(statusLine, pbuf, table, type, context.isTLS);
+	convertStartMessage(statusLine, pbuf, table, type, isTLS);
 
 	// "Host" header does not exist in HTTP/2, use ":authority" pseudo-header
 	if("Host" in headers) {
@@ -63,11 +68,14 @@ ubyte[] buildHeaderFrame(alias type)(string statusLine, InetHeaderMap headers, H
 	}
 
 	foreach(k,v; headers) {
-		H2F(k,v).encodeHPACK(pbuf, table);
+		H2F(k.toLower,v).encodeHPACK(pbuf, table);
 	}
 
 	// TODO padding
+	if(context.next_sid == 0) context.next_sid = 1;
+
 	hbuf.createHTTP2FrameHeader(cast(uint)pbuf.data.length, HTTP2FrameType.HEADERS, 0x0, context.next_sid);
+
 	res.put(hbuf.data);
 	res.put(pbuf.data);
 	return res.data;
@@ -77,8 +85,7 @@ ubyte[] buildHeaderFrame(alias type)(string statusLine, InetHeaderMap headers, H
 ubyte[] buildHeaderFrame(alias type)(string statusLine, InetHeaderMap headers,
 		HTTP2ServerContext context, scope IAllocator alloc) @trusted
 {
-	auto table = IndexingTable(context.settings.headerTableSize);
-	return buildHeaderFrame!type(statusLine, headers, context, table, alloc);
+	return buildHeaderFrame!type(statusLine, headers, context, context.table, alloc);
 }
 
 /// generates an HTTP/2 pseudo-header representation to encode a HTTP/1.1 start message line
@@ -119,7 +126,6 @@ unittest {
 	HTTP2Settings settings;
 	HTTPServerContext ctx;
 	auto context = HTTP2ServerContext(ctx, settings);
-	context.setNoTLS();
 	auto table = IndexingTable(settings.headerTableSize);
 	scope alloc = new RegionListAllocator!(shared(Mallocator), false)(1024, Mallocator.instance);
 
@@ -128,27 +134,30 @@ unittest {
 	hmap["Host"] = "www.example.com";
 	ubyte[] expected = [0x82, 0x86, 0x84, 0x41, 0x8c, 0xf1 , 0xe3, 0xc2 , 0xe5, 0xf2 , 0x3a, 0x6b , 0xa0, 0xab , 0x90, 0xf4 , 0xff];
 	// [9..$] excludes the HTTP/2 Frame header
-	auto res = buildHeaderFrame!(StartLine.REQUEST)(statusline, hmap, context, table, alloc)[9..$];
-	import std.stdio;
-	writeln(res);
-	writeln(expected);
+	auto res = buildHeaderFrame!(StartLine.REQUEST)(statusline, hmap, context, table, alloc,
+			false)[9..$];
 	assert(res == expected);
 
 	statusline = "HTTP/2 200 OK";
 	InetHeaderMap hmap1;
 	expected = [0x88];
-	res = buildHeaderFrame!(StartLine.RESPONSE)(statusline, hmap1, context, table, alloc)[9..$];
+	res = buildHeaderFrame!(StartLine.RESPONSE)(statusline, hmap1, context, table, alloc,
+			false)[9..$];
 
 	assert(res == expected);
 }
 
-/** Similar to originalHandleRequest but adapted to HTTP/2
-  * the main changes are parsing and reading / writing to stream
+/* ======================================================= */
+/* 					HTTP/2 REQUEST HANDLING 			   */
+/* ======================================================= */
+
+/** Similar to originalHandleRequest, adapted to HTTP/2
   * The request is converted to HTTPServerRequest through parseHTTP2RequestHeader
-  * once the HTTPServerResponse is built, HEADERS frame and optionally DATA Frame is sent
-  * TODO: CONTINUATION frames in case headers exceed maximum size allowed
+  * once the HTTPServerResponse is built, HEADERS frame and (optionally) DATA Frames are sent
 */
-bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream, TCPConnection tcp_connection, HTTP2ServerContext h2context, HTTP2HeaderTableField[] headers, ref IndexingTable table, scope IAllocator alloc) @safe
+bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream,
+		TCPConnection tcp_connection, ref HTTP2ServerContext h2context,
+		HTTP2HeaderTableField[] headers, ref IndexingTable table, scope IAllocator alloc) @safe
 {
 	SysTime reqtime = Clock.currTime(UTC());
 	HTTPServerContext listen_info = h2context.h1context;
