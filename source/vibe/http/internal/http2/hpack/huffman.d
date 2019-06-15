@@ -68,15 +68,15 @@ void decodeHuffman(I, O)(I source, ref O dst) @safe
 		decodeSymbol(dst, state, ch & 0xf, eos);
 	}
 
-	assert(eos, "Invalid encoded source");
+	enforceHPACK(eos, "Invalid encoded source");
 }
 
 private void decodeSymbol(O)(ref O decoded, ref char state, int pos, ref char eos)
 @safe
 {
-	assert(state < 256 && pos < 16, "Invalid entry reference");
+	enforceHPACK(state < 256 && pos < 16, "Invalid entry reference");
 	auto entry = HuffDecodeCodes[state][pos];
-	assert(entry.next != state, "Invalid symbol");
+	enforceHPACK(entry.next != state, "Invalid symbol");
 
 	if (entry.emit) { // if the symbol is terminal
 		auto sym = cast(immutable(char))entry.symbol;
@@ -101,7 +101,7 @@ unittest {
 	assert(dst2.data == "www.example.com");
 }
 
-@nogc unittest {
+unittest { // could be @nogc (exceptions aren't)
 	import vibe.internal.array : BatchBuffer;
 
 	immutable ubyte[12] src = [0xf1, 0xe3, 0xc2, 0xe5, 0xf2, 0x3a, 0x6b, 0xa0, 0xab, 0x90, 0xf4, 0xff];

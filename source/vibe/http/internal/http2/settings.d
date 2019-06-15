@@ -1,10 +1,15 @@
 module vibe.http.internal.http2.settings;
 
+import vibe.http.internal.http2.multiplexing;
 import vibe.http.internal.http2.frame;
 import vibe.http.internal.http2.hpack.tables;
+import vibe.http.internal.http2.error;
+
 import vibe.http.server;
 import vibe.core.log;
 import vibe.core.net;
+import vibe.core.task;
+import vibe.internal.freelistref;
 
 import std.range;
 import std.base64;
@@ -145,7 +150,9 @@ struct HTTP2Settings {
 	 * might be closed as soon as possible
 	 */
 	@http2Setting(0x3, "SETTINGS_MAX_CONCURRENT_STREAMS")
-	HTTP2SettingValue maxConcurrentStreams = HTTP2SettingValue.max;
+	//HTTP2SettingValue maxConcurrentStreams = HTTP2SettingValue.max; // lowered
+	//to 2^16
+	HTTP2SettingValue maxConcurrentStreams = 65536;
 
 	// TODO FLOW_CONTROL_ERRROR on values > 2^31-1
 	@http2Setting(0x4, "SETTINGS_INITIAL_WINDOW_SIZE")
@@ -204,6 +211,7 @@ struct HTTP2Settings {
 					break assign;
 			}
 		}
+
 	}
 
 }
@@ -218,11 +226,18 @@ void serializeSettings(R)(ref R dst, HTTP2Settings settings) @safe @nogc
 	}
 }
 
-void unpackSettings(R)(ref HTTP2Settings settings, R src) @safe @nogc
+void unpackSettings(R)(ref HTTP2Settings settings, R src) @safe
 {
 	while(!src.empty) {
 		auto id = src.takeExactly(2).fromBytes(2);
 		src.popFrontN(2);
+
+		// invalid IDs: ignore setting
+		if(!(id >= minID && id <= maxID)) {
+			src.popFrontN(4);
+			continue;
+		}
+
 		static foreach(s; __traits(allMembers, HTTP2Settings)) {
 			static if(is(typeof(__traits(getMember, HTTP2Settings, s)) == HTTP2SettingValue)) {
 				mixin("if(id == ((getUDAs!(settings."~s~",HTTP2Setting)[0]).id)) {
@@ -233,6 +248,15 @@ void unpackSettings(R)(ref HTTP2Settings settings, R src) @safe @nogc
 			}
 		}
 	}
+
+	enforceHTTP2(settings.enablePush == 0 || settings.enablePush == 1,
+			"Invalid value for ENABLE_PUSH setting.", HTTP2Error.PROTOCOL_ERROR);
+
+	enforceHTTP2(settings.initialWindowSize < (1 << 31),
+			"Invalid value for INITIAL_WINDOW_SIZE setting.", HTTP2Error.FLOW_CONTROL_ERROR);
+
+	enforceHTTP2(settings.maxFrameSize >= (1 << 14) && settings.maxFrameSize < (1 << 24),
+			"Invalid value for MAX_FRAME_SIZE setting.", HTTP2Error.FLOW_CONTROL_ERROR);
 }
 
 unittest {
@@ -285,12 +309,18 @@ struct HTTP2ServerContext
 		HTTPServerContext m_context;
 		Nullable!HTTP2Settings m_settings;
 		uint m_sid = 0;
-		bool m_isTLS = true;
+		FreeListRef!IndexingTable m_table;
+		FreeListRef!HTTP2Multiplexer m_multiplexer;
+		bool m_initializedT = false;
+		bool m_initializedM = false;
+
 	}
 
+	alias m_context this;
+
 	// used to mantain the first request in case of `h2c` protocol switching
-	Nullable!(ubyte[]) resFrame;
-	Nullable!(ubyte[]) resBody;
+	// TODO find alternative approach
+	ubyte[] resFrame = void;
 
 	this(HTTPServerContext ctx, HTTP2Settings settings) @safe
 	{
@@ -303,8 +333,29 @@ struct HTTP2ServerContext
 		m_context = ctx;
 	}
 
+	@property auto ref table() @safe { return m_table.get; }
 
-	alias m_context this;
+	@property bool hasTable() @safe { return m_initializedT; }
+
+	@property void table(T)(T table) @safe
+		if(is(T == typeof(m_table)))
+	{
+		assert(!m_initializedT);
+		m_table = table;
+		m_initializedT = true;
+	}
+
+	@property auto ref multiplexer() @safe { return m_multiplexer.get; }
+
+	@property bool hasMultiplexer() @safe { return m_initializedM; }
+
+	@property void multiplexer(T)(T multiplexer) @safe
+		if(is(T == typeof(m_multiplexer)))
+	{
+		assert(!m_initializedM);
+		m_multiplexer = multiplexer;
+		m_initializedM = true;
+	}
 
 	@property HTTPServerContext h1context() @safe @nogc { return m_context; }
 
@@ -312,20 +363,21 @@ struct HTTP2ServerContext
 
 	@property void next_sid(uint sid) @safe @nogc { m_sid = sid; }
 
-	@property bool isTLS() @safe @nogc { return m_isTLS; }
-
-	@property void setNoTLS() @safe @nogc { m_isTLS = false; }
-
 	@property ref HTTP2Settings settings() @safe @nogc
 	{
 		assert(!m_settings.isNull);
 		return m_settings;
 	}
 
-	@property void settings(ref HTTP2Settings settings) @safe @nogc
+	@property void settings(ref HTTP2Settings settings) @safe
 	{
 		assert(m_settings.isNull);
 		m_settings = settings;
+		() @trusted {
+			if (settings.headerTableSize != 4096) {
+				table.updateSize(settings.headerTableSize);
+			}
+		} ();
 	}
 }
 

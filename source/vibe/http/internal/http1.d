@@ -186,6 +186,7 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 			else if (is(typeof(http_stream) : TLSStream))
 				req.clientCertificate = http_stream.extract!TLSStreamType.peerCertificate;
 			else
+				// TODO fix: no client certificate
 				assert(false);
 		}
 	}
@@ -230,7 +231,18 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 		}
 
 		// basic request parsing
-		parseRequestHeader(req, reqReader, request_allocator, settings.maxRequestHeaderSize);
+		uint h2 = parseRequestHeader(req, reqReader, request_allocator, settings.maxRequestHeaderSize);
+		if(h2) {
+			// start http/2 with prior knowledge
+			uint len = 22 - h2;
+			ubyte[] dummy; dummy.length = len;
+
+			http_stream.read(dummy); // finish reading connection preface
+			auto h2settings = HTTP2Settings();
+			auto h2context = HTTP2ServerContext(listen_info, h2settings);
+			handleHTTP2Connection(tcp_connection, tcp_connection, h2context, true);
+			return true;
+		}
 
 		logTrace("Got request header.");
 
@@ -335,7 +347,6 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 
 		// handle the request
 		logTrace("handle request (body %d)", req.bodyReader.leastSize);
-		res.httpVersion = req.httpVersion;
 
 		/**
 		 * UPGRADE TO HTTP/2 for cleartext HTTP/1
@@ -344,21 +355,30 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 		 * "h2" is ignored since it is used for TLS protocol switching (ALPN)
 		 */
 		if(req.headers.get("Upgrade") == "h2c" ) {
-			// write the original response to a buffer
-			void createResBuffer(IAllocator alloc, ref HTTP2ServerContext ctx) @trusted
-			{
-				import vibe.stream.memory;
-				import vibe.http.internal.http2.exchange;
-				MemoryOutputStream buf = createMemoryOutputStream(alloc);
+			import vibe.stream.memory;
+			import vibe.http.internal.http2.exchange;
 
-				res.bodyWriterH2(buf);
+			// write the original response to a buffer
+			string createResBuffer(ref MemoryOutputStream buf, ref size_t hlen) @trusted
+			{
+				res.bodyWriterH2(buf, true);
 				auto statusLine = (cast(string)buf.data).split("\r\n")[0];
-				auto hlen = buf.data.length;
-				ctx.resFrame = buildHeaderFrame!(StartLine.RESPONSE)(statusLine, res.headers, ctx, alloc);
-				if(req.method != HTTPMethod.HEAD) {
-					request_task(req, res);
-					ctx.resBody = buf.data[hlen..$].nullable;
+				hlen = buf.data.length;
+
+				// write body to buffer
+				request_task(req, res);
+
+				// no matching path in handler
+				if(buf.data.length == hlen && req.method != HTTPMethod.HEAD) {
+					return "HTTP/2 404 Not Found\r\n";
 				}
+
+				//// matching path, data needs to be saved
+				//if(req.method != HTTPMethod.HEAD) {
+					//ctx.resBody = request_allocator.make!(ubyte)(buf.data[hlen..$]);
+				//}
+
+				return statusLine;
 			}
 
 			auto psettings = "HTTP2-Settings" in req.headers;
@@ -366,19 +386,22 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 					include HTTP2-Settings");
 			auto h2settings = *psettings;
 
-			logDebug("Switching to HTTP/2");
+			logInfo("Switching to HTTP/2");
 			logTrace("handle request (body %d)", req.bodyReader.leastSize);
 
 			// initialize the request handler
 			auto h2context = HTTP2ServerContext(listen_info);
-			h2context.setNoTLS;
-			createResBuffer(request_allocator, h2context);
+
+			MemoryOutputStream buf = createMemoryOutputStream(request_allocator);
+			size_t hlen;
+			auto st = createResBuffer(buf, hlen);
 			auto switchRes = HTTPServerResponse(http_stream, cproxy, settings, request_allocator);
 
-			return startHTTP2Connection(tcp_connection, h2settings, h2context, switchRes);
+			return startHTTP2Connection(tcp_connection, h2settings, h2context, switchRes,
+					res.headers, st, request_allocator, buf.data[hlen..$]);
 		}
 
-
+		res.httpVersion = req.httpVersion;
 		request_task(req, res);
 
 

@@ -20,7 +20,7 @@ void encode(R)(HTTP2HeaderTableField header, ref R dst, ref IndexingTable table,
 
 /// encode a pure integer (present in table) or integer name + literal value
 private bool encodeInteger(R)(const HTTP2HeaderTableField header, ref R dst, ref IndexingTable table, bool huffman = true)
-@safe
+@trusted
 {
 	// check table for indexed headers
 	size_t idx = 1;
@@ -98,7 +98,7 @@ unittest {
 	// encode integer
 	import vibe.internal.array : BatchBuffer;
 	import vibe.http.common;
-	IndexingTable table = IndexingTable(4096);
+	auto table = IndexingTable(4096);
 
 	BatchBuffer!(ubyte, 1) bres;
 	bres.putN(1);

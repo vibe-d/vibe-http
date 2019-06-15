@@ -1,6 +1,7 @@
 module vibe.http.internal.http2.frame;
 
 import vibe.http.internal.http2.settings;
+import vibe.http.internal.http2.error;
 
 import vibe.internal.array;
 
@@ -8,6 +9,7 @@ import std.typecons;
 import std.traits;
 import std.range;
 import std.array;
+import std.exception;
 import std.algorithm.iteration;
 import std.algorithm.mutation;
 
@@ -85,21 +87,23 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref
 	switch(header.type) {
 		case HTTP2FrameType.DATA:
 			if(header.flags & 0x8) { // padding is set, first bit is pad length
-				len -= cast(size_t)src.front;
+				len -= cast(size_t)src.front + 1;
 				src.popFront();
+				enforceHTTP2(src.length >= len, "Invalid pad length", HTTP2Error.PROTOCOL_ERROR);
 			}
 			foreach(b; src.takeExactly(len)) {
 				payloadDst.put(b);
 				src.popFront();
 			}
-			src.popFrontN(header.payloadLength - len); // remove padding
+			src.popFrontN(header.payloadLength - len - 1); // remove padding
 			if(header.flags & 0x1) endStream = true;
 			break;
 
 		case HTTP2FrameType.HEADERS:
 			if(header.flags & 0x8) { // padding is set, first bit is pad length
-				len -= cast(size_t)src.front;
+				len -= cast(size_t)src.front + 1;
 				src.popFront();
+				enforceHTTP2(src.length >= len, "Invalid pad length", HTTP2Error.PROTOCOL_ERROR);
 			}
 			if(header.flags & 0x20) { // priority is set, fill `sdep`
 				sdep.fill(src);
@@ -109,18 +113,18 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref
 				payloadDst.put(b);
 				src.popFront();
 			}
-			src.popFrontN(header.payloadLength - len); // remove padding
+			src.popFrontN(header.payloadLength - len - 1); // remove padding
 			if(header.flags & 0x1) endStream = true;
 			if(header.flags & 0x4) endHeaders = true;
 			break;
 
 		case HTTP2FrameType.PRIORITY:
-			assert(len == 5, "Invalid PRIORITY Frame");
+			enforceHTTP2(len == 5, "Invalid PRIORITY Frame", HTTP2Error.PROTOCOL_ERROR);
 			sdep.fill(src);
 			break;
 
 		case HTTP2FrameType.RST_STREAM:
-			assert(len == 4, "Invalid RST_STREAM Frame");
+			enforceHTTP2(len == 4, "Invalid RST_STREAM Frame", HTTP2Error.PROTOCOL_ERROR);
 			foreach(b; src.takeExactly(len)) {
 				payloadDst.put(b);
 				src.popFront();
@@ -128,10 +132,10 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref
 			break;
 
 		case HTTP2FrameType.SETTINGS:
-			assert(len % 6 == 0, "Invalid SETTINGS Frame (FRAME_SIZE error)");
-			assert(header.streamId == 0, "Invalid streamId for SETTINGS Frame");
+			enforceHTTP2(len % 6 == 0, "Invalid SETTINGS Frame (FRAME_SIZE error)", HTTP2Error.PROTOCOL_ERROR);
+			enforceHTTP2(header.streamId == 0, "Invalid streamId for SETTINGS Frame", HTTP2Error.PROTOCOL_ERROR);
 			if(header.flags & 0x1) { // this is an ACK frame
-				assert(len == 0, "Invalid SETTINGS ACK Frame (FRAME_SIZE error)");
+				enforceHTTP2(len == 0, "Invalid SETTINGS ACK Frame (FRAME_SIZE error)", HTTP2Error.PROTOCOL_ERROR);
 				ack = true;
 				break;
 			}
@@ -143,8 +147,9 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref
 
 		case HTTP2FrameType.PUSH_PROMISE:
 			if(header.flags & 0x8) { // padding is set, first bit is pad length
-				len -= cast(size_t)src.front;
+				len -= cast(size_t)src.front + 1;
 				src.popFront();
+				enforceHTTP2(src.length >= len, "Invalid pad length", HTTP2Error.PROTOCOL_ERROR);
 			}
 			sdep.isPushPromise = true;
 			sdep.fill(src);
@@ -153,13 +158,15 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref
 				payloadDst.put(b);
 				src.popFront();
 			}
-			src.popFrontN(header.payloadLength - len); // remove padding
+			src.popFrontN(header.payloadLength - len - 1); // remove padding
 			if(header.flags & 0x4) endHeaders = true;
 			break;
 
 		case HTTP2FrameType.PING:
-			assert(len == 8, "Invalid PING Frame (FRAME_SIZE error)");
-			assert(header.streamId == 0, "Invalid streamId for PING Frame");
+			enforceHTTP2(len == 8, "Invalid PING Frame (FRAME_SIZE error)",
+					HTTP2Error.PROTOCOL_ERROR);
+			enforceHTTP2(header.streamId == 0, "Invalid streamId for PING Frame",
+					HTTP2Error.PROTOCOL_ERROR);
 			if(header.flags & 0x1) {
 				ack = true;
 			}
@@ -170,8 +177,10 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref
 			break;
 
 		case HTTP2FrameType.GOAWAY: // GOAWAY is used to close connection (in handler)
-			assert(len >= 8, "Invalid GOAWAY Frame (FRAME_SIZE error)");
-			assert(header.streamId == 0, "Invalid streamId for GOAWAY Frame");
+			enforceHTTP2(len >= 8, "Invalid GOAWAY Frame (FRAME_SIZE error)",
+					HTTP2Error.PROTOCOL_ERROR);
+			enforceHTTP2(header.streamId == 0, "Invalid streamId for GOAWAY Frame",
+					HTTP2Error.PROTOCOL_ERROR);
 			foreach(b; src.takeExactly(len)) {
 				payloadDst.put(b);
 				src.popFront();
@@ -179,7 +188,8 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref
 			break;
 
 		case HTTP2FrameType.WINDOW_UPDATE:
-			assert(len == 4, "Invalid WINDOW_UPDATE Frame (FRAME_SIZE error)");
+			enforceHTTP2(len == 4, "Invalid WINDOW_UPDATE Frame (FRAME_SIZE error)",
+					HTTP2Error.PROTOCOL_ERROR);
 			foreach(i,b; src.takeExactly(len).enumerate) {
 				if(i == 0) b &= 0x7F; // reserved bit
 				payloadDst.put(b);
@@ -188,7 +198,8 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref
 			break;
 
 		case HTTP2FrameType.CONTINUATION:
-			assert(header.streamId != 0, "Invalid streamId for CONTINUATION frame");
+			enforceHTTP2(header.streamId != 0, "Invalid streamId for CONTINUATION frame",
+					HTTP2Error.PROTOCOL_ERROR);
 			foreach(b; src.takeExactly(len)) {
 				payloadDst.put(b);
 				src.popFront();
@@ -197,7 +208,8 @@ void unpackHTTP2Frame(R,T)(ref R payloadDst, T src, HTTP2FrameHeader header, ref
 			break;
 
 		default:
-			assert(false, "Invalid frame header unpacked");
+			enforceHTTP2(false, "Invalid frame header unpacked.", HTTP2Error.PROTOCOL_ERROR);
+			break;
 	}
 }
 
@@ -371,8 +383,9 @@ struct HTTP2FrameHeader
 		m_type = cast(HTTP2FrameType)src.front; src.popFront;
 		m_flags = src.front; src.popFront;
 
-		m_streamId.put(src.take(4));
-		src.popFrontN(4);
+		m_streamId.put(src.take(1).front & 127); src.popFront; // ignore reserved bit
+		m_streamId.put(src.take(3));
+		src.popFrontN(3);
 	}
 
 	@property HTTP2FrameType type() @safe @nogc { return m_type; }
@@ -393,7 +406,11 @@ void putBytes(uint N, R)(ref R dst, const(ulong) src) @safe @nogc
 	ubyte[N] buf;
 	foreach(i,ref b; buf) b = cast(ubyte)(src >> 8*(N-1-i)) & 0xff;
 
-	dst.put(buf);
+	static if(isArray!R) {
+		dst.put(buf);
+	} else {
+		foreach(b; buf) dst.put(b);
+	}
 }
 
 /// convert a N-bytes representation MSB->LSB to uint

@@ -718,6 +718,7 @@ enum SessionOption {
 }
 
 
+
 /**
 	Represents a HTTP request as received by the server side.
  */
@@ -745,6 +746,8 @@ struct HTTPServerRequest {
 	public {
 		import vibe.utils.dictionarylist;
 		DictionaryList!(string, true, 8) params;
+
+		@property scope data() @safe { return m_data; }
 
 		@property scope string requestURI() const @safe { return m_data.requestURI; }
 		// ditto
@@ -776,7 +779,11 @@ struct HTTPServerRequest {
 
 		@property scope string path() @safe { return m_data.path; }
 
-		@property scope InetHeaderMap headers() @safe { return m_data.headers; }
+		// ditto
+		@property void path(scope string p)
+		@safe { m_data.path = path; }
+
+		@property ref InetHeaderMap headers() @safe { return m_data.headers; }
 
 		@property scope bool persistent() const @safe { return m_data.persistent; }
 
@@ -880,9 +887,9 @@ struct HTTPServerRequest {
 struct HTTPServerResponse {
 	@safe:
 
-	private HTTPServerResponseData *m_data;
+	private HTTPServerResponseData* m_data;
 
-	this (HTTPServerResponseData *data)
+	this (HTTPServerResponseData* data)
 	{
 		m_data = data;
 	}
@@ -896,11 +903,14 @@ struct HTTPServerResponse {
 
 	this(InterfaceProxy!Stream conn, InterfaceProxy!ConnectionStream raw_connection, HTTPServerSettings settings, IAllocator req_alloc)
 	{
-		HTTPServerResponseData *data = new HTTPServerResponseData(conn, raw_connection, settings, req_alloc);
+		HTTPServerResponseData* data = new HTTPServerResponseData(conn, raw_connection, settings, req_alloc);
 		this(data);
 	}
 
+	@property scope data() @safe { return m_data; }
+
 	@property scope HTTPVersion httpVersion() { return m_data.httpVersion; }
+
 	@property void httpVersion(HTTPVersion h) { m_data.httpVersion = h; }
 
 	@property scope int statusCode() { return m_data.statusCode; }
@@ -1017,9 +1027,9 @@ struct HTTPServerResponse {
 		return m_data.bodyWriter;
 	}
 
-	package @property void bodyWriterH2(T)(ref T writer)
+	package @property void bodyWriterH2(T)(ref T writer, const bool writeH = false)
 	{
-		m_data.bodyWriterH2(writer);
+		m_data.bodyWriterH2(writer, writeH);
 	}
 
 	/** Sends a redirect request to the client.
@@ -2223,12 +2233,13 @@ struct HTTPServerResponseData {
 		  * Used to change the bodyWriter during a HTTP/2 connection
 		  */
 		import vibe.stream.memory;
-		@property void bodyWriterH2(T)(ref T writer) @safe
+		@property void bodyWriterH2(T)(ref T writer, const bool writeH = false) @safe
 			if(isOutputStream!T)
 		{
 			assert(!m_bodyWriter, "Unable to set bodyWriter");
+
 			// write the current set headers before initiating the bodyWriter
-			if(!m_headerWritten) writeHeader(writer);
+			if(writeH) writeHeader(writer);
 
 			static if(!is(T == InterfaceProxy!OutputStream)) {
 				InterfaceProxy!OutputStream bwriter = writer;
@@ -2326,7 +2337,7 @@ struct HTTPServerResponseData {
 
 				// TODO improve handler (handleHTTP2Connection) connection management
 				auto tcp_conn = m_rawConnection.extract!TCPConnection;
-				handler(tcp_conn, tcp_conn, context);
+				handler(tcp_conn, tcp_conn, context, false);
 
 				finalize();
 				// close the existing connection
@@ -2596,17 +2607,18 @@ unittest
 	  assert(cvm[""] == "");
 }
 
-void parseHTTP2RequestHeader(R)(ref R headers, ref HTTPServerRequest reqStruct) @safe
+void parseHTTP2RequestHeader(R)(ref R headers, HTTPServerRequest reqStruct) @safe
 {
 	import std.algorithm.searching : find, startsWith;
 	import std.algorithm.iteration : filter;
-	auto req = reqStruct.m_data;
+	auto req = reqStruct.data;
 
 	//Method
 	req.method = cast(HTTPMethod)headers.find!((h,m) => h.name == m)(":method")[0].value;
 
 	//Host
-	req.host = cast(string)headers.find!((h,m) => h.name == m)(":authority")[0].value;
+	auto host = headers.find!((h,m) => h.name == m)(":authority");
+	if(!host.empty) req.host = cast(string)host[0].value;
 
 	//Path
 	req.path = cast(string)headers.find!((h,m) => h.name == m)(":path")[0].value;
@@ -2624,14 +2636,16 @@ void parseHTTP2RequestHeader(R)(ref R headers, ref HTTPServerRequest reqStruct) 
 	}
 }
 
-void parseRequestHeader(InputStream)(HTTPServerRequest reqStruct, InputStream http_stream, IAllocator alloc, ulong max_header_size)
+uint parseRequestHeader(InputStream)(HTTPServerRequest reqStruct, InputStream http_stream, IAllocator alloc, ulong max_header_size)
 	if (isInputStream!InputStream)
 {
+	auto req = reqStruct.data;
 	auto stream = FreeListRef!LimitedHTTPInputStream(http_stream, max_header_size);
-	auto req = reqStruct.m_data;
 
 	logTrace("HTTP server reading status line");
 	auto reqln = () @trusted { return cast(string)stream.readLine(MaxHTTPHeaderLineLength, "\r\n", alloc); }();
+
+	if(reqln == "PRI * HTTP/2.0") return cast(uint)reqln.length;
 
 	logTrace("--------------------");
 	logTrace("HTTP server request:");
@@ -2659,6 +2673,7 @@ void parseRequestHeader(InputStream)(HTTPServerRequest reqStruct, InputStream ht
 	foreach (k, v; req.headers)
 		logTrace("%s: %s", k, v);
 	logTrace("--------------------");
+	return 0;
 }
 
 string formatRFC822DateAlloc(IAllocator alloc, SysTime time)
