@@ -32,7 +32,6 @@ import std.container : RedBlackTree;
 /// register a stream on a MUX
 auto registerStream(Mux)(ref Mux multiplexer, const uint sid) @trusted
 {
-	if(sid > 0) logDebug("MUX: Registering stream %d on mux[%s]", sid, multiplexer.stringof);
 	return multiplexer.register(sid);
 }
 

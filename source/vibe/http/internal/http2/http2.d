@@ -141,7 +141,6 @@ import std.variant : Algebraic;
   * if the protocol is not set, it replies with HTTP/1.1
   */
 TLSALPNCallback http2Callback = (string[] choices) {
-	//logDebug("http2Callback");
 	if (choices.canFind("h2")) return "h2";
 	else return "http/1.1";
 };
@@ -163,7 +162,7 @@ bool startHTTP2Connection(ConnectionStream, H)(ConnectionStream connection, stri
 {
 	// init settings
 	HTTP2Settings settings;
-	logDebug("Starting HTTP/2 connection");
+	logTrace("Starting HTTP/2 connection");
 
 	// try decoding settings
 	if (settings.decode!Base64URL(h2settings)) {
@@ -202,7 +201,7 @@ void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream,
 		TCPConnection connection, HTTP2ServerContext context, bool priorKnowledge=false) @safe
 	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStreamType))
 {
-	logDebug("HTTP/2 Connection Handler");
+	logTrace("HTTP/2 Connection Handler");
 
 	// read the connection preface
 	if(!priorKnowledge) {
@@ -210,11 +209,11 @@ void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream,
 		stream.read(h2connPreface);
 
 		if(h2connPreface != "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n") {
-			logWarn("Ignoring invalid HTTP/2 client connection preface");
+			logDebug("Ignoring invalid HTTP/2 client connection preface");
 			return;
 		}
+		logTrace("Received client http2 connection preface");
 	}
-	logDebug("Received client http2 connection preface");
 
 	// initialize Frame handler
 	handleHTTP2FrameChain(stream, connection, context);
@@ -229,7 +228,7 @@ private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TC
 		connection, HTTP2ServerContext context) @safe
 	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStream))
 {
-	logDebug("HTTP/2 Frame Chain Handler");
+	logTrace("HTTP/2 Frame Chain Handler");
 
 	static struct CB {
 		ConnectionStream stream;
@@ -249,13 +248,11 @@ private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TC
 
 		final switch(st) {
 			case WaitForDataAsyncStatus.waiting:
-				//logWarn("Waiting for data");
 				return;
 
 			case WaitForDataAsyncStatus.noMoreData:
 				stream.finalize();
 				connection.close();
-				//logWarn("Reached end of stream.");
 				return;
 
 			case WaitForDataAsyncStatus.dataAvailable:
@@ -263,14 +260,12 @@ private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TC
 				bool close = handleHTTP2Frame(stream, connection, context);
 
 				// determine if this connection needs to be closed
-				if(close || stream.empty) {
-					logDebug("Closing connection.");
-
+				if(close) {
+					logTrace("Closing connection.");
 					stream.finalize();
 					connection.close();
 					return;
 				}
-				break;
 		}
 	}
 }
@@ -281,7 +276,7 @@ private bool handleHTTP2Frame(ConnectionStream)(ConnectionStream stream, TCPConn
 	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStream))
 {
 	import vibe.internal.utilallocator: RegionListAllocator;
-	logDebug("HTTP/2 Frame Handler");
+	logTrace("HTTP/2 Frame Handler");
 
 	bool close = false;
 
@@ -331,7 +326,7 @@ private const string checkvalid = "enforceHTTP2(valid, \"Invalid stream ID\", HT
 private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCPConnection connection,
 		ref HTTP2ServerContext context, IAllocator alloc) @trusted
 {
-	logDebug("HTTP/2 Frame Handler (Alloc)");
+	logTrace("HTTP/2 Frame Handler (Alloc)");
 
 	uint len = 0;
 
@@ -366,6 +361,7 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 		return false;
 	}
 
+
 	// adjust buffer sizes
 	rawBuf.reserve(len);
 	payload.reserve(len);
@@ -374,7 +370,6 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 /* 				read received payload 					*/
 /* ==================================================== */
 	if(len) stream.readPayload(rawBuf, len);
-	else return false;
 
 
 /* ==================================================== */
@@ -719,9 +714,9 @@ void handleHTTP2SettingsFrame(Stream)(ref Stream stream, TCPConnection connectio
 
 	// notify waiting threads if needed
 	if(checkCondition(context.multiplexer, stream.streamId)) {
-		logDebug("Notifying stopped tasks");
+		logTrace("Notifying stopped tasks");
 		notifyCondition(context.multiplexer);
-		yield();
+		//yield();
 	}
 
 	// acknowledge settings with SETTINGS ACK Frame
@@ -733,7 +728,6 @@ void handleHTTP2SettingsFrame(Stream)(ref Stream stream, TCPConnection connectio
 
 	// write SETTINGS ACK
 	stream.write(ackReply.data);
-
 	logDebug("Sent SETTINGS ACK");
 }
 
@@ -856,7 +850,7 @@ struct HTTP2ConnectionStream(CS)
 			default:
 				enforceHTTP2(false, "Invalid state", HTTP2Error.PROTOCOL_ERROR);
  		}
-		logDebug("Stream: %d state: %s", m_streamId, st);
+		logTrace("Stream: %d state: %s", m_streamId, st);
 	}
 
 	@property uint streamId() @safe @nogc { return m_streamId; }
