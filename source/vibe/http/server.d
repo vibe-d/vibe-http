@@ -2676,11 +2676,33 @@ uint parseRequestHeader(InputStream)(HTTPServerRequest reqStruct, InputStream ht
 	return 0;
 }
 
+private struct CacheTime {
+	string cachedDate;
+	SysTime nextUpdate;
+
+	this(SysTime nextUpdate) @trusted
+	{
+		this.nextUpdate = nextUpdate;
+	}
+
+	void update(SysTime time) @trusted
+	{
+		this.nextUpdate = time + 1.seconds;
+		this.nextUpdate.fracSecs = nsecs(0);
+	}
+}
+
+private static LAST = CacheTime(SysTime.min());
+
 string formatRFC822DateAlloc(IAllocator alloc, SysTime time)
 @safe {
-	auto app = AllocAppender!string(alloc);
-	writeRFC822DateTimeString(app, time);
-	return () @trusted { return app.data; } ();
+	if (time > LAST.nextUpdate) {
+		auto app = AllocAppender!string(alloc);
+		writeRFC822DateTimeString(app, time);
+		LAST.update(time);
+		() @trusted { LAST.cachedDate = app.data; } ();
+	}
+	return LAST.cachedDate;
 }
 
 version (VibeDebugCatchAll) alias UncaughtException = Throwable;
