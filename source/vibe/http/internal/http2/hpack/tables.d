@@ -90,7 +90,7 @@ immutable size_t STATIC_TABLE_SIZE = 61;
   */
 static immutable HTTP2HeaderTableField[STATIC_TABLE_SIZE+1] StaticTable;
 
-static this() {
+shared static this() {
 	StaticTable = [
 		HTTP2HeaderTableField("",""), // 0 index is not allowed
 		HTTP2HeaderTableField(":authority", ""),
