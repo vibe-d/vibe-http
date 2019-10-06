@@ -377,6 +377,7 @@ alias HTTPContext = HTTPServerContext;
 
 /// Delegate based request handler
 alias HTTPServerRequestDelegate = void delegate(HTTPServerRequest req, HTTPServerResponse res) @safe;
+alias HTTPServerRequestDelegateS = void delegate(scope HTTPServerRequest req, scope HTTPServerResponse res) @safe;
 /// Static function based request handler
 alias HTTPServerRequestFunction = void function(HTTPServerRequest req, HTTPServerResponse res) @safe;
 
@@ -737,7 +738,7 @@ struct HTTPServerRequest {
 	}
 
 	package {
-		@property scope const(HTTPServerSettings) serverSettings()
+		@property scope const(HTTPServerSettings) serverSettings() const
 		@safe {
 			return m_data.serverSettings;
 		}
@@ -915,9 +916,21 @@ struct HTTPServerResponse {
 
 	@property scope int statusCode() { return m_data.statusCode; }
 
+	@property void statusCode(scope HTTPStatus code) @safe {
+		m_data.statusCode = code;
+	}
+
+	@property void statusCode(scope int code) @safe {
+		m_data.statusCode = code;
+	}
+
 	@property scope string statusPhrase() { return m_data.statusPhrase; }
 
 	@property scope InetHeaderMap headers() { return m_data.headers; }
+
+	@property void headers(scope InetHeaderMap hmap) @safe {
+		m_data.headers = hmap;
+	}
 
 	@property scope Cookie[string] cookies() { return m_data.cookies; }
 
@@ -1615,7 +1628,7 @@ struct HTTPServerRequestData {
 			if (_cookies.isNull) {
 				_cookies = CookieValueMap.init;
 				if (auto pv = "cookie" in headers)
-					parseCookies(*pv, _cookies);
+					parseCookies(*pv, _cookies.get);
 			}
 			return _cookies.get;
 		}
@@ -1628,7 +1641,7 @@ struct HTTPServerRequestData {
 		@property ref FormFields query() @safe {
 			if (_query.isNull) {
 				_query = FormFields.init;
-				parseURLEncodedForm(queryString, _query);
+				parseURLEncodedForm(queryString, _query.get);
 			}
 
 			return _query.get;
@@ -1706,7 +1719,7 @@ struct HTTPServerRequestData {
 		private void parseFormAndFiles() @safe {
 			_form = FormFields.init;
 			assert(!!bodyReader);
-			parseFormData(_form, _files, headers.get("Content-Type", ""), bodyReader, MaxHTTPHeaderLineLength);
+			parseFormData(_form.get, _files, headers.get("Content-Type", ""), bodyReader, MaxHTTPHeaderLineLength);
 		}
 
 		//* Contains information about any uploaded file for a HTML _form request.
@@ -2542,7 +2555,7 @@ struct HTTPServerResponseData {
 					this.statusPhrase.length ? this.statusPhrase : httpStatusText(this.statusCode));
 
 			// write all normal headers
-			foreach (k, v; this.headers) {
+			foreach (k, v; this.headers.byKeyValue) {
 				dst.put(k);
 				dst.put(": ");
 				dst.put(v);
@@ -2670,7 +2683,7 @@ uint parseRequestHeader(InputStream)(HTTPServerRequest reqStruct, InputStream ht
 	//headers
 	parseRFC5322Header(stream, req.headers, MaxHTTPHeaderLineLength, alloc, false);
 
-	foreach (k, v; req.headers)
+	foreach (k, v; req.headers.byKeyValue)
 		logTrace("%s: %s", k, v);
 	logTrace("--------------------");
 	return 0;

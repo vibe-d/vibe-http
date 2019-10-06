@@ -937,7 +937,6 @@ unittest {
 
 unittest {
 	import vibe.core.core : runApplication;
-	setLogLevel(LogLevel.debug_);
 
 	void handleRequest (HTTPServerRequest req, HTTPServerResponse res)
 	@safe {
