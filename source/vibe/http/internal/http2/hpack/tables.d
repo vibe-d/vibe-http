@@ -20,7 +20,9 @@ import taggedalgebraic;
 
 alias HTTP2SettingValue = uint;
 
+// 4096 octets
 enum DEFAULT_DYNAMIC_TABLE_SIZE = 4096;
+
 /*
 	2.3.  Indexing Tables
 	HPACK uses two tables for associating header fields to indexes.  The
@@ -181,8 +183,9 @@ HTTP2SettingValue computeEntrySize(HTTP2HeaderTableField f) @safe
 
 private struct DynamicTable {
 	private {
-		// default table is 4096
-		FixedRingBuffer!(HTTP2HeaderTableField, DEFAULT_DYNAMIC_TABLE_SIZE, false) m_table;
+		// default table is 4096 octs. / n. octets of an empty HTTP2HeaderTableField struct (32)
+		FixedRingBuffer!(HTTP2HeaderTableField, DEFAULT_DYNAMIC_TABLE_SIZE/32, false) m_table;
+
 		// extra table is a circular buffer, initially empty, used when
 		// maxsize > DEFAULT_DYNAMIC_TABLE_SIZE
 		FixedRingBuffer!HTTP2HeaderTableField m_extraTable;
@@ -205,7 +208,7 @@ private struct DynamicTable {
 		m_maxsize = ms;
 
 		if(ms > DEFAULT_DYNAMIC_TABLE_SIZE) {
-			m_extraTable.capacity = ms - DEFAULT_DYNAMIC_TABLE_SIZE;
+			m_extraTable.capacity = (ms - DEFAULT_DYNAMIC_TABLE_SIZE)/32;
 		}
 	}
 
@@ -392,6 +395,7 @@ unittest {
 	assert(table[STATIC_TABLE_SIZE+1].name == "test3");
 
 	// test removal on full table
+
 	HTTP2SettingValue hts = computeEntrySize(h); // only one header
 	IndexingTable t2 = IndexingTable(hts);
 	t2.insert(h);
@@ -399,4 +403,8 @@ unittest {
 	assert(t2.size == STATIC_TABLE_SIZE + 2);
 	assert(t2[STATIC_TABLE_SIZE + 1].name == "test");
 	assert(t2[$ - 1].name == "test");
+
+	auto h4 = HTTP2HeaderTableField("","");
+	hts = computeEntrySize(h4); // entry size of an empty field is 32 octets
+	assert(hts == 32);
 }
