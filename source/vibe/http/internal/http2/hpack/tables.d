@@ -20,6 +20,7 @@ import taggedalgebraic;
 
 alias HTTP2SettingValue = uint;
 
+enum DEFAULT_DYNAMIC_TABLE_SIZE = 4096;
 /*
 	2.3.  Indexing Tables
 	HPACK uses two tables for associating header fields to indexes.  The
@@ -180,8 +181,11 @@ HTTP2SettingValue computeEntrySize(HTTP2HeaderTableField f) @safe
 
 private struct DynamicTable {
 	private {
-		// table is a circular buffer, initially empty
-		FixedRingBuffer!HTTP2HeaderTableField m_table;
+		// default table is 4096
+		FixedRingBuffer!(HTTP2HeaderTableField, DEFAULT_DYNAMIC_TABLE_SIZE, false) m_table;
+		// extra table is a circular buffer, initially empty, used when
+		// maxsize > DEFAULT_DYNAMIC_TABLE_SIZE
+		FixedRingBuffer!HTTP2HeaderTableField m_extraTable;
 
 		// as defined in SETTINGS_HEADER_TABLE_SIZE
 		HTTP2SettingValue m_maxsize;
@@ -191,15 +195,21 @@ private struct DynamicTable {
 
 		// last index (table index starts from 1)
 		size_t m_index = 0;
+
+		// extra table index (starts from 0)
+		size_t m_extraIndex = 0;
 	}
 
 	this(HTTP2SettingValue ms) @trusted
 	{
 		m_maxsize = ms;
-		m_table.capacity = ms;
+
+		if(ms > DEFAULT_DYNAMIC_TABLE_SIZE) {
+			m_extraTable.capacity = ms - DEFAULT_DYNAMIC_TABLE_SIZE;
+		}
 	}
 
-	@property void dispose() { m_table.dispose(); }
+	@property void dispose() { m_extraTable.dispose(); }
 
 	// number of elements inside dynamic table
 	@property size_t size() @safe @nogc { return m_size; }
@@ -210,8 +220,10 @@ private struct DynamicTable {
 
 	HTTP2HeaderTableField opIndex(size_t idx) @safe @nogc
 	{
-		assert(idx > 0 && idx <= m_index, "Invalid table index");
-		return m_table[idx-1];
+		size_t totIndex = m_index + m_extraIndex;
+		assert(idx > 0 && idx <= totIndex, "Invalid table index");
+		if(idx > m_index && idx < totIndex) return m_extraTable[idx-m_index];
+		else return m_table[idx-1];
 	}
 
 	// insert at the head
@@ -225,18 +237,31 @@ private struct DynamicTable {
 		}
 
 		// insert
-		m_table.put(header);
+		if(m_size + nsize > DEFAULT_DYNAMIC_TABLE_SIZE) {
+			m_extraTable.put(header);
+			m_extraIndex++;
+		} else {
+			m_table.put(header);
+			m_index++;
+		}
+
 		m_size += nsize;
-		m_index++;
 	}
 
 	// evict an entry
 	void remove() @safe
 	{
 		enforceHPACK(!m_table.empty, "Cannot remove element from empty table");
-		m_size -= computeEntrySize(m_table.back);
-		m_table.popFront();
-		m_index--;
+
+		if(m_extraIndex > 0) {
+			m_size -= computeEntrySize(m_extraTable.back);
+			m_extraTable.popFront();
+			m_extraIndex--;
+		} else {
+			m_size -= computeEntrySize(m_table.back);
+			m_table.popFront();
+			m_index--;
+		}
 	}
 
 	/** new size should be lower than the max set one
@@ -258,7 +283,7 @@ unittest {
 	assert(a.name == ":authority");
 	assert(getStaticTableEntry(2).name == ":method" && getStaticTableEntry(2).value == HTTPMethod.GET);
 
-	DynamicTable dt = DynamicTable(4096);
+	DynamicTable dt = DynamicTable(DEFAULT_DYNAMIC_TABLE_SIZE+2048);
 	assert(dt.size == 0);
 	assert(dt.index == 0);
 
@@ -348,7 +373,7 @@ struct IndexingTable {
 
 unittest {
 	// indexing table
-	IndexingTable table = IndexingTable(4096);
+	IndexingTable table = IndexingTable(DEFAULT_DYNAMIC_TABLE_SIZE);
 	assert(table[2].name == ":method" && table[2].value == HTTPMethod.GET);
 
 	// assignment
