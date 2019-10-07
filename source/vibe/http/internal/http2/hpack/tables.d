@@ -216,8 +216,6 @@ private struct DynamicTable {
 
 	@property size_t index() @safe @nogc { return m_index; }
 
-	@property ref auto table() @safe @nogc { return m_table; }
-
 	HTTP2HeaderTableField opIndex(size_t idx) @safe @nogc
 	{
 		size_t totIndex = m_index + m_extraIndex;
@@ -294,8 +292,6 @@ unittest {
 	dt.insert(h);
 	assert(dt.size > 0);
 	assert(dt.index == 1);
-	assert(equal(dt.table[], [h]));
-	assert(dt.table[].front.name == "test");
 	assert(dt[dt.index].name == "test");
 
 	dt.remove();
