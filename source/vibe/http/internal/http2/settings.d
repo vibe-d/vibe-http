@@ -366,7 +366,7 @@ struct HTTP2ServerContext
 	@property ref HTTP2Settings settings() @safe @nogc
 	{
 		assert(!m_settings.isNull);
-		return m_settings;
+		return m_settings.get;
 	}
 
 	@property void settings(ref HTTP2Settings settings) @safe

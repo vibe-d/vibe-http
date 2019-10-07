@@ -439,7 +439,7 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 	// finalize (e.g. for chunked encoding)
 	res.finalize();
 
-	foreach (k, v ; req._files) {
+	foreach (k, v ; req._files.byKeyValue) {
 		if (existsFile(v.tempPath)) {
 			removeFile(v.tempPath);
 			logDebug("Deleted upload tempfile %s", v.tempPath.toString());

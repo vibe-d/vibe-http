@@ -67,7 +67,7 @@ ubyte[] buildHeaderFrame(alias type)(string statusLine, InetHeaderMap headers,
 		headers.remove("Host");
 	}
 
-	foreach(k,v; headers) {
+	foreach(k,v; headers.byKeyValue) {
 		H2F(k.toLower,v).encodeHPACK(pbuf, table);
 	}
 
@@ -99,7 +99,7 @@ private void convertStartMessage(T)(string src, ref T dst, ref IndexingTable tab
 			if(type == StartLine.REQUEST) { // request
 				//	request-line = method SP request-target SP HTTP-version CRLF
 					try {
-						auto method = httpMethodFromString(buf);
+						auto method = httpMethodFromString(buf); // might throw
 						H2F(":method", method).encodeHPACK(dst, table);
 					} catch(Exception e) {
 						H2F(":scheme", (isTLS ? "https" : "http")).encodeHPACK(dst, table);
@@ -216,8 +216,10 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream,
 	parseHTTP2RequestHeader(headers, req);
 	if(req.host.empty) {
 		req.host = tcp_connection.localAddress.toString;
-		req.requestURI = req.host ~ req.path;
 	}
+
+	if(req.tls) req.requestURI = "https://" ~ req.host ~ req.path;
+	else req.requestURI = "http://" ~ req.host ~ req.path;
 
 	string reqhost;
 	ushort reqport = 0;
