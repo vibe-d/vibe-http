@@ -1,5 +1,10 @@
 name "vibe-http"
 description "HTTP server and client implementation and higher level HTTP functionality"
+homepage "https://vibed.org/"
+
+license "MIT"
+copyright "Copyright © 2012-2019 Sönke Ludwig"
+authors "Sönke Ludwig" "Francesco Galla" "see GitHub for all"
 
 dependency "vibe-d:crypto" version=">0.8.4"
 dependency "vibe-d:tls" version=">0.8.4"
