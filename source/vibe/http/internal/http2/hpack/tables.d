@@ -184,7 +184,7 @@ HTTP2SettingValue computeEntrySize(HTTP2HeaderTableField f) @safe
 private struct DynamicTable {
 	private {
 		// default table is 4096 octs. / n. octets of an empty HTTP2HeaderTableField struct (32)
-		FixedRingBuffer!(HTTP2HeaderTableField, DEFAULT_DYNAMIC_TABLE_SIZE/32, false) m_table;
+		FixedRingBuffer!(HTTP2HeaderTableField, DEFAULT_DYNAMIC_TABLE_SIZE/HTTP2HeaderTableField.sizeof, false) m_table;
 
 		// extra table is a circular buffer, initially empty, used when
 		// maxsize > DEFAULT_DYNAMIC_TABLE_SIZE
@@ -208,7 +208,7 @@ private struct DynamicTable {
 		m_maxsize = ms;
 
 		if(ms > DEFAULT_DYNAMIC_TABLE_SIZE) {
-			m_extraTable.capacity = (ms - DEFAULT_DYNAMIC_TABLE_SIZE)/32;
+			m_extraTable.capacity = (ms - DEFAULT_DYNAMIC_TABLE_SIZE)/HTTP2HeaderTableField.sizeof;
 		}
 	}
 
