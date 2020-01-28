@@ -2,3 +2,5 @@
 /dub.selections.json
 /http-test-library.exe
 .dub
+libvibe-http.a
+vibe-http-test-library
