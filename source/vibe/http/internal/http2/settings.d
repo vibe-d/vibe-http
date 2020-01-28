@@ -139,7 +139,7 @@ struct HTTP2Settings {
 
 	// no limit specified in the RFC
 	@http2Setting(0x1, "SETTINGS_HEADER_TABLE_SIZE")
-	HTTP2SettingValue headerTableSize = 4096;
+	HTTP2SettingValue headerTableSize = DEFAULT_DYNAMIC_TABLE_SIZE;
 
 	// TODO {0,1} otherwise CONNECTION_ERROR
 	@http2Setting(0x2, "SETTINGS_ENABLE_PUSH")
@@ -319,7 +319,6 @@ struct HTTP2ServerContext
 	alias m_context this;
 
 	// used to mantain the first request in case of `h2c` protocol switching
-	// TODO find alternative approach
 	ubyte[] resFrame = void;
 
 	this(HTTPServerContext ctx, HTTP2Settings settings) @safe
