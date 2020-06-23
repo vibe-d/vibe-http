@@ -344,9 +344,19 @@ HTTPServerRequest createTestHTTPServerRequest(URL url, HTTPMethod method, InetHe
 }
 
 /**
-	  Creates a HTTPServerResponse suitable for writing unit tests.
-	  */
-HTTPServerResponse createTestHTTPServerResponse(OutputStream data_sink = null, SessionStore session_store = null)
+	Creates a HTTPServerResponse suitable for writing unit tests.
+
+	Params:
+		data_sink = Optional output stream that captures the data that gets
+			written to the response
+		session_store = Optional session store to use when sessions are involved
+		data_mode = If set to `TestHTTPResponseMode.bodyOnly`, only the body
+			contents get written to `data_sink`. Otherwise the raw response
+			including the HTTP header is written.
+	*/
+HTTPServerResponse createTestHTTPServerResponse(OutputStream data_sink = null,
+	SessionStore session_store = null,
+	TestHTTPResponseMode data_mode = TestHTTPResponseMode.plain)
 @safe {
 	import vibe.stream.wrapper;
 
@@ -355,9 +365,15 @@ HTTPServerResponse createTestHTTPServerResponse(OutputStream data_sink = null, S
 		//settings = HTTPServerSettings;
 		settings.sessionStore = session_store;
 	}
-	if (!data_sink) data_sink = new NullOutputStream;
-	auto stream = createProxyStream(Stream.init, data_sink);
-	auto ret = HTTPServerResponse(stream, null, settings, () @trusted { return vibeThreadAllocator(); } ());
+
+	InterfaceProxy!Stream outstr;
+	if (data_sink && data_mode == TestHTTPResponseMode.plain)
+		outstr = createProxyStream(Stream.init, data_sink);
+	else outstr = createProxyStream(Stream.init, nullSink);
+
+	auto ret = HTTPServerResponse(outstr, InterfaceProxy!ConnectionStream.init,
+		settings, () @trusted { return vibeThreadAllocator(); } ());
+	if (data_sink && data_mode == TestHTTPResponseMode.bodyOnly) ret.m_data.m_bodyWriter = data_sink;
 	return ret;
 }
 
@@ -397,6 +413,12 @@ struct HTTPServerErrorInfo {
 
 /// Delegate type used for user defined error page generator callbacks.
 alias HTTPServerErrorPageHandler = void delegate(HTTPServerRequest req, HTTPServerResponse res, HTTPServerErrorInfo error) @safe;
+
+
+enum TestHTTPResponseMode {
+	plain,
+	bodyOnly
+}
 
 
 private enum HTTPServerOptionImpl {
