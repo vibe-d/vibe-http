@@ -537,6 +537,17 @@ final class HTTPServerSettings {
 	*/
 	string hostName;
 
+	/** Provides a way to ban and unban network addresses and reduce the
+		impact of DOS attack.
+
+		If the isBannedDg returns true for a specific NetworkAddress,
+		then all incoming requests from that address will be rejected.
+	*/
+	IsBannedDg isBannedDg;
+
+	/// Type of delegate accepted for `isBannedDg`
+	alias IsBannedDg = bool delegate (in NetworkAddress) @safe nothrow;
+
 	/** Configures optional features of the HTTP server
 
 		Disabling unneeded features can improve performance or reduce the server
@@ -1436,6 +1447,12 @@ private HTTPListener listenHTTPPlain(HTTPServerSettings settings, HTTPServerRequ
 			TCPListenOptions options = TCPListenOptions.defaults;
 			if(reusePort) options |= TCPListenOptions.reusePort; else options &= ~TCPListenOptions.reusePort;
 			auto ret = listenTCP(listen_info.bindPort, (TCPConnection conn) nothrow @safe {
+					// check wether the client's address is banned
+					foreach (ref virtual_host; listen_info.m_virtualHosts)
+						if ((virtual_host.settings.isBannedDg !is null) &&
+							virtual_host.settings.isBannedDg(conn.remoteAddress))
+							return;
+
 					//logInfo("ListenHTTP");
 					try { handleHTTP1Connection(conn, listen_info);
 					} catch (Exception e) {
