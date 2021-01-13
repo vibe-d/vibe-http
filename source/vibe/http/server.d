@@ -537,16 +537,15 @@ final class HTTPServerSettings {
 	*/
 	string hostName;
 
-	/** Provides a way to ban and unban network addresses and reduce the
-		impact of DOS attack.
+	/** Provides a way to reject incoming connections as early as possible.
 
-		If the isBannedDg returns true for a specific NetworkAddress,
+		Allows to ban and unban network addresses and reduce the impact of DOS
+		attacks.
+
+		If the callback returns `true` for a specific `NetworkAddress`,
 		then all incoming requests from that address will be rejected.
 	*/
-	IsBannedDg isBannedDg;
-
-	/// Type of delegate accepted for `isBannedDg`
-	alias IsBannedDg = bool delegate (in NetworkAddress) @safe nothrow;
+	RejectConnectionPredicate rejectConnectionPredicate;
 
 	/** Configures optional features of the HTTP server
 
@@ -713,8 +712,11 @@ final class HTTPServerSettings {
 }
 
 
-/*
-	Options altering how sessions are created.
+/// Callback type used to determine whether to reject incoming connections
+alias RejectConnectionPredicate = bool delegate (in NetworkAddress) @safe nothrow;
+
+
+/** Options altering how sessions are created.
 
 	Multiple values can be or'ed together.
 
@@ -1449,8 +1451,8 @@ private HTTPListener listenHTTPPlain(HTTPServerSettings settings, HTTPServerRequ
 			auto ret = listenTCP(listen_info.bindPort, (TCPConnection conn) nothrow @safe {
 					// check wether the client's address is banned
 					foreach (ref virtual_host; listen_info.m_virtualHosts)
-						if ((virtual_host.settings.isBannedDg !is null) &&
-							virtual_host.settings.isBannedDg(conn.remoteAddress))
+						if ((virtual_host.settings.rejectConnectionPredicate !is null) &&
+							virtual_host.settings.rejectConnectionPredicate(conn.remoteAddress))
 							return;
 
 					//logInfo("ListenHTTP");
