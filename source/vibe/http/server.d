@@ -159,6 +159,16 @@ unittest {
 }
 
 
+/**
+	Provides a HTTP request handler that responds with a static Diet template.
+*/
+@property HTTPServerRequestDelegateS staticTemplate(string template_file)()
+{
+	return (scope HTTPServerRequest req, scope HTTPServerResponse res){
+		res.render!(template_file, req);
+	};
+}
+
 
 /**
 	Provides a HTTP request handler that responds with a static redirection to the specified URL.
