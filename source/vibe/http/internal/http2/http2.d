@@ -272,7 +272,7 @@ private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TC
 
 /// initializes an allocator and handles stream closing
 private bool handleHTTP2Frame(ConnectionStream)(ConnectionStream stream, TCPConnection
-		connection, ref HTTP2ServerContext context) @trusted
+		connection, HTTP2ServerContext context) @trusted
 	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStream))
 {
 	import vibe.internal.utilallocator: RegionListAllocator;
@@ -324,7 +324,7 @@ private const string checkvalid = "enforceHTTP2(valid, \"Invalid stream ID\", HT
   * Stream Lifecycle is treated according to RFC 7540, Section 5.1
 */
 private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCPConnection connection,
-		ref HTTP2ServerContext context, IAllocator alloc) @trusted
+		HTTP2ServerContext context, IAllocator alloc) @trusted
 {
 	logTrace("HTTP/2 Frame Handler (Alloc)");
 
@@ -683,7 +683,7 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 	return close;
 }
 /// process an HEADERS frame
-void handleHTTP2HeadersFrame(Stream)(ref Stream stream, TCPConnection connection, ref
+void handleHTTP2HeadersFrame(Stream)(ref Stream stream, TCPConnection connection,
 		HTTP2ServerContext context,  IAllocator alloc)
 {
 	// AllocAppender cannot be used here (TODO discuss)
@@ -703,7 +703,7 @@ void handleHTTP2HeadersFrame(Stream)(ref Stream stream, TCPConnection connection
 }
 
 /// handle SETTINGS frame exchange
-void handleHTTP2SettingsFrame(Stream)(ref Stream stream, TCPConnection connection, ubyte[] data, HTTP2FrameHeader header, ref HTTP2ServerContext context) @safe
+void handleHTTP2SettingsFrame(Stream)(ref Stream stream, TCPConnection connection, ubyte[] data, HTTP2FrameHeader header, HTTP2ServerContext context) @safe
 {
 	// parse settings payload
 	context.settings.unpackSettings(data);
@@ -927,7 +927,7 @@ unittest {
 			res.writeBody("Hello, World! This response is sent through HTTP/2");
 	}
 
-	auto settings = HTTPServerSettings();
+	auto settings = new HTTPServerSettings();
 	settings.port = 8090;
 	settings.bindAddresses = ["localhost"];
 
@@ -945,7 +945,7 @@ unittest {
 	}
 
 
-	HTTPServerSettings settings;
+	auto settings = new HTTPServerSettings;
 	settings.port = 8091;
 	settings.bindAddresses = ["127.0.0.1", "192.168.1.131"];
 	settings.tlsContext = createTLSContext(TLSContextKind.server);

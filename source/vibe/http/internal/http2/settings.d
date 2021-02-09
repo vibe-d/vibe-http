@@ -303,7 +303,7 @@ unittest {
   * Contains HTTP2Settings negotiated during handshake
   * TODO set of USED streams for proper HTTP2ConnectionStream initialization
 */
-struct HTTP2ServerContext
+final class HTTP2ServerContext
 {
 	private {
 		HTTPServerContext m_context;

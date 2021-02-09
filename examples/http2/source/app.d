@@ -46,19 +46,19 @@ void main()
 	//setLogLevel(LogLevel.trace);
 
 /* ==== cleartext HTTP/2 support (h2c) ==== */
-	auto settings = HTTPServerSettings();
+	auto settings = new HTTPServerSettings;
 	settings.port = 8090;
 	settings.bindAddresses = ["127.0.0.1"];
 	listenHTTP!handleReq(settings);
 
 /* ==== cleartext HTTP/2 support (h2c) with a heavy DATA frame ==== */
-	auto bigSettings = HTTPServerSettings();
+	auto bigSettings = new HTTPServerSettings;
 	settings.port = 8092;
 	settings.bindAddresses = ["127.0.0.1"];
 	listenHTTP!(bigHandleReq!100000)(settings);
 
 /* ========== HTTPS (h2) support ========== */
-	HTTPServerSettings tlsSettings;
+	auto tlsSettings = new HTTPServerSettings;
 	tlsSettings.port = 8091;
 	tlsSettings.bindAddresses = ["127.0.0.1"];
 
@@ -72,7 +72,7 @@ void main()
 	listenHTTP!tlsHandleReq(tlsSettings);
 
 /* ========== HTTPS (h2) support with a heavy DATA frame ========== */
-	HTTPServerSettings bigTLSSettings;
+	auto bigTLSSettings = new HTTPServerSettings;
 	bigTLSSettings.port = 8093;
 	bigTLSSettings.bindAddresses = ["127.0.0.1"];
 

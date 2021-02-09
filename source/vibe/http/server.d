@@ -103,7 +103,7 @@ HTTPListener listenHTTP(H)(HTTPServerSettings settings, H handler)
 
 HTTPListener listenHTTP(H)(string bind_string, H handler)
 {
-	auto settings = HTTPServerSettings(bind_string);
+	auto settings = new HTTPServerSettings(bind_string);
 	return listenHTTP!handler(settings);
 }
 
@@ -151,13 +151,23 @@ unittest {
 		res.writeBody("Hello, World! Delegate");
 	}
 
-	auto settings = HTTPServerSettings();
+	auto settings = new HTTPServerSettings();
 	settings.port = 8060;
 	settings.bindAddresses = ["localhost"];
 
 	listenHTTP!handleRequest(settings);
 }
 
+
+/**
+	Provides a HTTP request handler that responds with a static Diet template.
+*/
+@property HTTPServerRequestDelegateS staticTemplate(string template_file)()
+{
+	return (scope HTTPServerRequest req, scope HTTPServerResponse res){
+		res.render!(template_file, req);
+	};
+}
 
 
 /**
@@ -344,20 +354,36 @@ HTTPServerRequest createTestHTTPServerRequest(URL url, HTTPMethod method, InetHe
 }
 
 /**
-	  Creates a HTTPServerResponse suitable for writing unit tests.
-	  */
-HTTPServerResponse createTestHTTPServerResponse(OutputStream data_sink = null, SessionStore session_store = null)
+	Creates a HTTPServerResponse suitable for writing unit tests.
+
+	Params:
+		data_sink = Optional output stream that captures the data that gets
+			written to the response
+		session_store = Optional session store to use when sessions are involved
+		data_mode = If set to `TestHTTPResponseMode.bodyOnly`, only the body
+			contents get written to `data_sink`. Otherwise the raw response
+			including the HTTP header is written.
+	*/
+HTTPServerResponse createTestHTTPServerResponse(OutputStream data_sink = null,
+	SessionStore session_store = null,
+	TestHTTPResponseMode data_mode = TestHTTPResponseMode.plain)
 @safe {
 	import vibe.stream.wrapper;
 
-	HTTPServerSettings settings;
+	auto settings = new HTTPServerSettings;
 	if (session_store) {
 		//settings = HTTPServerSettings;
 		settings.sessionStore = session_store;
 	}
-	if (!data_sink) data_sink = new NullOutputStream;
-	auto stream = createProxyStream(Stream.init, data_sink);
-	auto ret = HTTPServerResponse(stream, null, settings, () @trusted { return vibeThreadAllocator(); } ());
+
+	InterfaceProxy!Stream outstr;
+	if (data_sink && data_mode == TestHTTPResponseMode.plain)
+		outstr = createProxyStream(Stream.init, data_sink);
+	else outstr = createProxyStream(Stream.init, nullSink);
+
+	auto ret = HTTPServerResponse(outstr, InterfaceProxy!ConnectionStream.init,
+		settings, () @trusted { return vibeThreadAllocator(); } ());
+	if (data_sink && data_mode == TestHTTPResponseMode.bodyOnly) ret.m_data.m_bodyWriter = data_sink;
 	return ret;
 }
 
@@ -397,6 +423,12 @@ struct HTTPServerErrorInfo {
 
 /// Delegate type used for user defined error page generator callbacks.
 alias HTTPServerErrorPageHandler = void delegate(HTTPServerRequest req, HTTPServerResponse res, HTTPServerErrorInfo error) @safe;
+
+
+enum TestHTTPResponseMode {
+	plain,
+	bodyOnly
+}
 
 
 private enum HTTPServerOptionImpl {
@@ -490,7 +522,7 @@ struct HTTPServerOption {
 
 	The defaults are sufficient for most normal uses.
 */
-struct HTTPServerSettings {
+final class HTTPServerSettings {
 	/** The port on which the HTTP server is listening.
 
 		The default value is 80. If you are running a TLS enabled server you may want to set this
@@ -514,6 +546,16 @@ struct HTTPServerSettings {
 		gets a request.
 	*/
 	string hostName;
+
+	/** Provides a way to reject incoming connections as early as possible.
+
+		Allows to ban and unban network addresses and reduce the impact of DOS
+		attacks.
+
+		If the callback returns `true` for a specific `NetworkAddress`,
+		then all incoming requests from that address will be rejected.
+	*/
+	RejectConnectionPredicate rejectConnectionPredicate;
 
 	/** Configures optional features of the HTTP server
 
@@ -596,7 +638,7 @@ struct HTTPServerSettings {
 	@property HTTPServerSettings dup()
 	@safe {
 		//auto ret = HTTPServerSettings;
-		HTTPServerSettings ret;
+		auto ret = new HTTPServerSettings;
 		foreach (mem; __traits(allMembers, HTTPServerSettings)) {
 			static if (mem == "sslContext") {}
 			else static if (mem == "bindAddresses") ret.bindAddresses = bindAddresses.dup;
@@ -629,7 +671,7 @@ struct HTTPServerSettings {
 
 	/** Constructs a new settings object with default values.
 	*/
-	//this() @safe {}
+	this() @safe {}
 
 	/** Constructs a new settings object with a custom bind interface and/or port.
 
@@ -665,23 +707,26 @@ struct HTTPServerSettings {
 
 	///
 	unittest {
-		auto s = HTTPServerSettings(":8080");
+		auto s = new HTTPServerSettings(":8080");
 		assert(s.bindAddresses == ["::", "0.0.0.0"]); // default bind addresses
 		assert(s.port == 8080);
 
-		s = HTTPServerSettings("123.123.123.123");
+		s = new HTTPServerSettings("123.123.123.123");
 		assert(s.bindAddresses == ["123.123.123.123"]);
 		assert(s.port == 80);
 
-		s = HTTPServerSettings("[::1]:443");
+		s = new HTTPServerSettings("[::1]:443");
 		assert(s.bindAddresses == ["::1"]);
 		assert(s.port == 443);
 	}
 }
 
 
-/*
-	Options altering how sessions are created.
+/// Callback type used to determine whether to reject incoming connections
+alias RejectConnectionPredicate = bool delegate (in NetworkAddress) @safe nothrow;
+
+
+/** Options altering how sessions are created.
 
 	Multiple values can be or'ed together.
 
@@ -736,6 +781,8 @@ struct HTTPServerRequest {
 		auto data = new HTTPServerRequestData(reqtime, bindPort);
 		() @trusted { m_data = data; } ();
 	}
+
+	auto opCast(T)() const @safe nothrow if (is(T == bool)) { return m_data !is null; }
 
 	package {
 		@property scope const(HTTPServerSettings) serverSettings() const
@@ -907,6 +954,8 @@ struct HTTPServerResponse {
 		HTTPServerResponseData* data = new HTTPServerResponseData(conn, raw_connection, settings, req_alloc);
 		this(data);
 	}
+
+	auto opCast(T)() const @safe nothrow if (is(T == bool)) { return m_data !is null; }
 
 	@property scope data() @safe { return m_data; }
 
@@ -1410,6 +1459,12 @@ private HTTPListener listenHTTPPlain(HTTPServerSettings settings, HTTPServerRequ
 			TCPListenOptions options = TCPListenOptions.defaults;
 			if(reusePort) options |= TCPListenOptions.reusePort; else options &= ~TCPListenOptions.reusePort;
 			auto ret = listenTCP(listen_info.bindPort, (TCPConnection conn) nothrow @safe {
+					// check wether the client's address is banned
+					foreach (ref virtual_host; listen_info.m_virtualHosts)
+						if ((virtual_host.settings.rejectConnectionPredicate !is null) &&
+							virtual_host.settings.rejectConnectionPredicate(conn.remoteAddress))
+							return;
+
 					//logInfo("ListenHTTP");
 					try { handleHTTP1Connection(conn, listen_info);
 					} catch (Exception e) {
@@ -1474,7 +1529,7 @@ unittest{
 		}
 	}
 
-	auto settings = HTTPServerSettings();
+	auto settings = new HTTPServerSettings();
 	settings.port = 8050;
 	settings.bindAddresses = ["localhost"];
 
@@ -1491,7 +1546,7 @@ unittest {
 		res.writeBody("Hello, World! Delegate");
 	}
 
-	auto settings = HTTPServerSettings();
+	auto settings = new HTTPServerSettings();
 	settings.port = 8070;
 	settings.bindAddresses = ["localhost"];
 	settings.tlsContext = createTLSContext(TLSContextKind.server);
@@ -1723,7 +1778,7 @@ struct HTTPServerRequestData {
 		}
 
 		//* Contains information about any uploaded file for a HTML _form request.
-		@property ref FilePartFormFields files() @safe {
+		@property ref FilePartFormFields files() @safe return {
 			// _form and _files are parsed in one step
 			if (_form.isNull) {
 				parseFormAndFiles();

@@ -125,7 +125,7 @@ unittest {
 	import std.experimental.allocator.mallocator;
 	HTTP2Settings settings;
 	HTTPServerContext ctx;
-	auto context = HTTP2ServerContext(ctx, settings);
+	auto context = new HTTP2ServerContext(ctx, settings);
 	auto table = IndexingTable(settings.headerTableSize);
 	scope alloc = new RegionListAllocator!(shared(Mallocator), false)(1024, Mallocator.instance);
 
@@ -156,7 +156,7 @@ unittest {
   * once the HTTPServerResponse is built, HEADERS frame and (optionally) DATA Frames are sent
 */
 bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream,
-		TCPConnection tcp_connection, ref HTTP2ServerContext h2context,
+		TCPConnection tcp_connection, HTTP2ServerContext h2context,
 		HTTP2HeaderTableField[] headers, ref IndexingTable table, scope IAllocator alloc) @safe
 {
 	SysTime reqtime = Clock.currTime(UTC());
