@@ -1778,7 +1778,7 @@ struct HTTPServerRequestData {
 		}
 
 		//* Contains information about any uploaded file for a HTML _form request.
-		@property ref FilePartFormFields files() @safe {
+		@property ref FilePartFormFields files() @safe return {
 			// _form and _files are parsed in one step
 			if (_form.isNull) {
 				parseFormAndFiles();
