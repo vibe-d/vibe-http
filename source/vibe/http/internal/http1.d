@@ -68,7 +68,7 @@ void handleHTTP1Connection(ConnectionStream)(ConnectionStream connection, HTTPSe
 			Nullable!string proto = tls_stream.alpn;
 			if(!proto.isNull && proto == "h2") {
 				HTTP2Settings settings;
-				auto h2context = HTTP2ServerContext(context, settings);
+				auto h2context = new HTTP2ServerContext(context, settings);
 				handleHTTP2Connection(tls_stream, connection, h2context);
 				return;
 			}
@@ -239,7 +239,7 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 
 			http_stream.read(dummy); // finish reading connection preface
 			auto h2settings = HTTP2Settings();
-			auto h2context = HTTP2ServerContext(listen_info, h2settings);
+			auto h2context = new HTTP2ServerContext(listen_info, h2settings);
 			handleHTTP2Connection(tcp_connection, tcp_connection, h2context, true);
 			return true;
 		}
@@ -390,7 +390,7 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 			logTrace("handle request (body %d)", req.bodyReader.leastSize);
 
 			// initialize the request handler
-			auto h2context = HTTP2ServerContext(listen_info);
+			auto h2context = new HTTP2ServerContext(listen_info);
 
 			MemoryOutputStream buf = createMemoryOutputStream(request_allocator);
 			size_t hlen;

@@ -103,7 +103,7 @@ HTTPListener listenHTTP(H)(HTTPServerSettings settings, H handler)
 
 HTTPListener listenHTTP(H)(string bind_string, H handler)
 {
-	auto settings = HTTPServerSettings(bind_string);
+	auto settings = new HTTPServerSettings(bind_string);
 	return listenHTTP!handler(settings);
 }
 
@@ -151,7 +151,7 @@ unittest {
 		res.writeBody("Hello, World! Delegate");
 	}
 
-	auto settings = HTTPServerSettings();
+	auto settings = new HTTPServerSettings();
 	settings.port = 8060;
 	settings.bindAddresses = ["localhost"];
 
@@ -350,7 +350,7 @@ HTTPServerResponse createTestHTTPServerResponse(OutputStream data_sink = null, S
 @safe {
 	import vibe.stream.wrapper;
 
-	HTTPServerSettings settings;
+	auto settings = new HTTPServerSettings;
 	if (session_store) {
 		//settings = HTTPServerSettings;
 		settings.sessionStore = session_store;
@@ -490,7 +490,7 @@ struct HTTPServerOption {
 
 	The defaults are sufficient for most normal uses.
 */
-struct HTTPServerSettings {
+final class HTTPServerSettings {
 	/** The port on which the HTTP server is listening.
 
 		The default value is 80. If you are running a TLS enabled server you may want to set this
@@ -596,7 +596,7 @@ struct HTTPServerSettings {
 	@property HTTPServerSettings dup()
 	@safe {
 		//auto ret = HTTPServerSettings;
-		HTTPServerSettings ret;
+		auto ret = new HTTPServerSettings;
 		foreach (mem; __traits(allMembers, HTTPServerSettings)) {
 			static if (mem == "sslContext") {}
 			else static if (mem == "bindAddresses") ret.bindAddresses = bindAddresses.dup;
@@ -629,7 +629,7 @@ struct HTTPServerSettings {
 
 	/** Constructs a new settings object with default values.
 	*/
-	//this() @safe {}
+	this() @safe {}
 
 	/** Constructs a new settings object with a custom bind interface and/or port.
 
@@ -665,15 +665,15 @@ struct HTTPServerSettings {
 
 	///
 	unittest {
-		auto s = HTTPServerSettings(":8080");
+		auto s = new HTTPServerSettings(":8080");
 		assert(s.bindAddresses == ["::", "0.0.0.0"]); // default bind addresses
 		assert(s.port == 8080);
 
-		s = HTTPServerSettings("123.123.123.123");
+		s = new HTTPServerSettings("123.123.123.123");
 		assert(s.bindAddresses == ["123.123.123.123"]);
 		assert(s.port == 80);
 
-		s = HTTPServerSettings("[::1]:443");
+		s = new HTTPServerSettings("[::1]:443");
 		assert(s.bindAddresses == ["::1"]);
 		assert(s.port == 443);
 	}
@@ -736,6 +736,8 @@ struct HTTPServerRequest {
 		auto data = new HTTPServerRequestData(reqtime, bindPort);
 		() @trusted { m_data = data; } ();
 	}
+
+	auto opCast(T)() const @safe nothrow if (is(T == bool)) { return m_data !is null; }
 
 	package {
 		@property scope const(HTTPServerSettings) serverSettings() const
@@ -907,6 +909,8 @@ struct HTTPServerResponse {
 		HTTPServerResponseData* data = new HTTPServerResponseData(conn, raw_connection, settings, req_alloc);
 		this(data);
 	}
+
+	auto opCast(T)() const @safe nothrow if (is(T == bool)) { return m_data !is null; }
 
 	@property scope data() @safe { return m_data; }
 
@@ -1474,7 +1478,7 @@ unittest{
 		}
 	}
 
-	auto settings = HTTPServerSettings();
+	auto settings = new HTTPServerSettings();
 	settings.port = 8050;
 	settings.bindAddresses = ["localhost"];
 
@@ -1491,7 +1495,7 @@ unittest {
 		res.writeBody("Hello, World! Delegate");
 	}
 
-	auto settings = HTTPServerSettings();
+	auto settings = new HTTPServerSettings();
 	settings.port = 8070;
 	settings.bindAddresses = ["localhost"];
 	settings.tlsContext = createTLSContext(TLSContextKind.server);
