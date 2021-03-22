@@ -769,163 +769,139 @@ enum SessionOption {
 	Represents a HTTP request as received by the server side.
  */
 struct HTTPServerRequest {
+	import vibe.utils.dictionarylist : DictionaryList;
+
 	private HTTPServerRequestData* m_data;
 
+	@safe:
+
 	this (HTTPServerRequestData* data)
-	@safe {
+	{
 		m_data = data;
 	}
 
 	this (SysTime reqtime, ushort bindPort)
-	@safe {
+	{
 		auto data = new HTTPServerRequestData(reqtime, bindPort);
 		() @trusted { m_data = data; } ();
 	}
 
-	auto opCast(T)() const @safe nothrow if (is(T == bool)) { return m_data !is null; }
+	auto opCast(T)() const if (is(T == bool)) { return m_data !is null; }
 
-	package {
-		@property scope const(HTTPServerSettings) serverSettings() const
-		@safe {
-			return m_data.serverSettings;
-		}
+	package @property scope const(HTTPServerSettings) serverSettings()
+	const {
+		return m_data.serverSettings;
 	}
 
-	public {
-		import vibe.utils.dictionarylist;
-		DictionaryList!(string, true, 8) params;
+	@property scope data() pure nothrow { return m_data; }
 
-		@property scope data() @safe { return m_data; }
+	@property scope string requestURI() const pure nothrow { return m_data.requestURI; }
+	// ditto
+	@property void requestURI(string uri) pure nothrow { m_data.requestURI = uri; }
 
-		@property scope string requestURI() const @safe { return m_data.requestURI; }
-		// ditto
-		@property void requestURI(string uri) @safe { m_data.requestURI = uri; }
+	@property scope string peer() { return m_data.peer; }
 
-		@property scope string peer() @safe { return m_data.peer; }
+	@property scope CookieValueMap cookies() { return m_data.cookies; }
 
-		@property scope CookieValueMap cookies() @safe { return	 m_data.cookies; }
+	@property scope FormFields query() { return m_data.query; }
 
-		@property scope FormFields query() @safe { return m_data.query; }
+	@property scope Json json() { return m_data.json; }
 
-		@property scope Json json() @safe { return m_data.json; }
+	@property scope FormFields form() { return m_data.form; }
 
-		@property scope FormFields form() @safe { return m_data.form; }
+	@property scope FilePartFormFields files() { return m_data.files; }
 
-		@property scope FilePartFormFields files() @safe { return m_data.files; }
+	@property scope SysTime timeCreated() const { return m_data.timeCreated; }
 
-		@property scope SysTime timeCreated() const @safe { return m_data.timeCreated; }
+	@property scope URL fullURL() const { return m_data.fullURL; }
 
-		@property scope URL fullURL() const @safe { return m_data.fullURL; }
+	@property scope string rootDir() const pure nothrow { return m_data.rootDir; }
 
-		@property scope string rootDir() const @safe { return m_data.rootDir; }
+	@property scope string username() const pure nothrow { return m_data.username; }
+	// ditto
+	@property void username(string name) nothrow { m_data.username = name; }
 
-		@property scope string username() const @safe { return m_data.username; }
+	@property scope string path() pure { return m_data.path; }
+	// ditto
+	@property void path(scope string p) { m_data.path = path; }
 
-		// ditto
-		@property void username(string name)
-		@safe { m_data.username = name; }
+	@property ref InetHeaderMap headers() pure nothrow { return m_data.headers; }
 
-		@property scope string path() @safe { return m_data.path; }
+	@property scope bool persistent() const pure nothrow { return m_data.persistent; }
 
-		// ditto
-		@property void path(scope string p)
-		@safe { m_data.path = path; }
+	@property scope string queryString() const pure nothrow { return m_data.queryString; }
+	// ditto
+	@property void queryString(string qstr) nothrow { m_data.queryString = qstr; }
 
-		@property ref InetHeaderMap headers() @safe { return m_data.headers; }
+	/** A map of general parameters for the request.
 
-		@property scope bool persistent() const @safe { return m_data.persistent; }
+		This map is supposed to be used by middleware functionality to store
+		information for later stages. For example vibe.http.router.URLRouter uses this map
+		to store the value of any named placeholders.
+	*/
+	@property scope ref DictionaryList!(string, true, 8) params() pure nothrow { return m_data.params; }
 
-		@property scope string queryString() const @safe { return m_data.queryString; }
+	@property scope string requestURL() const pure nothrow { return m_data.requestURL; }
 
-		// ditto
-		@property void queryString(string qstr)
-		@safe { m_data.queryString = qstr; }
+	@property scope HTTPVersion httpVersion() const pure nothrow { return m_data.httpVersion; }
+	// ditto
+	@property void httpVersion(HTTPVersion hver) nothrow { m_data.httpVersion = hver; }
 
-		@property scope string requestURL() const @safe { return m_data.requestURL; }
+	@property scope string host() const pure nothrow { return m_data.host; }
+	// ditto
+	@property void host(string v) { m_data.headers["Host"] = v; }
 
-		@property scope HTTPVersion httpVersion() const @safe { return m_data.httpVersion; }
+	@property scope string contentType() const pure nothrow { return m_data.contentType; }
 
-		// ditto
-		@property void httpVersion(HTTPVersion hver)
-		@safe { m_data.httpVersion = hver; }
+	// ditto
+	@property void contentType(string ct) { m_data.headers["Content-Type"] = ct; }
 
-		@property scope string host() const @safe { return m_data.host; }
+	@property scope string contentTypeParameters() const pure nothrow { return m_data.contentTypeParameters; }
 
-		// ditto
-		@property void host(string v) @safe { m_data.headers["Host"] = v; }
+	@property scope NetworkAddress clientAddress() const pure nothrow { return m_data.clientAddress; }
+	// ditto
+	@property void clientAddress(NetworkAddress naddr) nothrow { m_data.clientAddress = naddr; }
 
-		@property scope string contentType() const @safe{ return m_data.contentType; }
+	@property scope bool tls() const pure nothrow { return m_data.tls; }
+	// ditto
+	@property void tls(bool val) nothrow { m_data.tls = val; }
 
-		// ditto
-		@property void contentType(string ct)
-		@safe { m_data.headers["Content-Type"] = ct; }
+	@property scope HTTPMethod method() const pure nothrow { return m_data.method; }
+	// ditto
+	@property void method(HTTPMethod m) nothrow { m_data.method = m; }
 
-		@property scope string contentTypeParameters() const
-		@safe { return m_data.contentTypeParameters; }
+	package @property scope HTTPServerSettings m_settings() pure nothrow { return m_data.m_settings; }
+	// ditto
+	package @property void m_settings(HTTPServerSettings settings) nothrow { m_data.m_settings = settings; }
 
-		@property scope NetworkAddress clientAddress() const
-		@safe { return m_data.clientAddress; }
+	@property scope InputStream bodyReader() nothrow { return m_data.bodyReader; }
+	// ditto
+	@property void bodyReader(InputStream inStr) nothrow { m_data.bodyReader = inStr; }
 
-		// ditto
-		@property void clientAddress(NetworkAddress naddr)
-		@safe { m_data.clientAddress = naddr; }
+	@property scope string password() const pure nothrow { return m_data.password; }
+	// ditto
+	@property void password(string pwd) nothrow { m_data.password = pwd; }
 
-		@property scope bool tls() const @safe { return m_data.tls; }
+	@property scope Session session() pure nothrow { return m_data.session; }
+	// ditto
+	@property void session(Session session) { m_data.session = session; }
 
-		// ditto
-		@property void tls(bool val)
-		@safe { m_data.tls = val; }
+	@property scope InetPath requestPath() const pure nothrow { return m_data.requestPath; }
+	// ditto
+	@property void requestPath(InetPath reqpath) nothrow { m_data.requestPath = reqpath; }
 
-		@property scope HTTPMethod method() const @safe { return m_data.method; }
+	@property scope FilePartFormFields _files() pure nothrow { return m_data._files; }
 
-		// ditto
-		@property void method(HTTPMethod m) @safe { m_data.method = m; }
+	@property scope bool noLog() const pure nothrow { return m_data.noLog; }
 
-		@property scope HTTPServerSettings m_settings()
-		@safe { return m_data.m_settings; }
+	@property scope TLSCertificateInformation clientCertificate()
+	pure nothrow {
+		return m_data.clientCertificate;
+	}
 
-		// ditto
-		@property void m_settings(HTTPServerSettings settings)
-		@safe { m_data.m_settings = settings; }
-
-		@property scope InputStream bodyReader() @safe { return m_data.bodyReader; }
-
-		// ditto
-		@property void bodyReader(InputStream inStr)
-		@safe { m_data.bodyReader = inStr; }
-
-		@property scope string password() const @safe{ return m_data.password; }
-
-		// ditto
-		@property void password(string pwd)
-		@safe{ m_data.password = pwd; }
-
-		@property scope Session session() @safe { return m_data.session; }
-
-		// ditto
-		@property void session(Session session)
-		@safe { m_data.session = session; }
-
-
-		@property scope InetPath requestPath() const @safe { return m_data.requestPath; }
-
-		// ditto
-		@property void requestPath(InetPath reqpath)
-		@safe { m_data.requestPath = reqpath; }
-
-		@property scope FilePartFormFields _files() @safe { return m_data._files; }
-
-		@property scope bool noLog() const @safe { return m_data.noLog; }
-
-		@property scope TLSCertificateInformation clientCertificate()
-		@safe {
-			return m_data.clientCertificate;
-		}
-
-		@property void clientCertificate(TLSCertificateInformation cert)
-		@safe {
-			m_data.clientCertificate = cert;
-		}
+	@property void clientCertificate(TLSCertificateInformation cert)
+	pure nothrow {
+		m_data.clientCertificate = cert;
 	}
 }
 
@@ -1573,6 +1549,8 @@ unittest {
 
 
 struct HTTPServerRequestData {
+	import vibe.utils.dictionarylist;
+
 	@disable this(this);
 
 	@safe:
@@ -1646,7 +1624,7 @@ struct HTTPServerRequestData {
 			contains URL encoded path separators. Use `requestPath` instead to
 			get an encoding-aware representation.
 		*/
-		string path() @safe {
+		string path() @safe pure {
 			if (_path.isNull) {
 				_path = urlDecode(requestPath.toString);
 			}
@@ -1671,6 +1649,14 @@ struct HTTPServerRequestData {
 
 		//* The _query string part of the URL.
 		string queryString;
+
+		/** A map of general parameters for the request.
+
+			This map is supposed to be used by middleware functionality to store
+			information for later stages. For example vibe.http.router.URLRouter uses this map
+			to store the value of any named placeholders.
+		*/
+		DictionaryList!(string, true, 8) params;
 
 		/* Contains the list of _cookies that are stored on the client.
 
@@ -1773,7 +1759,6 @@ struct HTTPServerRequestData {
 
 		private void parseFormAndFiles() @safe {
 			_form = FormFields.init;
-			assert(!!bodyReader);
 			parseFormData(_form.get, _files, headers.get("Content-Type", ""), bodyReader, MaxHTTPHeaderLineLength);
 		}
 
@@ -1807,7 +1792,7 @@ struct HTTPServerRequestData {
 
 		/** Shortcut to the 'Host' header (always present for HTTP 1.1)
 		 */
-		@property string host() const { auto ph = "Host" in headers; return ph ? *ph : null; }
+		@property string host() const pure nothrow { auto ph = "Host" in headers; return ph ? *ph : null; }
 		/// ditto
 		@property void host(string v) { headers["Host"] = v; }
 
@@ -1819,7 +1804,7 @@ struct HTTPServerRequestData {
 		  headers["Content-Type"] to get the raw value.
 		 */
 		@property string contentType()
-			const {
+			const pure nothrow {
 				auto pv = "Content-Type" in headers;
 				if( !pv ) return null;
 				auto idx = std.string.indexOf(*pv, ';');
@@ -1834,7 +1819,7 @@ struct HTTPServerRequestData {
 		  this contains the character set used for text based content types.
 		 */
 		@property string contentTypeParameters()
-		const {
+		const pure nothrow {
 			auto pv = "Content-Type" in headers;
 			if( !pv ) return null;
 			auto idx = std.string.indexOf(*pv, ';');
@@ -1843,15 +1828,15 @@ struct HTTPServerRequestData {
 
 		/** Determines if the connection persists across requests.
 		*/
-		@property bool persistent() const
+		@property bool persistent() const pure nothrow
 		{
 			auto ph = "connection" in headers;
 			switch(httpVersion) {
 				case HTTPVersion.HTTP_1_0:
-					if (ph && toLower(*ph) == "keep-alive") return true;
+					if (ph && icmp(*ph, "keep-alive") == 0) return true;
 					return false;
 				case HTTPVersion.HTTP_1_1:
-					if (ph && toLower(*ph) != "keep-alive") return false;
+					if (ph && icmp(*ph, "keep-alive") != 0) return false;
 					return true;
 				default:
 					return false;
@@ -1861,20 +1846,20 @@ struct HTTPServerRequestData {
 
 	package {
 		//* The settings of the server serving this request.
-		@property const(HTTPServerSettings) serverSettings() const @safe
+		@property const(HTTPServerSettings) serverSettings() const nothrow @safe
 		{
 			return m_settings;
 		}
 	}
 
 	this(SysTime time, ushort port)
-	@safe {
+	@safe nothrow {
 		m_timeCreated = time.toUTC();
 		m_port = port;
 	}
 
 	//* Time when this request started processing.
-	@property SysTime timeCreated() const @safe { return m_timeCreated; }
+	@property SysTime timeCreated() const @safe nothrow { return m_timeCreated; }
 
 
 	/* The full URL that corresponds to this request.
@@ -1955,7 +1940,7 @@ struct HTTPServerRequestData {
 		The returned string always ends with a slash.
 	*/
 	@property string rootDir()
-	const @safe {
+	const @safe pure nothrow {
 		import std.range.primitives : walkLength;
 		auto depth = requestPath.bySegment.walkLength;
 		return depth == 0 ? "./" : replicate("../", depth);
