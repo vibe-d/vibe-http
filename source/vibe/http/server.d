@@ -990,6 +990,10 @@ struct HTTPServerResponse {
 	{
 		m_data.writeBody(data, content_type);
 	}
+	void writeBody(scope InputStream data, int status, string content_type = null)
+	{
+		m_data.writeBody(data, status, content_type);
+	}
 	void writeBody(string data, string content_type = null)
 	{
 		m_data.writeBody(data, content_type);
@@ -2060,6 +2064,12 @@ struct HTTPServerResponseData {
 				if (content_type.length) headers["Content-Type"] = content_type;
 				else if ("Content-Type" !in headers) headers["Content-Type"] = "application/octet-stream";
 				data.pipe(bodyWriter);
+			}
+		/// ditto
+		void writeBody(scope InputStream data, int status, string content_type = null)
+			@safe {
+				statusCode = status;
+				writeBody(data, content_type);
 			}
 
 		/** Writes the entire response body as a single string.
