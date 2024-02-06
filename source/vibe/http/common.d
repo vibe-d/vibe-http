@@ -1,7 +1,7 @@
 /**
 	Common classes for HTTP clients and servers.
 
-	Copyright: © 2012-2015 RejectedSoftware e.K.
+	Copyright: © 2012-2015 Sönke Ludwig
 	License: Subject to the terms of the MIT license, as written in the included LICENSE.txt file.
 	Authors: Sönke Ludwig, Jan Krüger
 */
@@ -15,10 +15,10 @@ import vibe.inet.message;
 import vibe.stream.operations;
 import vibe.textfilter.urlencode : urlEncode, urlDecode;
 import vibe.utils.array;
+import vibe.utils.dictionarylist;
+import vibe.internal.allocator;
 import vibe.internal.freelistref;
 import vibe.internal.interfaceproxy : InterfaceProxy, interfaceProxy;
-import vibe.internal.allocator;
-import vibe.utils.dictionarylist;
 import vibe.utils.string;
 
 import std.algorithm;
@@ -30,12 +30,12 @@ import std.format;
 import std.range : isOutputRange;
 import std.string;
 import std.typecons;
+import std.uni: asLowerCase, sicmp;
 
 
 enum HTTPVersion {
 	HTTP_1_0,
-	HTTP_1_1,
-	HTTP_2
+	HTTP_1_1
 }
 
 
@@ -213,6 +213,8 @@ class HTTPRequest {
 	{
 	}
 
+	scope:
+
 	public override string toString()
 	{
 		return httpMethodString(method) ~ " " ~ requestURL ~ " " ~ getHTTPVersionString(httpVersion);
@@ -261,10 +263,10 @@ class HTTPRequest {
 		auto ph = "connection" in headers;
 		switch(httpVersion) {
 			case HTTPVersion.HTTP_1_0:
-				if (ph && toLower(*ph) == "keep-alive") return true;
+				if (ph && asLowerCase(*ph).equal("keep-alive")) return true;
 				return false;
 			case HTTPVersion.HTTP_1_1:
-				if (ph && toLower(*ph) != "keep-alive") return false;
+				if (ph && !(asLowerCase(*ph).equal("keep-alive"))) return false;
 				return true;
 			default:
 				return false;
@@ -286,7 +288,7 @@ class HTTPResponse {
 		HTTPVersion httpVersion = HTTPVersion.HTTP_1_1;
 
 		/// The status code of the response, 200 by default
-		int statusCode = HTTPStatus.OK;
+		int statusCode = HTTPStatus.ok;
 
 		/** The status phrase of the response
 
@@ -300,6 +302,8 @@ class HTTPResponse {
 		/// All cookies that shall be set on the client for this request
 		@property ref DictionaryList!Cookie cookies() { return m_cookies; }
 	}
+
+	scope:
 
 	public override string toString()
 	{
@@ -322,7 +326,7 @@ class HTTPResponse {
 	Throwing this exception from within a request handler will produce a matching error page.
 */
 class HTTPStatusException : Exception {
-	@safe:
+	pure nothrow @safe @nogc:
 
 	private {
 		int m_status;
@@ -330,7 +334,7 @@ class HTTPStatusException : Exception {
 
 	this(int status, string message = null, string file = __FILE__, size_t line = __LINE__, Throwable next = null)
 	{
-		super(message != "" ? message : httpStatusText(status), file, line, next);
+		super(message.length ? message : httpStatusText(status), file, line, next);
 		m_status = status;
 	}
 
@@ -349,26 +353,27 @@ final class MultiPart {
 	string[string] form;
 }
 
+/**
+ * Returns:
+ *     The version string corresponding to the `ver`,
+ *     suitable for usage in the start line of the request.
+ */
 string getHTTPVersionString(HTTPVersion ver)
-@safe nothrow {
+nothrow pure @nogc @safe {
 	final switch(ver){
 		case HTTPVersion.HTTP_1_0: return "HTTP/1.0";
 		case HTTPVersion.HTTP_1_1: return "HTTP/1.1";
-		case HTTPVersion.HTTP_2:   return "HTTP/2";
 	}
 }
 
 
 HTTPVersion parseHTTPVersion(ref string str)
 @safe {
-	enforceBadRequest(str.startsWith("HTTP/"));
-	str = str[5 .. $];
-	int majorVersion = parse!int(str);
-	enforceBadRequest(str.startsWith("."));
-	str = str[1 .. $];
+	enforceBadRequest(str.startsWith("HTTP/1."));
+	str = str[7 .. $];
 	int minorVersion = parse!int(str);
 
-	enforceBadRequest( majorVersion == 1 && (minorVersion == 0 || minorVersion == 1) );
+	enforceBadRequest( minorVersion == 0 || minorVersion == 1 );
 	return minorVersion == 0 ? HTTPVersion.HTTP_1_0 : HTTPVersion.HTTP_1_1;
 }
 
@@ -383,12 +388,6 @@ final class ChunkedInputStream : InputStream
 	private {
 		InterfaceProxy!InputStream m_in;
 		ulong m_bytesInCurrentChunk = 0;
-	}
-
-	deprecated("Use createChunkedInputStream() instead.")
-	this(InputStream stream)
-	{
-		this(interfaceProxy!InputStream(stream), true);
 	}
 
 	/// private
@@ -489,17 +488,11 @@ final class ChunkedOutputStream : OutputStream {
 		ChunkExtensionCallback m_chunkExtensionCallback = null;
 	}
 
-	deprecated("Use createChunkedOutputStream() instead.")
-	this(OutputStream stream, IAllocator alloc = vibeThreadAllocator())
-	{
-		this(interfaceProxy!OutputStream(stream), alloc, true);
-	}
-
 	/// private
 	this(InterfaceProxy!OutputStream stream, IAllocator alloc, bool dummy)
 	{
 		m_out = stream;
-        m_buffer = AllocAppender!(ubyte[])(alloc);
+		m_buffer = AllocAppender!(ubyte[])(alloc);
 	}
 
 	/** Maximum buffer size used to buffer individual chunks.
@@ -548,7 +541,15 @@ final class ChunkedOutputStream : OutputStream {
 		}
 	}
 
-	size_t write(in ubyte[] bytes_, IOMode mode)
+	static if (is(typeof(.OutputStream.outputStreamVersion)) && .OutputStream.outputStreamVersion > 1) {
+		override size_t write(scope const(ubyte)[] bytes_, IOMode mode) { return doWrite(bytes_, mode); }
+	} else {
+		override size_t write(in ubyte[] bytes_, IOMode mode) { return doWrite(bytes_, mode); }
+	}
+
+	alias write = OutputStream.write;
+
+	private size_t doWrite(scope const(ubyte)[] bytes_, IOMode mode)
 	{
 		assert(!m_finalized);
 		const(ubyte)[] bytes = bytes_;
@@ -567,8 +568,6 @@ final class ChunkedOutputStream : OutputStream {
 		}
 		return nbytes;
 	}
-
-	alias write = OutputStream.write;
 
 	void flush()
 	{
@@ -612,17 +611,16 @@ final class ChunkedOutputStream : OutputStream {
 }
 
 /// Creates a new `ChunkedInputStream` instance.
-ChunkedOutputStream createChunkedOutputStream(OS)(OS destination_stream, IAllocator allocator = vibeThreadAllocator()) if (isOutputStream!OS)
+ChunkedOutputStream createChunkedOutputStream(OS)(OS destination_stream, IAllocator allocator = theAllocator()) if (isOutputStream!OS)
 {
 	return new ChunkedOutputStream(interfaceProxy!OutputStream(destination_stream), allocator, true);
 }
 
 /// Creates a new `ChunkedOutputStream` instance.
-FreeListRef!ChunkedOutputStream createChunkedOutputStreamFL(OS)(OS destination_stream, IAllocator allocator = vibeThreadAllocator()) if (isOutputStream!OS)
+FreeListRef!ChunkedOutputStream createChunkedOutputStreamFL(OS)(OS destination_stream, IAllocator allocator = theAllocator()) if (isOutputStream!OS)
 {
 	return FreeListRef!ChunkedOutputStream(interfaceProxy!OutputStream(destination_stream), allocator, true);
 }
-
 
 /// Parses the cookie from a header field, returning the name of the cookie.
 /// Implements an algorithm equivalent to https://tools.ietf.org/html/rfc6265#section-5.2
@@ -632,8 +630,6 @@ string parseHTTPCookie(string header_string, scope Cookie dst)
 in {
 	assert(dst !is null);
 } do {
-	import std.uni : sicmp;
-
 	if (!header_string.length)
 		return typeof(return).init;
 
@@ -714,12 +710,19 @@ final class Cookie {
 		long m_maxAge;
 		bool m_secure;
 		bool m_httpOnly;
+		SameSite m_sameSite;
 	}
 
 	enum Encoding {
 		url,
 		raw,
 		none = raw
+	}
+
+	enum SameSite {
+		default_,
+		lax,
+		strict,
 	}
 
 	/// Cookie payload
@@ -772,6 +775,12 @@ final class Cookie {
 	/// ditto
 	@property bool httpOnly() const { return m_httpOnly; }
 
+	/** Prevent cross-site request forgery.
+	*/
+	@property void sameSite(Cookie.SameSite value) { m_sameSite = value; }
+	/// ditto
+	@property Cookie.SameSite sameSite() const { return m_sameSite; }
+
 	/** Sets the "expires" and "max-age" attributes to limit the life time of
 		the cookie.
 	*/
@@ -820,6 +829,12 @@ final class Cookie {
 		if (this.maxAge) dst.formattedWrite("; Max-Age=%s", this.maxAge);
 		if (this.secure) dst.put("; Secure");
 		if (this.httpOnly) dst.put("; HttpOnly");
+		with(Cookie.SameSite)
+		final switch(this.sameSite) {
+			case default_: break;
+			case lax: dst.put("; SameSite=Lax"); break;
+			case strict: dst.put("; SameSite=Strict"); break;
+		}
 	}
 
 	private static void validateValue(string value)
@@ -849,6 +864,43 @@ unittest {
 	assertThrown(c.value);
 
 	assertThrown(c.setValue("foo;bar", Cookie.Encoding.raw));
+
+	auto tup = parseHTTPCookie("foo=bar; HttpOnly; Secure; Expires=Wed, 09 Jun 2021 10:18:14 GMT; Max-Age=60000; Domain=foo.com; Path=/users");
+	assert(tup[0] == "foo");
+	assert(tup[1].value == "bar");
+	assert(tup[1].httpOnly == true);
+	assert(tup[1].secure == true);
+	assert(tup[1].expires == "Wed, 09 Jun 2021 10:18:14 GMT");
+	assert(tup[1].maxAge == 60000L);
+	assert(tup[1].domain == "foo.com");
+	assert(tup[1].path == "/users");
+
+	tup = parseHTTPCookie("SESSIONID=0123456789ABCDEF0123456789ABCDEF; Path=/site; HttpOnly");
+	assert(tup[0] == "SESSIONID");
+	assert(tup[1].value == "0123456789ABCDEF0123456789ABCDEF");
+	assert(tup[1].httpOnly == true);
+	assert(tup[1].secure == false);
+	assert(tup[1].expires == "");
+	assert(tup[1].maxAge == 0);
+	assert(tup[1].domain == "");
+	assert(tup[1].path == "/site");
+
+	tup = parseHTTPCookie("invalid");
+	assert(!tup[0].length);
+
+	tup = parseHTTPCookie("valid=");
+	assert(tup[0] == "valid");
+	assert(tup[1].value == "");
+
+	tup = parseHTTPCookie("valid=;Path=/bar;Path=foo;Expires=14   ; Something   ; Domain=..example.org");
+	assert(tup[0] == "valid");
+	assert(tup[1].value == "");
+	assert(tup[1].httpOnly == false);
+	assert(tup[1].secure == false);
+	assert(tup[1].expires == "");
+	assert(tup[1].maxAge == 0);
+	assert(tup[1].domain == ".example.org"); // spec says you must strip only the first leading dot
+	assert(tup[1].path == "");
 }
 
 

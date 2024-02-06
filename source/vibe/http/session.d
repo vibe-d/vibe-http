@@ -1,7 +1,7 @@
 /**
 	Cookie based session support.
 
-	Copyright: © 2012-2013 RejectedSoftware e.K.
+	Copyright: © 2012-2013 Sönke Ludwig
 	License: Subject to the terms of the MIT license, as written in the included LICENSE.txt file.
 	Authors: Jan Krüger, Sönke Ludwig, Ilya Shipunov
 */
@@ -153,7 +153,7 @@ struct Session {
 /**
 	Interface for a basic session store.
 
-	A sesseion store is responsible for storing the id and the associated key/value pairs of a
+	A session store is responsible for storing the id and the associated key/value pairs of a
 	session.
 */
 interface SessionStore {

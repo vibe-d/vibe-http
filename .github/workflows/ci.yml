@@ -9,31 +9,90 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-latest ]
-        dc: [ dmd-latest, dmd-2.094.2, dmd-2.089.1, dmd-2.084.1, ldc-1.24.0, ldc-1.21.0, ldc-1.17.0 ]
+        os:
+          - ubuntu-latest
+        dc:
+          - dmd-latest
+          - dmd-2.097.1
+          - dmd-2.096.1
+          - dmd-2.093.1
+          - dmd-2.091.1
+          - ldc-latest
+          - ldc-1.27.1
+          - ldc-1.26.0
+          - ldc-1.23.0
+          - ldc-1.21.0
+        parts:
+          - 'builds,unittests,examples,tests'
+        extra_dflags:
+          - ''
         include:
-          # Default
-          - { parts: 'builds,unittests,examples,tests', extra_dflags: '' }
           # Custom part for coverage
-          - { dc: dmd-2.094.2, parts: 'unittests,tests', extra_dflags: "-cov -version=VibedSetCoverageMerge" }
+          - { os: ubuntu-latest, dc: dmd-latest, parts: 'unittests,tests', extra_dflags: "-cov -version=VibedSetCoverageMerge" }
+          # Custom part for vibe-core 1.x.x testing
+          - { os: ubuntu-latest, dc: dmd-latest, parts: 'builds,unittests,tests', extra_dflags: '' }
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
 
     - name: Prepare compiler
       uses: dlang-community/setup-dlang@v1
       with:
           compiler: ${{ matrix.dc }}
+          dub: 1.29.0
 
     - name: '[POSIX] Run tests'
       env:
-        PARTS: builds,unittests,examples,tests
+        VIBED_DRIVER: vibe-core
+        PARTS: ${{ matrix.parts }}
       run: |
-        ./travis-ci.sh
+        ./run-ci.sh
 
     - name: '[DMD] Upload coverage to Codecov'
       if: matrix.dc == 'dmd-latest'
       uses: codecov/codecov-action@v1
+
+
+  main_win:
+    name: Run Windows
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+        dc:
+          - dmd-latest
+          - dmd-2.097.1
+          - dmd-2.096.1
+          - dmd-2.093.1
+          - dmd-2.091.1
+          - ldc-latest
+          - ldc-1.27.1
+          - ldc-1.26.0
+          - ldc-1.23.0
+          - ldc-1.21.0
+        parts:
+          - 'builds,unittests,examples,tests'
+        extra_dflags:
+          - ''
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Prepare compiler
+      uses: dlang-community/setup-dlang@v1
+      with:
+          compiler: ${{ matrix.dc }}
+          dub: 1.29.0
+
+    - name: '[POSIX] Run tests'
+      env:
+        PARTS: ${{ matrix.parts }}
+      run: |
+        ./run-ci.sh

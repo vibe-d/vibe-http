@@ -29,16 +29,16 @@ class DigestAuthInfo
 	@safe:
 
 	string realm;
-	ubyte[32] secret;
-	ulong timeout;
+	ubyte[16] secret;
+	Duration timeout;
 
 	this()
 	{
 		secureRNG.read(secret[]);
-		timeout = 300;
+		timeout = 300.seconds;
 	}
 
-	string createNonce(in HTTPServerRequest req)
+	string createNonce(scope const HTTPServerRequest req)
 	{
 		auto now = Clock.currTime(UTC()).stdTime();
 		auto time = () @trusted { return *cast(ubyte[now.sizeof]*)&now; } ();
@@ -49,14 +49,14 @@ class DigestAuthInfo
 		return Base64.encode(time ~ data);
 	}
 
-	NonceState checkNonce(in string nonce, in HTTPServerRequest req)
+	NonceState checkNonce(string nonce, scope const HTTPServerRequest req)
 	{
 		auto now = Clock.currTime(UTC()).stdTime();
 		ubyte[] decoded = Base64.decode(nonce);
 		if (decoded.length != now.sizeof + secret.length) return NonceState.Invalid;
 		auto timebytes = decoded[0 .. now.sizeof];
 		auto time = () @trusted { return (cast(typeof(now)[])timebytes)[0]; } ();
-		if (timeout + time > now) return NonceState.Expired;
+		if (timeout.total!"hnsecs" + time < now) return NonceState.Expired;
 		MD5 md5;
 		md5.put(timebytes);
 		md5.put(secret);
@@ -64,6 +64,14 @@ class DigestAuthInfo
 		if (data[] != decoded[now.sizeof .. $]) return NonceState.Invalid;
 		return NonceState.Valid;
 	}
+}
+
+unittest
+{
+	auto authInfo = new DigestAuthInfo;
+	auto req = createTestHTTPServerRequest(URL("http://localhost/"));
+	auto nonce = authInfo.createNonce(req);
+	assert(authInfo.checkNonce(nonce, req) == NonceState.Valid);
 }
 
 private bool checkDigest(scope HTTPServerRequest req, DigestAuthInfo info, scope DigestHashCallback pwhash, out bool stale, out string username)

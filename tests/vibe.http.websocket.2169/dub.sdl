@@ -1,0 +1,2 @@
+name "test"
+dependency "vibe-http" path="../../"
