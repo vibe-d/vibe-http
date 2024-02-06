@@ -38,7 +38,6 @@ import vibe.http.server;
 import vibe.http.client;
 import vibe.core.connectionpool;
 import vibe.utils.array;
-static import vibe.internal.exception;
 
 import core.time;
 import std.algorithm: equal, splitter;
@@ -221,7 +220,9 @@ void handleWebSocket(scope WebSocketHandshakeDelegate on_handshake, scope HTTPSe
 	res.headers["Connection"] = "Upgrade";
 	ConnectionStream conn = res.switchProtocol("websocket");
 
-	WebSocket socket = new WebSocket(conn, req, res);
+	// NOTE: silencing scope warning here - WebSocket references the scoped
+	//       req/res objects throughout its lifetime, which has a narrower scope
+	scope socket = () @trusted { return new WebSocket(conn, req, res); } ();
 	try {
 		on_handshake(socket);
 	} catch (Exception e) {
@@ -487,9 +488,10 @@ unittest
  * Represents a single _WebSocket connection.
  *
  * ---
- * shared static this ()
+ * int main (string[] args)
  * {
- *   runTask(() => connectToWS());
+ *   auto taskHandle = runTask(() => connectToWS());
+ *   return runApplication(&args);
  * }
  *
  * void connectToWS ()
@@ -531,6 +533,8 @@ final class WebSocket {
 		RandomNumberStream m_rng;
 	}
 
+scope:
+
 	/**
 	 * Private constructor, called from `connectWebSocket`.
 	 *
@@ -553,22 +557,26 @@ final class WebSocket {
 		m_readMutex = new InterruptibleTaskMutex;
 		m_readCondition = new InterruptibleTaskCondition(m_readMutex);
 		m_readMutex.performLocked!({
-			m_reader = runTask(&startReader);
-			if (request && request.serverSettings.webSocketPingInterval != Duration.zero) {
+			// NOTE: Silencing scope warning here - m_reader MUST be stopped
+			//       before the end of the lifetime of the WebSocket object,
+			//       which is done in the mandatory call to close().
+			//       The same goes for m_pingTimer below.
+			m_reader = () @trusted { return runTask(&startReader); } ();
+			if (request !is null && request.serverSettings.webSocketPingInterval != Duration.zero) {
 				m_pongReceived = true;
-				m_pingTimer = setTimer(request.serverSettings.webSocketPingInterval, &sendPing, true);
+				m_pingTimer = () @trusted { return setTimer(request.serverSettings.webSocketPingInterval, &sendPing, true); } ();
 			}
 		});
 	}
 
 	private this(ConnectionStream conn, RandomNumberStream rng, HTTPClientResponse client_res)
 	{
-		this(conn, HTTPServerRequest.init, HTTPServerResponse.init, rng, client_res);
+		this(conn, null, null, rng, client_res);
 	}
 
 	private this(ConnectionStream conn, in HTTPServerRequest request, HTTPServerResponse res)
 	{
-		this(conn, request, res, RandomNumberStream.init, HTTPClientResponse.init);
+		this(conn, request, res, null, null);
 	}
 
 	/**
@@ -683,18 +691,11 @@ final class WebSocket {
 	void send(scope void delegate(scope OutgoingWebSocketMessage) @safe sender, FrameOpcode frameOpcode)
 	{
 		m_writeMutex.performLocked!({
-			vibe.internal.exception.enforce!WebSocketException(!m_sentCloseFrame, "WebSocket connection already actively closed.");
+			enforce!WebSocketException(!m_sentCloseFrame, "WebSocket connection already actively closed.");
 			/*scope*/auto message = new OutgoingWebSocketMessage(m_conn, frameOpcode, m_rng);
 			scope(exit) message.finalize();
 			sender(message);
 		});
-	}
-
-	/// Compatibility overload - will be removed soon.
-	deprecated("Call the overload which requires an explicit FrameOpcode.")
-	void send(scope void delegate(scope OutgoingWebSocketMessage) @safe sender)
-	{
-		send(sender, FrameOpcode.text);
 	}
 
 	/**
@@ -763,7 +764,7 @@ final class WebSocket {
 	{
 		ubyte[] ret;
 		receive((scope message){
-			vibe.internal.exception.enforce!WebSocketException(!strict || message.frameOpcode == FrameOpcode.binary,
+			enforce!WebSocketException(!strict || message.frameOpcode == FrameOpcode.binary,
 				"Expected a binary message, got "~message.frameOpcode.to!string());
 			ret = message.readAll();
 		});
@@ -774,7 +775,7 @@ final class WebSocket {
 	{
 		string ret;
 		receive((scope message){
-			vibe.internal.exception.enforce!WebSocketException(!strict || message.frameOpcode == FrameOpcode.text,
+			enforce!WebSocketException(!strict || message.frameOpcode == FrameOpcode.text,
 				"Expected a text message, got "~message.frameOpcode.to!string());
 			ret = message.readAllUTF8();
 		});
@@ -789,7 +790,7 @@ final class WebSocket {
 	{
 		m_readMutex.performLocked!({
 			while (!m_nextMessage) {
-				vibe.internal.exception.enforce!WebSocketException(connected, "Connection closed while reading message.");
+				enforce!WebSocketException(connected, "Connection closed while reading message.");
 				m_readCondition.wait();
 			}
 			receiver(m_nextMessage);
@@ -799,13 +800,20 @@ final class WebSocket {
 	}
 
 	private void startReader()
-	{
-		m_readMutex.performLocked!({}); //Wait until initialization
-		scope (exit) {
-			m_conn.close();
-			m_readCondition.notifyAll();
+	nothrow {
+		try m_readMutex.performLocked!({}); //Wait until initialization
+		catch (Exception e) {
+			logException(e, "WebSocket reader task failed to wait for initialization");
+			try m_conn.close();
+			catch (Exception e) logException(e, "Failed to close WebSocket connection after initialization failure");
+			m_closeCode = WebSocketCloseReason.abnormalClosure;
+			try m_readCondition.notifyAll();
+			catch (Exception e) assert(false, e.msg);
+			return;
 		}
+
 		try {
+			loop:
 			while (!m_conn.empty) {
 				assert(!m_nextMessage);
 				/*scope*/auto msg = new IncomingWebSocketMessage(m_conn, m_rng);
@@ -841,7 +849,7 @@ final class WebSocket {
 
 						if(!m_sentCloseFrame) close();
 						logDebug("Terminating connection (%s)", m_sentCloseFrame);
-						return;
+						break loop;
 					case FrameOpcode.text:
 					case FrameOpcode.binary:
 					case FrameOpcode.continuation: // FIXME: add proper support for continuation frames!
@@ -860,7 +868,12 @@ final class WebSocket {
 
 		// If no close code was passed, e.g. this was an unclean termination
 		//  of our websocket connection, set the close code to 1006.
-		if (this.m_closeCode == 0) this.m_closeCode = WebSocketCloseReason.abnormalClosure;
+		if (m_closeCode == 0) m_closeCode = WebSocketCloseReason.abnormalClosure;
+
+		try m_conn.close();
+		catch (Exception e) logException(e, "Failed to close WebSocket connection");
+		try m_readCondition.notifyAll();
+		catch (Exception e) assert(false, e.msg);
 	}
 
 	private void sendPing()
@@ -902,7 +915,15 @@ final class OutgoingWebSocketMessage : OutputStream {
 		m_rng = rng;
 	}
 
-	size_t write(in ubyte[] bytes, IOMode mode)
+	static if (is(typeof(.OutputStream.outputStreamVersion)) && .OutputStream.outputStreamVersion > 1) {
+		override size_t write(scope const(ubyte)[] bytes_, IOMode mode) { return doWrite(bytes_, mode); }
+	} else {
+		override size_t write(in ubyte[] bytes_, IOMode mode) { return doWrite(bytes_, mode); }
+	}
+
+	alias write = OutputStream.write;
+
+	private size_t doWrite(scope const(ubyte)[] bytes, IOMode mode)
 	{
 		assert(!m_finalized);
 
@@ -1008,8 +1029,8 @@ final class IncomingWebSocketMessage : InputStream {
 		size_t nread = 0;
 
 		while (dst.length > 0) {
-			vibe.internal.exception.enforce!WebSocketException(!empty , "cannot read from empty stream");
-			vibe.internal.exception.enforce!WebSocketException(leastSize > 0, "no data available" );
+			enforce!WebSocketException(!empty , "cannot read from empty stream");
+			enforce!WebSocketException(leastSize > 0, "no data available" );
 
 			import std.algorithm : min;
 			auto sz = cast(size_t)min(leastSize, dst.length);
@@ -1042,7 +1063,7 @@ private static immutable s_webSocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11
  * Currently only 6 values are defined, however the opcode is defined as
  * taking 4 bits.
  */
-private enum FrameOpcode : ubyte {
+public enum FrameOpcode : ubyte {
 	continuation = 0x0,
 	text = 0x1,
 	binary = 0x2,
@@ -1121,7 +1142,7 @@ private struct Frame {
 		}
 
 		if (sys_rng) {
-            sys_rng.read(dst[0 .. 4]);
+			sys_rng.read(dst[0 .. 4]);
 			for (size_t i = 0; i < payload.length; i++)
 				payload[i] ^= dst[i % 4];
 		}
@@ -1150,7 +1171,7 @@ private struct Frame {
 			// RFC 6455, 5.2, 'Payload length': If 127, the following 8 bytes
 			// interpreted as a 64-bit unsigned integer (the most significant
 			// bit MUST be 0)
-			vibe.internal.exception.enforce!WebSocketException(!(length >> 63),
+			enforce!WebSocketException(!(length >> 63),
 				"Received length has a non-zero most significant bit");
 
 		}
@@ -1167,7 +1188,7 @@ private struct Frame {
 		// Read payload
 		// TODO: Provide a way to limit the size read, easy
 		// DOS for server code here (rejectedsoftware/vibe.d#1496).
-		vibe.internal.exception.enforce!WebSocketException(length <= size_t.max);
+		enforce!WebSocketException(length <= size_t.max);
 		frame.payload = new ubyte[](cast(size_t)length);
 		stream.read(frame.payload);
 
@@ -1250,7 +1271,7 @@ unittest {
 /**
  * Generate a challenge key for the protocol upgrade phase.
  */
-private string generateChallengeKey(scope RandomNumberStream rng)
+private string generateChallengeKey(RandomNumberStream rng)
 {
 	ubyte[16] buffer;
 	rng.read(buffer);

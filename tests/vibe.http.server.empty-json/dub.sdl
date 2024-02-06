@@ -1,0 +1,3 @@
+name "tests"
+description "Receive an empty JSON body"
+dependency "vibe-http" path="../../"

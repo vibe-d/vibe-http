@@ -1,7 +1,7 @@
 /**
 	List of all standard HTTP status codes.
 
-	Copyright: © 2012 RejectedSoftware e.K.
+	Copyright: © 2012 Sönke Ludwig
 	License: Subject to the terms of the MIT license, as written in the included LICENSE.txt file.
 	Authors: Jan Krüger
 */
@@ -54,53 +54,12 @@ enum HTTPStatus {
 	gatewayTimeout               = 504,
 	httpVersionNotSupported      = 505,
 	// WebDAV status codes
+	processing                   = 102, /// See: https://tools.ietf.org/html/rfc2518#section-10.1
 	multiStatus                  = 207,
 	unprocessableEntity          = 422,
 	locked                       = 423,
 	failedDependency             = 424,
 	insufficientStorage          = 507,
-
-	requestedrangenotsatisfiable = rangeNotSatisfiable, /// deprecated
-	Continue = continue_, /// deprecated
-	SwitchingProtocols = switchingProtocols, /// deprecated
-	OK = ok, /// deprecated
-	Created = created, /// deprecated
-	Accepted = accepted, /// deprecated
-	NonAuthoritativeInformation = nonAuthoritativeInformation, /// deprecated
-	NoContent = noContent, /// deprecated
-	ResetContent = resetContent, /// deprecated
-	PartialContent = partialContent, /// deprecated
-	MultipleChoices = multipleChoices, /// deprecated
-	MovedPermanently = movedPermanently, /// deprecated
-	Found = found, /// deprecated
-	SeeOther = seeOther, /// deprecated
-	NotModified = notModified, /// deprecated
-	UseProxy = useProxy, /// deprecated
-	TemporaryRedirect = temporaryRedirect, /// deprecated
-	BadRequest = badRequest, /// deprecated
-	Unauthorized = unauthorized, /// deprecated
-	PaymentRequired = paymentRequired, /// deprecated
-	Forbidden = forbidden, /// deprecated
-	NotFound = notFound, /// deprecated
-	MethodNotAllowed = methodNotAllowed, /// deprecated
-	NotAcceptable = notAcceptable, /// deprecated
-	ProxyAuthenticationRequired = proxyAuthenticationRequired, /// deprecated
-	RequestTimeout = requestTimeout, /// deprecated
-	Conflict = conflict, /// deprecated
-	Gone = gone, /// deprecated
-	LengthRequired = lengthRequired, /// deprecated
-	PreconditionFailed = preconditionFailed, /// deprecated
-	RequestEntityTooLarge = requestEntityTooLarge, /// deprecated
-	RequestURITooLarge = requestURITooLarge, /// deprecated
-	UnsupportedMediaType = unsupportedMediaType, /// deprecated
-	Requestedrangenotsatisfiable = requestedrangenotsatisfiable, /// deprecated
-	ExpectationFailed = expectationFailed, /// deprecated
-	InternalServerError = internalServerError, /// deprecated
-	NotImplemented = notImplemented, /// deprecated
-	BadGateway = badGateway, /// deprecated
-	ServiceUnavailable = serviceUnavailable, /// deprecated
-	GatewayTimeout = gatewayTimeout, /// deprecated
-	HTTPVersionNotSupported = httpVersionNotSupported, /// deprecated
 }
 
 
@@ -146,7 +105,7 @@ string httpStatusText(int code)
 		case HTTPStatus.requestEntityTooLarge        : return "Request Entity Too Large";
 		case HTTPStatus.requestURITooLarge           : return "Request-URI Too Large";
 		case HTTPStatus.unsupportedMediaType         : return "Unsupported Media Type";
-		case HTTPStatus.requestedrangenotsatisfiable : return "Requested range not satisfiable";
+		case HTTPStatus.rangeNotSatisfiable          : return "Requested range not satisfiable";
 		case HTTPStatus.expectationFailed            : return "Expectation Failed";
 		case HTTPStatus.unavailableForLegalReasons   : return "Unavailable For Legal Reasons";
 		case HTTPStatus.internalServerError          : return "Internal Server Error";
@@ -161,6 +120,7 @@ string httpStatusText(int code)
 		case HTTPStatus.locked                       : return "Locked";
 		case HTTPStatus.failedDependency             : return "Failed Dependency";
 		case HTTPStatus.insufficientStorage          : return "Insufficient Storage";
+		case HTTPStatus.processing                   : return "Processing";
 	}
 	if( code >= 600 ) return "Unknown";
 	if( code >= 500 ) return "Unknown server error";

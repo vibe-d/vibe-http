@@ -1,0 +1,2 @@
+name "2080"
+dependency "vibe-http" path="../../"
