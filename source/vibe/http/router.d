@@ -3,7 +3,7 @@
 
 	See `URLRouter` for more details.
 
-	Copyright: © 2012-2015 RejectedSoftware e.K.
+	Copyright: © 2012-2015 Sönke Ludwig
 	License: Subject to the terms of the MIT license, as written in the included LICENSE.txt file.
 	Authors: Sönke Ludwig
 */
@@ -92,7 +92,7 @@ final class URLRouter : HTTPServerRequestHandler {
 	/// Returns a single route handle to conveniently register multiple methods.
 	URLRoute route(string path)
 	in { assert(path.length, "Cannot register null or empty path!"); }
-	body { return URLRoute(this, path); }
+	do { return URLRoute(this, path); }
 
 	///
 	unittest {
@@ -193,6 +193,8 @@ final class URLRouter : HTTPServerRequestHandler {
 	/// Handles a HTTP request by dispatching it to the registered route handlers.
 	void handleRequest(HTTPServerRequest req, HTTPServerResponse res)
 	{
+		import vibe.core.path : PosixPath;
+
 		auto method = req.method;
 
 		string calcBasePath()
@@ -200,10 +202,18 @@ final class URLRouter : HTTPServerRequestHandler {
 			import vibe.core.path : InetPath, relativeToWeb;
 			auto p = InetPath(prefix.length ? prefix : "/");
 			p.endsWithSlash = true;
-			return p.relativeToWeb(InetPath(req.path)).toString();
+			return p.relativeToWeb(req.requestPath).toString();
 		}
 
-		auto path = req.path;
+		string path;
+
+		// NOTE: Instead of failing, we just ignore requests with invalid path
+		//       segments (i.e. containing path separators) here. Any request
+		//       handlers later in the queue may still choose to process them
+		//       appropriately.
+		try path = (cast(PosixPath)req.requestPath).toString();
+		catch (Exception e) return;
+
 		if (path.length < m_prefix.length || path[0 .. m_prefix.length] != m_prefix) return;
 		path = path[m_prefix.length .. $];
 
@@ -212,7 +222,7 @@ final class URLRouter : HTTPServerRequestHandler {
 				auto r = () @trusted { return &m_routes.getTerminalData(ridx); } ();
 				if (r.method != method) return false;
 
-				logDebugV("route match: %s -> %s %s %s", req.path, r.method, r.pattern, values);
+				logDebugV("route match: %s -> %s %s %s", req.requestPath, r.method, r.pattern, values);
 				foreach (i, v; values) req.params[m_routes.getTerminalVarNames(ridx)[i]] = v;
 				if (m_computeBasePath) req.params["routerRootDir"] = calcBasePath();
 				r.cb(req, res);
@@ -247,10 +257,10 @@ final class URLRouter : HTTPServerRequestHandler {
 		static if (
 				is(Handler : HTTPServerRequestDelegate) ||
 				is(Handler : HTTPServerRequestFunction) ||
-				is(Handler : HTTPServerRequestHandler)
-				//is(Handler : HTTPServerRequestDelegateS) ||
-				//is(Handler : HTTPServerRequestFunctionS) ||
-				//is(Handler : HTTPServerRequestHandlerS)
+				is(Handler : HTTPServerRequestHandler) ||
+				is(Handler : HTTPServerRequestDelegateS) ||
+				is(Handler : HTTPServerRequestFunctionS) ||
+				is(Handler : HTTPServerRequestHandlerS)
 			)
 		{
 			enum isValidHandler = true;
@@ -278,9 +288,9 @@ final class URLRouter : HTTPServerRequestHandler {
 		static assert(isValidHandler!HTTPServerRequestFunction);
 		static assert(isValidHandler!HTTPServerRequestDelegate);
 		static assert(isValidHandler!HTTPServerRequestHandler);
-		//static assert(isValidHandler!HTTPServerRequestFunctionS);
-		//static assert(isValidHandler!HTTPServerRequestDelegateS);
-		//static assert(isValidHandler!HTTPServerRequestHandlerS);
+		static assert(isValidHandler!HTTPServerRequestFunctionS);
+		static assert(isValidHandler!HTTPServerRequestDelegateS);
+		static assert(isValidHandler!HTTPServerRequestHandlerS);
 		static assert(isValidHandler!(void delegate(HTTPServerRequest req, HTTPServerResponse res) @system));
 		static assert(isValidHandler!(void function(HTTPServerRequest req, HTTPServerResponse res) @system));
 		static assert(isValidHandler!(void delegate(scope HTTPServerRequest req, scope HTTPServerResponse res) @system));
@@ -296,55 +306,55 @@ final class URLRouter : HTTPServerRequestHandler {
 }
 
 ///
-//@safe unittest {
-	//import vibe.http.fileserver;
+@safe unittest {
+	import vibe.http.fileserver;
 
-	//void addGroup(HTTPServerRequest req, HTTPServerResponse res)
-	//{
-		//// Route variables are accessible via the params map
-		//logInfo("Getting group %s for user %s.", req.params["groupname"], req.params["username"]);
-	//}
+	void addGroup(HTTPServerRequest req, HTTPServerResponse res)
+	{
+		// Route variables are accessible via the params map
+		logInfo("Getting group %s for user %s.", req.params["groupname"], req.params["username"]);
+	}
 
-	//void deleteUser(HTTPServerRequest req, HTTPServerResponse res)
-	//{
-		//// ...
-	//}
+	void deleteUser(HTTPServerRequest req, HTTPServerResponse res)
+	{
+		// ...
+	}
 
-	//void auth(HTTPServerRequest req, HTTPServerResponse res)
-	//{
-		//// TODO: check req.session to see if a user is logged in and
-		////	   write an error page or throw an exception instead.
-	//}
+	void auth(HTTPServerRequest req, HTTPServerResponse res)
+	{
+		// TODO: check req.session to see if a user is logged in and
+		//       write an error page or throw an exception instead.
+	}
 
-	//void setup()
-	//{
-		//auto router = new URLRouter;
-		//// Matches all GET requests for /users/groups/* and places
-		//// the place holders in req.params as 'username' and 'groupname'.
-		//router.get("/users/:username/groups/:groupname", &addGroup);
+	void setup()
+	{
+		auto router = new URLRouter;
+		// Matches all GET requests for /users/*/groups/* and places
+		// the place holders in req.params as 'username' and 'groupname'.
+		router.get("/users/:username/groups/:groupname", &addGroup);
 
-		//// Matches all requests. This can be useful for authorization and
-		//// similar tasks. The auth method will only write a response if the
-		//// user is _not_ authorized. Otherwise, the router will fall through
-		//// and continue with the following routes.
-		//router.any("*", &auth);
+		// Matches all requests. This can be useful for authorization and
+		// similar tasks. The auth method will only write a response if the
+		// user is _not_ authorized. Otherwise, the router will fall through
+		// and continue with the following routes.
+		router.any("*", &auth);
 
-		//// Matches a POST request
-		//router.post("/users/:username/delete", &deleteUser);
+		// Matches a POST request
+		router.post("/users/:username/delete", &deleteUser);
 
-		//// Matches all GET requests in /static/ such as /static/img.png or
-		//// /static/styles/sty.css
-		//router.get("/static/*", serveStaticFiles("public/"));
+		// Matches all GET requests in /static/ such as /static/img.png or
+		// /static/styles/sty.css
+		router.get("/static/*", serveStaticFiles("public/"));
 
-		//// Setup a HTTP server...
-		//auto settings = new HTTPServerSettings;
-		//// ...
+		// Setup a HTTP server...
+		auto settings = new HTTPServerSettings;
+		// ...
 
-		//// The router can be directly passed to the listenHTTP function as
-		//// the main request handler.
-		//listenHTTP(settings, router);
-	//}
-//}
+		// The router can be directly passed to the listenHTTP function as
+		// the main request handler.
+		listenHTTP(settings, router);
+	}
+}
 
 /** Using nested routers to map components to different sub paths. A component
 	could for example be an embedded blog engine.
@@ -391,12 +401,9 @@ final class URLRouter : HTTPServerRequestHandler {
 		// /component1/users/:user -> showComponentUser
 
 		// Start the HTTP server
-		//auto settings = HTTPServerSettings;
-		HTTPServerSettings settings;
+		auto settings = new HTTPServerSettings;
 		// ...
-		//listenHTTP(settings, mainrouter);
-
-		listenHTTP!mainrouter(settings);
+		listenHTTP(settings, mainrouter);
 	}
 }
 
@@ -503,7 +510,7 @@ final class URLRouter : HTTPServerRequestHandler {
 
 	assert(ensureMatch("/foo bar/", "/foo%20bar/") is null);   // normalized pattern: "/foo%20bar/"
 	//assert(ensureMatch("/foo%20bar/", "/foo%20bar/") is null); // normalized pattern: "/foo%20bar/"
-	assert(ensureMatch("/foo/bar/", "/foo/bar/") is null);	 // normalized pattern: "/foo/bar/"
+	assert(ensureMatch("/foo/bar/", "/foo/bar/") is null);     // normalized pattern: "/foo/bar/"
 	//assert(ensureMatch("/foo/bar/", "/foo%2fbar/") !is null);
 	//assert(ensureMatch("/foo%2fbar/", "/foo%2fbar/") is null); // normalized pattern: "/foo%2Fbar/"
 	//assert(ensureMatch("/foo%2Fbar/", "/foo%2fbar/") is null); // normalized pattern: "/foo%2Fbar/"
@@ -511,6 +518,66 @@ final class URLRouter : HTTPServerRequestHandler {
 	//assert(ensureMatch("/foo%2fbar/", "/foo/bar/") !is null);
 	//assert(ensureMatch("/:foo/", "/foo%2Fbar/", ["foo": "foo/bar"]) is null);
 	assert(ensureMatch("/:foo/", "/foo/bar/") !is null);
+}
+
+unittest { // issue #2561
+	import vibe.http.server : createTestHTTPServerRequest, createTestHTTPServerResponse;
+	import vibe.inet.url : URL;
+	import vibe.stream.memory : createMemoryOutputStream;
+
+	Route[] routes = [
+		Route(HTTPMethod.PUT, "/public/devices/commandList"),
+		Route(HTTPMethod.PUT, "/public/devices/logicStateList"),
+		Route(HTTPMethod.OPTIONS, "/public/devices/commandList"),
+		Route(HTTPMethod.OPTIONS, "/public/devices/logicStateList"),
+		Route(HTTPMethod.PUT, "/public/mnemoschema"),
+		Route(HTTPMethod.PUT, "/public/static"),
+		Route(HTTPMethod.PUT, "/public/dynamic"),
+		Route(HTTPMethod.PUT, "/public/info"),
+		Route(HTTPMethod.PUT, "/public/info-network"),
+		Route(HTTPMethod.PUT, "/public/events"),
+		Route(HTTPMethod.PUT, "/public/eventList"),
+		Route(HTTPMethod.PUT, "/public/availBatteryModels"),
+		Route(HTTPMethod.OPTIONS, "/public/availBatteryModels"),
+		Route(HTTPMethod.OPTIONS, "/public/dynamic"),
+		Route(HTTPMethod.OPTIONS, "/public/eventList"),
+		Route(HTTPMethod.OPTIONS, "/public/events"),
+		Route(HTTPMethod.OPTIONS, "/public/info"),
+		Route(HTTPMethod.OPTIONS, "/public/info-network"),
+		Route(HTTPMethod.OPTIONS, "/public/mnemoschema"),
+		Route(HTTPMethod.OPTIONS, "/public/static"),
+		Route(HTTPMethod.PUT, "/settings/admin/getinfo"),
+		Route(HTTPMethod.PUT, "/settings/admin/setconf"),
+		Route(HTTPMethod.PUT, "/settings/admin/checksetaccess"),
+		Route(HTTPMethod.OPTIONS, "/settings/admin/checksetaccess"),
+		Route(HTTPMethod.OPTIONS, "/settings/admin/getinfo"),
+		Route(HTTPMethod.OPTIONS, "/settings/admin/setconf"),
+	];
+
+	auto router = new URLRouter;
+
+	foreach (r; routes)
+		router.match(r.method, r.pattern, (req, res) {
+			res.writeBody("OK");
+		});
+
+	{ // make sure unmatched routes are not handled by the router
+		auto req = createTestHTTPServerRequest(URL("http://localhost/foobar"), HTTPMethod.PUT);
+		auto res = createTestHTTPServerResponse();
+		router.handleRequest(req, res);
+		assert(!res.headerWritten);
+	}
+
+	// ensure all routes are matched
+	foreach (r; routes) {
+		auto url = URL("http://localhost"~r.pattern);
+		auto output = createMemoryOutputStream();
+		auto req = createTestHTTPServerRequest(url, r.method);
+		auto res = createTestHTTPServerResponse(output, null, TestHTTPResponseMode.bodyOnly);
+		router.handleRequest(req, res);
+		//assert(res.headerWritten);
+		assert(output.data == "OK");
+	}
 }
 
 
@@ -640,8 +707,8 @@ private struct MatchTree(T) {
 
 			void printRange(uint node, ubyte from, ubyte to)
 			{
-				if (to - from <= 10) logInfo("	%s -> %s", iota(from, cast(uint)to+1).map!(ch => mapChar(cast(ubyte)ch)).join("|"), node);
-				else logInfo("	%s-%s -> %s", mapChar(from), mapChar(to), node);
+				if (to - from <= 10) logInfo("    %s -> %s", iota(from, cast(uint)to+1).map!(ch => mapChar(cast(ubyte)ch)).join("|"), node);
+				else logInfo("    %s-%s -> %s", mapChar(from), mapChar(to), node);
 			}
 
 			auto last_to = NodeIndex.max;
@@ -957,8 +1024,8 @@ private struct MatchGraphBuilder {
 		//logInfo("Disambiguate with %s initial nodes", m_nodes.length);
 		if (!m_nodes.length) return;
 
-		import vibe.utils.hashmap;
-		HashMap!(size_t, NodeIndex) combined_nodes;
+		import vibe.container.hashmap : HashMap;
+		HashMap!(LinkedSetHash, NodeIndex) combined_nodes;
 		Array!bool visited;
 		visited.length = m_nodes.length * 2;
 		Stack!NodeIndex node_stack;
@@ -974,7 +1041,7 @@ private struct MatchGraphBuilder {
 
 			foreach (ch; ubyte.min .. ubyte.max+1) {
 				auto chnodes = m_nodes[n].edges[ch];
-				size_t chhash = m_edgeEntries.getHash(chnodes);
+				LinkedSetHash chhash = m_edgeEntries.getHash(chnodes);
 
 				// handle trivial cases
 				if (m_edgeEntries.hasMaxLength(chnodes, 1))
@@ -1047,7 +1114,7 @@ private struct MatchGraphBuilder {
 			}
 			logInfo("  %s: %s", i, n.terminals[].map!(t => t.var != VarIndex.max ? format("T%s(%s)", t.index, t.var) : format("T%s", t.index)).join(" "));
 			ubyte first_char;
-			size_t list_hash;
+			LinkedSetHash list_hash;
 			NodeSet list;
 
 			void printEdges(ubyte last_char) {
@@ -1056,7 +1123,7 @@ private struct MatchGraphBuilder {
 					foreach (tn; m_edgeEntries.getItems(list))
 						targets ~= format(" %s", tn);
 					if (targets.length > 0)
-						logInfo("	[%s ... %s] -> %s", mapChar(first_char), mapChar(last_char), targets);
+						logInfo("    [%s ... %s] -> %s", mapChar(first_char), mapChar(last_char), targets);
 				}
 			}
 			foreach (ch, tnodes; n.edges) {
@@ -1112,6 +1179,10 @@ private struct MatchGraphBuilder {
 	}
 }
 
+
+/** Used to store and manipulate multiple linked lists within a single array
+	based storage.
+*/
 struct LinkedSetBacking(T) {
 	import std.container.array : Array;
 	import std.range : isInputRange;
@@ -1170,13 +1241,16 @@ struct LinkedSetBacking(T) {
 			insert(h, itm);
 	}
 
-	size_t getHash(Handle sh)
+	LinkedSetHash getHash(Handle sh)
 	const {
+		import std.digest.md : md5Of;
+
 		// NOTE: the returned hash is order independent, to avoid bogus
-		//	   mismatches when comparing lists of different order
-		size_t ret = 0x72d2da6c;
+		//       mismatches when comparing lists of different order
+		LinkedSetHash ret = cast(LinkedSetHash)md5Of([]);
 		while (sh != Handle.init) {
-			ret ^= (hashOf(m_storage[sh.index].value) ^ 0xb1bdfb8d) * 0x5dbf04a4;
+			auto h = cast(LinkedSetHash)md5Of(cast(const(ubyte)[])(&m_storage[sh.index].value)[0 .. 1]);
+			foreach (i; 0 .. ret.length) ret[i] ^= h[i];
 			sh.index = m_storage[sh.index].next;
 		}
 		return ret;
@@ -1233,11 +1307,15 @@ unittest {
 	assert(h != b.getHash(b.emptySet));
 	s = b.create(5, 3, 7);
 	assert(b.getHash(s) == h);
+	assert(b.getItems(s).equal([7, 3, 5]));
 
 	b.insert(&s, 11);
 	assert(b.hasLength(s, 4));
 	assert(b.getHash(s) != h);
+	assert(b.getItems(s).equal([11, 7, 3, 5]));
 }
+
+alias LinkedSetHash = ulong[16/ulong.sizeof];
 
 private struct Stack(E)
 {

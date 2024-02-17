@@ -11,6 +11,9 @@ public import vibe.core.net;
 public import vibe.http.common;
 public import vibe.inet.url;
 
+import vibe.container.dictionarylist;
+import vibe.container.internal.utilallocator;
+import vibe.container.ringbuffer : RingBuffer;
 import vibe.core.connectionpool;
 import vibe.core.core;
 import vibe.core.log;
@@ -22,9 +25,6 @@ import vibe.stream.tls;
 import vibe.stream.operations;
 import vibe.stream.wrapper : createConnectionProxyStream;
 import vibe.stream.zlib;
-import vibe.utils.array;
-import vibe.utils.dictionarylist;
-import vibe.internal.allocator;
 import vibe.internal.freelistref;
 import vibe.internal.interfaceproxy : InterfaceProxy, interfaceProxy;
 
@@ -77,11 +77,7 @@ HTTPClientResponse requestHTTP(string url, scope void delegate(scope HTTPClientR
 /// ditto
 HTTPClientResponse requestHTTP(URL url, scope void delegate(scope HTTPClientRequest req) requester = null, const(HTTPClientSettings) settings = defaultSettings)
 {
-	import std.algorithm.searching : canFind;
-
-	bool use_tls = isTLSRequired(url, settings);
-
-	auto cli = connectHTTP(url.getFilteredHost, url.port, use_tls, settings);
+	auto cli = connectHTTP(url, settings);
 	auto res = cli.request(
 		(scope req){ httpRequesterDg(req, url, settings, requester); },
 	);
@@ -100,9 +96,7 @@ void requestHTTP(string url, scope void delegate(scope HTTPClientRequest req) re
 /// ditto
 void requestHTTP(URL url, scope void delegate(scope HTTPClientRequest req) requester, scope void delegate(scope HTTPClientResponse req) responder, const(HTTPClientSettings) settings = defaultSettings)
 {
-	bool use_tls = isTLSRequired(url, settings);
-
-	auto cli = connectHTTP(url.getFilteredHost, url.port, use_tls, settings);
+	auto cli = connectHTTP(url, settings);
 	cli.request(
 		(scope req){ httpRequesterDg(req, url, settings, requester); },
 		responder
@@ -197,7 +191,7 @@ auto connectHTTP(string host, ushort port = 0, bool use_tls = false, const(HTTPC
 	auto sttngs = settings ? settings : defaultSettings;
 
 	if (port == 0) port = use_tls ? 443 : 80;
-	auto ckey = ConnInfo(host, port, use_tls, sttngs.proxyURL.host, sttngs.proxyURL.port, sttngs.networkInterface);
+	auto ckey = ConnInfo(host, sttngs.tlsPeerName, port, use_tls, sttngs.proxyURL.host, sttngs.proxyURL.port, sttngs.networkInterface);
 
 	ConnectionPool!HTTPClient pool;
 	s_connections.opApply((ref c) @safe {
@@ -207,17 +201,24 @@ auto connectHTTP(string host, ushort port = 0, bool use_tls = false, const(HTTPC
 	});
 
 	if (!pool) {
-		logDebug("Create HTTP client pool %s:%s %s proxy %s:%d", host, port, use_tls, sttngs.proxyURL.host, sttngs.proxyURL.port);
+		logDebug("Create HTTP client pool %s(%s):%s %s proxy %s:%d", host, sttngs.tlsPeerName, port, use_tls, sttngs.proxyURL.host, sttngs.proxyURL.port);
 		pool = new ConnectionPool!HTTPClient({
 				auto ret = new HTTPClient;
 				ret.connect(host, port, use_tls, sttngs);
 				return ret;
 			});
-		if (s_connections.full) s_connections.popFront();
+		if (s_connections.full) s_connections.removeFront();
 		s_connections.put(tuple(ckey, pool));
 	}
 
 	return pool.lockConnection();
+}
+
+/// Ditto
+auto connectHTTP(URL url, const(HTTPClientSettings) settings = null)
+{
+	const use_tls = isTLSRequired(url, settings);
+	return connectHTTP(url.getFilteredHost, url.port, use_tls, settings);
 }
 
 static ~this()
@@ -229,8 +230,8 @@ static ~this()
 	}
 }
 
-private struct ConnInfo { string host; ushort port; bool useTLS; string proxyIP; ushort proxyPort; NetworkAddress bind_addr; }
-private static vibe.utils.array.FixedRingBuffer!(Tuple!(ConnInfo, ConnectionPool!HTTPClient), 16) s_connections;
+private struct ConnInfo { string host; string tlsPeerName; ushort port; bool useTLS; string proxyIP; ushort proxyPort; NetworkAddress bind_addr; }
+private static RingBuffer!(Tuple!(ConnInfo, ConnectionPool!HTTPClient), 16) s_connections;
 
 
 /**************************************************************************************************/
@@ -244,13 +245,7 @@ class HTTPClientSettings {
 	URL proxyURL;
 	Duration defaultKeepAliveTimeout = 10.seconds;
 
-	/** Timeout for establishing a connection to the server
-
-		Note that this setting is only supported when using the vibe-core
-		module. If using one of the legacy drivers, any value other than
-		`Duration.max` will emit a runtime warning and connects without a
-		specific timeout.
-	*/
+	/// Timeout for establishing a connection to the server
 	Duration connectTimeout = Duration.max;
 
 	/// Timeout during read operations on the underyling transport
@@ -268,6 +263,13 @@ class HTTPClientSettings {
 	*/
 	void delegate(TLSContext ctx) @safe nothrow tlsContextSetup;
 
+	/**
+		TLS Peer name override.
+
+		Allows to customize the tls peer name sent to server during the TLS connection setup (SNI)
+	*/
+	string tlsPeerName;
+
 	@property HTTPClientSettings dup()
 	const @safe {
 		auto ret = new HTTPClientSettings;
@@ -277,6 +279,7 @@ class HTTPClientSettings {
 		ret.networkInterface = this.networkInterface;
 		ret.dnsAddressFamily = this.dnsAddressFamily;
 		ret.tlsContextSetup = this.tlsContextSetup;
+		ret.tlsPeerName = this.tlsPeerName;
 		return ret;
 	}
 }
@@ -294,8 +297,8 @@ unittest {
 		},
 		(scope res){
 			logInfo("Headers:");
-			foreach(h; res.headers.byKeyValue) {
-				logInfo("%s: %s", h.key, h.value);
+			foreach (key, ref value; res.headers.byKeyValue) {
+				logInfo("%s: %s", key, value);
 			}
 			logInfo("Response: %s", res.bodyReader.readAllUTF8());
 		}, settings);
@@ -377,6 +380,7 @@ final class HTTPClient {
 	private {
 		Rebindable!(const(HTTPClientSettings)) m_settings;
 		string m_server;
+		string m_tlsPeerName;
 		ushort m_port;
 		bool m_useTLS;
 		TCPConnection m_conn;
@@ -409,9 +413,11 @@ final class HTTPClient {
 	static void setTLSSetupCallback(void function(TLSContext) @safe func) @trusted { ms_tlsSetup = func; }
 
 	/**
-		Connects to a specific server.
+		Sets up this HTTPClient to connect to a specific server.
 
 		This method may only be called if any previous connection has been closed.
+
+		The actual connection is deferred until a request is initiated (using `HTTPClient.request`).
 	*/
 	void connect(string server, ushort port = 80, bool use_tls = false, const(HTTPClientSettings) settings = defaultSettings)
 	{
@@ -423,6 +429,7 @@ final class HTTPClient {
 		m_keepAliveTimeout = settings.defaultKeepAliveTimeout;
 		m_keepAliveLimit = Clock.currTime(UTC()) + m_keepAliveTimeout;
 		m_server = server;
+		m_tlsPeerName = settings.tlsPeerName.length ? settings.tlsPeerName : server;
 		m_port = port;
 		m_useTLS = use_tls;
 		if (use_tls) {
@@ -461,11 +468,8 @@ final class HTTPClient {
 	private void doProxyRequest(T, U)(ref T res, U requester, ref bool close_conn, ref bool has_body)
 	@trusted { // scope new
 		import std.conv : to;
-		import vibe.internal.utilallocator: RegionListAllocator;
-		version (VibeManualMemoryManagement)
-			scope request_allocator = new RegionListAllocator!(shared(Mallocator), false)(1024, Mallocator.instance);
-		else
-			scope request_allocator = new RegionListAllocator!(shared(GCAllocator), true)(1024, GCAllocator.instance);
+		scope request_allocator = createRequestAllocator();
+		scope (exit) freeRequestAllocator(request_allocator);
 
 		res.dropBody();
 		scope(failure)
@@ -502,13 +506,15 @@ final class HTTPClient {
 		m_responding = true;
 
 		static if (is(T == HTTPClientResponse))
-			res = new HTTPClientResponse(this, has_body, close_conn, request_allocator, connected_time);
+			res = new HTTPClientResponse(this, close_conn);
 		else
-			res = scoped!HTTPClientResponse(this, has_body, close_conn, request_allocator, connected_time);
+			res = scoped!HTTPClientResponse(this, close_conn);
+
+		res.initialize(has_body, request_allocator, connected_time);
 
 		if (res.headers.get("Proxy-Authenticate", null) !is null){
 			res.dropBody();
-			throw new HTTPStatusException(HTTPStatus.ProxyAuthenticationRequired, "Proxy Authentication Failed.");
+			throw new HTTPStatusException(HTTPStatus.proxyAuthenticationRequired, "Proxy Authentication Failed.");
 		}
 
 	}
@@ -533,11 +539,8 @@ final class HTTPClient {
 	*/
 	void request(scope void delegate(scope HTTPClientRequest req) requester, scope void delegate(scope HTTPClientResponse) responder)
 	@trusted { // scope new
-		import vibe.internal.utilallocator: RegionListAllocator;
-		version (VibeManualMemoryManagement)
-			scope request_allocator = new RegionListAllocator!(shared(Mallocator), false)(1024, Mallocator.instance);
-		else
-			scope request_allocator = new RegionListAllocator!(shared(GCAllocator), true)(1024, GCAllocator.instance);
+		scope request_allocator = createRequestAllocator();
+		scope (exit) freeRequestAllocator(request_allocator);
 
 		scope (failure) {
 			m_responding = false;
@@ -549,7 +552,8 @@ final class HTTPClient {
 		bool has_body = doRequestWithRetry(requester, false, close_conn, connected_time);
 
 		m_responding = true;
-		auto res = scoped!HTTPClientResponse(this, has_body, close_conn, request_allocator, connected_time);
+		auto res = scoped!HTTPClientResponse(this, close_conn);
+		res.initialize(has_body, request_allocator, connected_time);
 
 		// proxy implementation
 		if (res.headers.get("Proxy-Authenticate", null) !is null) {
@@ -568,7 +572,8 @@ final class HTTPClient {
 				// just an informational status -> read and handle next response
 				if (m_responding) res.dropBody();
 				if (m_conn) {
-					res = scoped!HTTPClientResponse(this, has_body, close_conn, request_allocator, connected_time);
+					res = scoped!HTTPClientResponse(this, close_conn);
+					res.initialize(has_body, request_allocator, connected_time);
 					continue;
 				}
 			}
@@ -596,7 +601,8 @@ final class HTTPClient {
 		}
 		bool has_body = doRequestWithRetry(requester, false, close_conn, connected_time);
 		m_responding = true;
-		auto res = new HTTPClientResponse(this, has_body, close_conn, () @trusted { return vibeThreadAllocator(); } (), connected_time);
+		auto res = new HTTPClientResponse(this, close_conn);
+		res.initialize(has_body, () @trusted { return vibeThreadAllocator(); } (), connected_time);
 
 		// proxy implementation
 		if (res.headers.get("Proxy-Authenticate", null) !is null) {
@@ -608,7 +614,7 @@ final class HTTPClient {
 
 	private bool doRequestWithRetry(scope void delegate(HTTPClientRequest req) requester, bool confirmed_proxy_auth /* basic only */, out bool close_conn, out SysTime connected_time)
 	{
-		if (m_conn && m_conn.connected && connected_time > m_keepAliveLimit){
+		if (m_conn && m_conn.connected && Clock.currTime(UTC()) > m_keepAliveLimit){
 			logDebug("Disconnected to avoid timeout");
 			disconnect();
 		}
@@ -719,7 +725,7 @@ final class HTTPClient {
 
 			m_stream = m_conn;
 			if (m_useTLS) {
-				try m_tlsStream = createTLSStream(m_conn, m_tls, TLSStreamState.connecting, m_server, m_conn.remoteAddress);
+				try m_tlsStream = createTLSStream(m_conn, m_tls, TLSStreamState.connecting, m_tlsPeerName, m_conn.remoteAddress);
 				catch (Exception e) {
 					m_conn.close();
 					m_conn = TCPConnection.init;
@@ -768,19 +774,15 @@ final class HTTPClient {
 
 private auto connectTCPWithTimeout(NetworkAddress addr, NetworkAddress bind_address, Duration timeout)
 {
-	version (Have_vibe_core) {
-		return connectTCP(addr, bind_address, timeout);
-	} else {
-		if (timeout != Duration.max)
-			logWarn("HTTP client connect timeout is set, but not supported by the legacy vibe-d:core module.");
-		return connectTCP(addr, bind_address);
-	}
+	return connectTCP(addr, bind_address, timeout);
 }
 
 /**
 	Represents a HTTP client request (as sent to the server).
 */
 final class HTTPClientRequest : HTTPRequest {
+	import vibe.internal.array : FixedAppender;
+
 	private {
 		InterfaceProxy!OutputStream m_bodyWriter;
 		FreeListRef!ChunkedOutputStream m_chunkedStream;
@@ -852,7 +854,7 @@ final class HTTPClientRequest : HTTPRequest {
 	{
 		import vibe.stream.wrapper : streamOutputRange;
 
-		headers["Content-Type"] = "application/json";
+		headers["Content-Type"] = "application/json; charset=UTF-8";
 
 		// set an explicit content-length field if chunked encoding is not allowed
 		if (!allow_chunked) {
@@ -1016,16 +1018,19 @@ final class HTTPClientResponse : HTTPResponse {
 	}
 
 	/// private
-	this(HTTPClient client, bool has_body, bool close_conn, IAllocator alloc, SysTime connected_time = Clock.currTime(UTC()))
-	{
+	this(HTTPClient client, bool close_conn)
+	nothrow {
 		m_client = client;
 		m_closeConn = close_conn;
+	}
 
+	private void initialize(Allocator)(bool has_body, Allocator alloc, SysTime connected_time = Clock.currTime(UTC()))
+	{
 		scope(failure) finalize(true);
 
 		// read and parse status line ("HTTP/#.# #[ $]\r\n")
 		logTrace("HTTP client reading status line");
-		string stln = () @trusted { return cast(string)client.m_stream.readLine(HTTPClient.maxHeaderLineLength, "\r\n", alloc); } ();
+		string stln = () @trusted { return cast(string)m_client.m_stream.readLine(HTTPClient.maxHeaderLineLength, "\r\n", alloc); } ();
 		logTrace("stln: %s", stln);
 		this.httpVersion = parseHTTPVersion(stln);
 
@@ -1039,7 +1044,7 @@ final class HTTPClientResponse : HTTPResponse {
 		}
 
 		// read headers until an empty line is hit
-		parseRFC5322Header(client.m_stream, this.headers, HTTPClient.maxHeaderLineLength, alloc, false);
+		parseRFC5322Header(m_client.m_stream, this.headers, HTTPClient.maxHeaderLineLength, alloc, false);
 
 		logTrace("---------------------");
 		logTrace("HTTP client response:");
@@ -1258,6 +1263,7 @@ final class HTTPClientResponse : HTTPResponse {
 		auto cli = m_client;
 		m_client = null;
 		cli.m_responding = false;
+		destroy(m_endCallback);
 		destroy(m_zlibInputStream);
 		destroy(m_chunkedInputStream);
 		destroy(m_limitedInputStream);
@@ -1282,7 +1288,7 @@ package auto getFilteredHost(URL url)
 
 // This object is a placeholder and should to never be modified.
 package @property const(HTTPClientSettings) defaultSettings()
-@trusted {
+@trusted nothrow {
 	__gshared HTTPClientSettings ret = new HTTPClientSettings;
 	return ret;
 }

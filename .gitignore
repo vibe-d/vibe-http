@@ -1,6 +1,48 @@
-/libevent.dll
-/dub.selections.json
-/http-test-library.exe
+*.[oa]
+*.so
+*.lib
+*.dll
+.*.sw*
+*.lst
+*.map
+*.pdb
+*.suo
+*.sln
+*.visualdproj
+*.exe_cv
+
+docs.json
+/docs
+__dummy.html
+
 .dub
-libvibe-http.a
-vibe-http-test-library
+dub.selections.json
+
+# Auto-generated
+tls/openssl_version.d
+
+# Auto-downloaded 3rd-party (Meson)
+lib/subprojects/allocator
+lib/subprojects/diet/
+lib/subprojects/openssl/
+
+# Mono-D files
+*.userprefs
+
+# Unittest binaries
+vibe-d
+tests/*/tests
+__test__*__
+vibe-d-test*
+vibe-d-*-test*
+
+# Examples
+examples/*/*-example
+examples/app_skeleton/app-skeleton
+examples/app_skeleton/__test__library__
+examples/bench-http-request/bench-http-request
+examples/bench-http-server/bench-http-server
+examples/bench-mongodb/bench-mongodb
+examples/bench-urlrouter/bench-urlrouter
+*.exe
+

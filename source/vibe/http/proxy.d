@@ -7,6 +7,7 @@
 */
 module vibe.http.proxy;
 
+import vibe.core.core : runTask;
 import vibe.core.log;
 import vibe.http.client;
 import vibe.http.server;
@@ -36,8 +37,6 @@ void listenHTTPProxy(HTTPServerSettings settings, HTTPProxySettings proxy_settin
 	settings.options = HTTPServerOption.none;
 	listenHTTP(settings, proxyRequest(proxy_settings));
 }
-// Compatibility alias - will be deprecated soon.
-alias listenHTTPReverseProxy = listenHTTPProxy;
 
 /**
 	Transparently forwards all requests to the proxy to a destination_host.
@@ -53,7 +52,7 @@ void listenHTTPReverseProxy(HTTPServerSettings settings, string destination_host
 	url.port = destination_port;
 	auto proxy_settings = new HTTPProxySettings(ProxyMode.reverse);
 	proxy_settings.destination = url;
-	listenHTTPReverseProxy(settings, proxy_settings);
+	listenHTTPProxy(settings, proxy_settings);
 }
 
 /**
@@ -109,8 +108,16 @@ HTTPServerRequestDelegateS proxyRequest(HTTPProxySettings settings)
 			auto scon = res.connectProxy();
 			assert (scon);
 
-			import vibe.core.core : runTask;
-			runTask({ scon.pipe(ccon); });
+			runTask(() nothrow {
+				try scon.pipe(ccon);
+				catch (Exception e) {
+					logException(e, "Failed to forward proxy data from server to client");
+					try scon.close();
+					catch (Exception e) logException(e, "Failed to close server connection after error");
+					try ccon.close();
+					catch (Exception e) logException(e, "Failed to close client connection after error");
+				}
+			});
 			ccon.pipe(scon);
 			return;
 		}
@@ -121,7 +128,7 @@ HTTPServerRequestDelegateS proxyRequest(HTTPProxySettings settings)
 
 
 		import std.algorithm : splitter, canFind;
-		import vibe.utils.string : icmp2;
+		import vibe.internal.string : icmp2;
 		bool isUpgrade = pConnection && (*pConnection).splitter(',').canFind!(a => a.icmp2("upgrade"));
 
 		void setupClientRequest(scope HTTPClientRequest creq)
@@ -145,8 +152,6 @@ HTTPServerRequestDelegateS proxyRequest(HTTPProxySettings settings)
 
 		void handleClientResponse(scope HTTPClientResponse cres)
 		{
-			import vibe.utils.string;
-
 			// copy the response to the original requester
 			res.statusCode = cres.statusCode;
 
@@ -157,8 +162,16 @@ HTTPServerRequestDelegateS proxyRequest(HTTPProxySettings settings)
 				auto scon = res.switchProtocol("");
 				auto ccon = cres.switchProtocol("");
 
-				import vibe.core.core : runTask;
-				runTask({ ccon.pipe(scon); });
+				runTask(() nothrow {
+					try ccon.pipe(scon);
+					catch (Exception e) {
+						logException(e, "Failed to forward proxy data from client to server");
+						try scon.close();
+						catch (Exception e) logException(e, "Failed to close server connection after error");
+						try ccon.close();
+						catch (Exception e) logException(e, "Failed to close client connection after error");
+					}
+				});
 
 				scon.pipe(ccon);
 				return;
@@ -219,8 +232,6 @@ HTTPServerRequestDelegateS proxyRequest(HTTPProxySettings settings)
 
 	return &handleRequest;
 }
-/// Compatibility alias - will be deprecated soon
-alias reverseProxyRequest = proxyRequest;
 
 /**
 	Returns a HTTP request handler that forwards any request to the specified host/port.
@@ -279,9 +290,11 @@ final class HTTPProxySettings {
 	bool handleConnectRequests;
 
 	/// Empty default constructor for backwards compatibility - will be deprecated soon.
+	deprecated("Pass an explicit `ProxyMode` argument")
 	this() { proxyMode = ProxyMode.reverse; }
 	/// Explicitly sets the proxy mode.
 	this(ProxyMode mode) { proxyMode = mode; }
 }
-/// Compatibility alias - will be deprecated soon.
+/// Compatibility alias
+deprecated("Use `HTTPProxySettings(ProxyMode.reverse)` instead.")
 alias HTTPReverseProxySettings = HTTPProxySettings;

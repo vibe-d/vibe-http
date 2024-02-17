@@ -1,10 +1,11 @@
+module app;
+
 import vibe.core.core;
 import vibe.core.log;
 import vibe.http.server;
 import vibe.stream.tls;
 
-
-void main()
+int main(string[] args)
 {
 	{
 		auto settings = new HTTPServerSettings;
@@ -41,7 +42,7 @@ and should be presented with a different certificate each time, matching the
 host name entered.
 `);
 
-	runApplication();
+	return runApplication(&args);
 }
 
 void handleRequestA(scope HTTPServerRequest req, scope HTTPServerResponse res)

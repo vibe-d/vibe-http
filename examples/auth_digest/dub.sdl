@@ -1,0 +1,3 @@
+﻿name "auth-digest-example"
+description "Demonstrates digest authentication."
+dependency "vibe-http" path="../../"

@@ -1,7 +1,7 @@
 /**
 	A HTTP 1.1/1.0 server implementation.
 
-	Copyright: © 2012-2013 RejectedSoftware e.K.
+	Copyright: © 2012-2013 Sönke Ludwig
 	License: Subject to the terms of the MIT license, as written in the included LICENSE.txt file.
 	Authors: Sönke Ludwig, Jan Krüger
 */
@@ -11,7 +11,7 @@ import vibe.core.file;
 import vibe.core.log;
 import vibe.core.sync : InterruptibleTaskMutex, performLocked;
 import vibe.http.server;
-import vibe.utils.array : FixedAppender;
+import vibe.container.internal.appender : FixedAppender;
 
 import std.array;
 import std.conv;
@@ -243,7 +243,7 @@ void formatApacheLog(R)(ref R ln, string format, scope HTTPServerRequest req, sc
 						ln.put(req.username.length ? req.username : "-");
 						break;
 					case 'U': //The URL path without query string
-						ln.put(req.path);
+						ln.put(req.requestPath.toString());
 						break;
 					case 'v': //Server name
 						ln.put(req.host.length ? req.host : "-");
