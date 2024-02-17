@@ -6,12 +6,6 @@ DUB_ARGS="--build-mode=${DUB_BUILD_MODE:-separate} ${DUB_ARGS:-}"
 # default to run all parts
 : ${PARTS:=lint,builds,unittests,examples,tests}
 
-# force selecting vibe-core 2.x.x
-if [[ $PARTS =~ (^|,)vibe-core-1(,|$) ]]; then
-    RECIPES=`find | grep dub.sdl`
-    sed -i "s/\"vibe-core\" version=\">=1\.0\.0 <3\.0\.0-0\"/\"vibe-core\" version=\">=1.0.0 <2.0.0-0\"/g" $RECIPES
-fi
-
 if [[ $PARTS =~ (^|,)lint(,|$) ]]; then
     ./scripts/test_version.sh
     # Check for trailing whitespace"
@@ -60,3 +54,20 @@ if [[ $PARTS =~ (^|,)tests(,|$) ]]; then
         fi
     done
 fi
+
+if [[ $PARTS =~ (^|,)vibe-d(,|$) ]]; then
+    PATH_ESCAPED=$(echo `pwd` | sed 's_/_\\/_g')
+    SED_EXPR='s/"vibe-http": [^,]*(,?)/"vibe-http": \{"path": "'$PATH_ESCAPED'"\}\1/g'
+
+    git clone https://github.com/vibe-d/vibe.d.git --depth 1
+    cd vibe.d
+    dub upgrade -s
+    for i in `find | grep dub.selections.json`; do
+        sed -i -E "$SED_EXPR" $i
+    done
+    dub test :mongodb $DUB_ARGS
+    dub test :redis $DUB_ARGS
+    dub test :web $DUB_ARGS
+    cd ..
+fi
+
