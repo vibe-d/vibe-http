@@ -29,20 +29,19 @@ jobs:
         include:
           # Custom part for coverage
           - { os: ubuntu-latest, dc: dmd-latest, parts: 'unittests,tests', extra_dflags: "-cov -version=VibedSetCoverageMerge" }
-          # Custom part for vibe-core 1.x.x testing
-          - { os: ubuntu-latest, dc: dmd-latest, parts: 'builds,unittests,tests', extra_dflags: '' }
+          # Custom part for vibe.d integration testing
+          - { os: ubuntu-latest, dc: dmd-latest, parts: 'vibe-d', extra_dflags: '' }
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Prepare compiler
       uses: dlang-community/setup-dlang@v1
       with:
           compiler: ${{ matrix.dc }}
-          dub: 1.29.0
 
     - name: '[POSIX] Run tests'
       env:
@@ -83,13 +82,12 @@ jobs:
     timeout-minutes: 60
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Prepare compiler
       uses: dlang-community/setup-dlang@v1
       with:
           compiler: ${{ matrix.dc }}
-          dub: 1.29.0
 
     - name: '[POSIX] Run tests'
       env:
