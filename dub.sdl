@@ -8,9 +8,9 @@ authors "Sönke Ludwig" "Mathias 'Geod24' Lang" "Etienne Cimon" "Martin Nowak" \
 	"Francesco Galla" "Sebastian Wilzbach" "Mihails 'Dicebot' Strasuns" \
 	"over 200 contributors"
 
-dependency "vibe-d:crypto" version="~>0.9.7"
-dependency "vibe-d:inet" version="~>0.9.7"
-dependency "vibe-d:tls" version="~>0.9.7"
-dependency "vibe-d:textfilter" version="~>0.9.0"
+dependency "vibe-inet:crypto" version="~>1.0"
+dependency "vibe-inet" version="~>1.0"
+dependency "vibe-stream:tls" version="~>1.0"
+dependency "vibe-inet:textfilter" version="~>1.0"
 dependency "diet-ng" version="~>1.2"
 targetType "library"
