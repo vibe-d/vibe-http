@@ -2289,7 +2289,7 @@ private bool handleRequest(Allocator)(InterfaceProxy!Stream http_stream, TCPConn
 		if (context.settings.rejectConnectionPredicate !is null)
 		{
 			import std.socket : Address, parseAddress;
-			
+
 			auto forward = req.headers.get("X-Forwarded-For", null);
 			if (forward !is null)
 			{
@@ -2298,7 +2298,7 @@ private bool handleRequest(Allocator)(InterfaceProxy!Stream http_stream, TCPConn
 					if (ix != -1)
 						forward = forward[0 .. ix];
 					if (context.settings.rejectConnectionPredicate(NetworkAddress(parseAddress(forward))))
-						errorOut(HTTPStatus.forbidden, 
+						errorOut(HTTPStatus.forbidden,
 							httpStatusText(HTTPStatus.forbidden), null, null);
 				} catch (Exception e)
 					logTrace("Malformed X-Forwarded-For header: %s", e.msg);
