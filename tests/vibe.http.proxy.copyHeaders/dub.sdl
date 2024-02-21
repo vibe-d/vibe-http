@@ -1,0 +1,4 @@
+name "tests"
+description "proxy tests"
+dependency "vibe-http" path="../../"
+versions "VibeDefaultMain"
