@@ -1306,6 +1306,11 @@ scope:
 		else if ("Content-Type" !in headers) headers["Content-Type"] = "application/octet-stream";
 		data.pipe(bodyWriter);
 	}
+	/// ditto
+	void writeBody(scope InputStream data, int status, string content_type = null)
+	{
+		m_data.writeBody(data, status, content_type);
+	}
 
 	/** Writes the entire response body as a single string.
 
@@ -1319,7 +1324,6 @@ scope:
 
 		See_Also: `HTTPStatusCode`
 	*/
-	/// ditto
 	void writeBody(string data, string content_type = null)
 	@safe {
 		if (!content_type.length && "Content-Type" !in headers)
