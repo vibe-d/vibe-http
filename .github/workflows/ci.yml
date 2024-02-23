@@ -90,6 +90,7 @@ jobs:
           compiler: ${{ matrix.dc }}
 
     - name: '[POSIX] Run tests'
+      shell: bash
       env:
         PARTS: ${{ matrix.parts }}
       run: |
