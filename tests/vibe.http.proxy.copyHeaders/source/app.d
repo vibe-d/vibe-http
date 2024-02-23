@@ -10,7 +10,7 @@ import std.range.primitives : front;
 import std.socket : AddressFamily;
 import std.stdio;
 
-shared static this()
+void main()
 {
 	auto settings = new HTTPServerSettings;
 	settings.port = 0;
@@ -26,22 +26,15 @@ shared static this()
 	router.get("/", reverseProxyRequest(serverAddr.toAddressString,serverAddr.port));
 	immutable proxyAddr = listenHTTP(settings, router).bindAddresses.find!(addr => addr.family == AddressFamily.INET).front;
 
-	runTask({
-		scope (exit) exitEventLoop();
-		try {
-			auto res = requestHTTP("http://" ~ proxyAddr.toString);
-			assert(res.statusCode == HTTPStatus.ok);
-			bool hadY;
-			bool hadZ;
-			foreach(k,v;res.headers.byKeyValue)
-			{
-				if ((k == "X") && (v == "Y")) hadY = true;
-				if ((k == "X") && (v == "Z")) hadZ = true;
-			}
-			assert(hadZ);
-			assert(hadY);
-			assert(res.bodyReader.readAllUTF8 == "Hello world.");
-		} catch (Exception e) assert(false, e.msg);
-	});
-	runApplication();
+	auto res = requestHTTP("http://" ~ proxyAddr.toString);
+	assert(res.statusCode == HTTPStatus.ok);
+	bool hadY;
+	bool hadZ;
+	foreach (k, v; res.headers.byKeyValue) {
+		if ((k == "X") && (v == "Y")) hadY = true;
+		if ((k == "X") && (v == "Z")) hadZ = true;
+	}
+	assert(hadZ);
+	assert(hadY);
+	assert(res.bodyReader.readAllUTF8 == "Hello world.");
 }
