@@ -181,7 +181,7 @@ HTTPServerRequestDelegateS proxyRequest(HTTPProxySettings settings)
 			if ("Content-Length" !in cres.headers && "Transfer-Encoding" !in cres.headers || req.method == HTTPMethod.HEAD) {
 				foreach (key, ref value; cres.headers.byKeyValue)
 					if (icmp2(key, "Connection") != 0)
-						res.headers[key] = value;
+						res.headers.addField(key,value);
 				res.writeVoidBody();
 				return;
 			}
@@ -192,7 +192,7 @@ HTTPServerRequestDelegateS proxyRequest(HTTPProxySettings settings)
 				// copy all headers that may pass from upstream to client
 				foreach (n, ref v; cres.headers.byKeyValue)
 					if (n !in non_forward_headers_map)
-						res.headers[n] = v;
+						res.headers.addField(n,v);
 
 				if ("Transfer-Encoding" in res.headers) res.headers.remove("Transfer-Encoding");
 				auto content = cres.bodyReader.readAll(1024*1024);
@@ -207,7 +207,7 @@ HTTPServerRequestDelegateS proxyRequest(HTTPProxySettings settings)
 				if ("Content-Encoding" in res.headers) res.headers.remove("Content-Encoding");
 				foreach (key, ref value; cres.headers.byKeyValue)
 					if (icmp2(key, "Connection") != 0)
-						res.headers[key] = value;
+						res.headers.addField(key,value);
 				auto size = cres.headers["Content-Length"].to!size_t();
 				if (res.isHeadResponse) res.writeVoidBody();
 				else cres.readRawBody((scope InterfaceProxy!InputStream reader) { res.writeRawBody(reader, size); });
@@ -219,7 +219,7 @@ HTTPServerRequestDelegateS proxyRequest(HTTPProxySettings settings)
 			// copy all headers that may pass from upstream to client
 			foreach (n, ref v; cres.headers.byKeyValue)
 				if (n !in non_forward_headers_map)
-					res.headers[n] = v;
+					res.headers.addField(n,v);
 			if (res.isHeadResponse) res.writeVoidBody();
 			else cres.bodyReader.pipe(res.bodyWriter);
 		}
