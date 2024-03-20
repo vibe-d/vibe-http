@@ -897,14 +897,14 @@ final class HTTPClientRequest : HTTPRequest {
 	}
 
 	/**
-		 Writes to an HTTP request a 'multipart/*' entity, essentially a request
-		 broken into multiple parts, each with their own headers and bodies.
+		Writes to an HTTP request a 'multipart/*' entity, essentially a request
+		broken into multiple parts, each with their own headers and bodies.
 
-		 See_Also: https://datatracker.ietf.org/doc/html/rfc2046
+		See_Also: https://datatracker.ietf.org/doc/html/rfc2046
 
-		 The most common use-case is 'multipart/form-data', demonstrated in the test below.
+		The most common use-case is 'multipart/form-data', demonstrated in the test below.
 
-		 See_Also: https://datatracker.ietf.org/doc/html/rfc2388
+		See_Also: https://datatracker.ietf.org/doc/html/rfc2388
 	*/
 	void writeMultipartEntity(MultipartEntity entity)
 	{
@@ -950,7 +950,7 @@ final class HTTPClientRequest : HTTPRequest {
 		void test(HTTPClientRequest req) {
 			req.writeMultipartEntity(MultipartEntity.ofFormData([
 				MultipartEntityPart.ofFormInput("name", "Bob Jones"),
-				MultipartEntityPart.ofFormFile("resume", "Resume-Bob.pdf", "application/pdf"),
+				MultipartEntityPart.ofFormFile("resume", "Resume-Bob.pdf"),
 				MultipartEntityPart.ofFormFile(
 						"cover", "howdy.txt", "text/plain", createMemoryStream("hi there.")),
 			]));
