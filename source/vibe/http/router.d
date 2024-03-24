@@ -125,11 +125,14 @@ final class URLRouter : HTTPServerRequestHandler {
 	URLRouter match(Handler)(HTTPMethod method, string path, Handler handler)
 		if (isValidHandler!Handler)
 	{
+		import vibe.core.path : InetPath;
 		import std.algorithm;
 		assert(path.length, "Cannot register null or empty path!");
 		assert(count(path, ':') <= maxRouteParameters, "Too many route parameters");
 		logDebug("add route %s %s", method, path);
-		m_routes.addTerminal(path, Route(method, path, handlerDelegate(handler)));
+		// Perform URL-encoding on the path before adding it as a route.
+		string iPath = InetPath.fromUnencodedString(path).toString();
+		m_routes.addTerminal(iPath, Route(method, iPath, handlerDelegate(handler)));
 		return this;
 	}
 
@@ -193,7 +196,7 @@ final class URLRouter : HTTPServerRequestHandler {
 	/// Handles a HTTP request by dispatching it to the registered route handlers.
 	void handleRequest(HTTPServerRequest req, HTTPServerResponse res)
 	{
-		import vibe.core.path : PosixPath;
+		import vibe.core.path : PosixPath, InetPathFormat;
 
 		auto method = req.method;
 
@@ -211,7 +214,9 @@ final class URLRouter : HTTPServerRequestHandler {
 		//       segments (i.e. containing path separators) here. Any request
 		//       handlers later in the queue may still choose to process them
 		//       appropriately.
-		try path = (cast(PosixPath)req.requestPath).toString();
+		//try path = (cast(PosixPath)req.requestPath).toString();
+		// ^ This causes URLs like /bob/x%2Fb to fail to match.
+		try path = req.requestPath.toString();
 		catch (Exception e) return;
 
 		if (path.length < m_prefix.length || path[0 .. m_prefix.length] != m_prefix) return;
@@ -223,7 +228,12 @@ final class URLRouter : HTTPServerRequestHandler {
 				if (r.method != method) return false;
 
 				logDebugV("route match: %s -> %s %s %s", req.requestPath, r.method, r.pattern, values);
-				foreach (i, v; values) req.params[m_routes.getTerminalVarNames(ridx)[i]] = v;
+				foreach (i, v; values) {
+					import std.uri : decodeComponent;
+					import vibe.core.path : InetPath;
+					req.params[m_routes.getTerminalVarNames(ridx)[i]] = decodeComponent(v);
+					//req.params[m_routes.getTerminalVarNames(ridx)[i]] = InetPathFormat.decodeSingleSegment(v);
+				}
 				if (m_computeBasePath) req.params["routerRootDir"] = calcBasePath();
 				r.cb(req, res);
 				return res.headerWritten;
@@ -446,10 +456,12 @@ final class URLRouter : HTTPServerRequestHandler {
 	void b(HTTPServerRequest req, HTTPServerResponse) { result ~= "B"; }
 	void c(HTTPServerRequest req, HTTPServerResponse) { assert(req.params["test"] == "x", "Wrong variable contents: "~req.params["test"]); result ~= "C"; }
 	void d(HTTPServerRequest req, HTTPServerResponse) { assert(req.params["test"] == "y", "Wrong variable contents: "~req.params["test"]); result ~= "D"; }
+	void e(HTTPServerRequest req, HTTPServerResponse) { assert(req.params["test"] == "z/z", "Wrong variable contents: "~req.params["test"]); result ~= "E"; }
 	router.get("/test", &a);
 	router.post("/test", &b);
 	router.get("/a/:test", &c);
 	router.get("/a/:test/", &d);
+  router.get("/e/:test", &e);
 
 	auto res = createTestHTTPServerResponse();
 	router.handleRequest(createTestHTTPServerRequest(URL("http://localhost/")), res);
@@ -467,6 +479,8 @@ final class URLRouter : HTTPServerRequestHandler {
 	//assert(result == "ABC", "Matched empty string or slash as var. "~result);
 	router.handleRequest(createTestHTTPServerRequest(URL("http://localhost/a/y/"), HTTPMethod.GET), res);
 	assert(result == "ABCD", "Didn't match 1-character infix variable.");
+	router.handleRequest(createTestHTTPServerRequest(URL("http://localhost/e/z%2Fz"), HTTPMethod.GET), res);
+	assert(result == "ABCDE", "URL-escaped '/' confused router.");
 }
 
 @safe unittest {
@@ -774,7 +788,7 @@ private struct MatchTree(T) {
 
 		dst[] = null;
 
-		// folow the path throgh the match graph
+		// follow the path through the match graph
 		foreach (i, char ch; text) {
 			auto var = term.varMap.get(nidx, VarIndex.max);
 
