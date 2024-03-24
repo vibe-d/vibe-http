@@ -125,13 +125,13 @@ final class URLRouter : HTTPServerRequestHandler {
 	URLRouter match(Handler)(HTTPMethod method, string path, Handler handler)
 		if (isValidHandler!Handler)
 	{
-		import vibe.core.path : InetPath;
+		import vibe.core.path : InetPath, PosixPath;
 		import std.algorithm;
 		assert(path.length, "Cannot register null or empty path!");
 		assert(count(path, ':') <= maxRouteParameters, "Too many route parameters");
 		logDebug("add route %s %s", method, path);
 		// Perform URL-encoding on the path before adding it as a route.
-		string iPath = InetPath.fromUnencodedString(path).toString();
+		string iPath = (cast(InetPath) PosixPath(path)).toString();
 		m_routes.addTerminal(iPath, Route(method, iPath, handlerDelegate(handler)));
 		return this;
 	}
