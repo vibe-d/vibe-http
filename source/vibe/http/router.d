@@ -461,7 +461,7 @@ final class URLRouter : HTTPServerRequestHandler {
 	router.post("/test", &b);
 	router.get("/a/:test", &c);
 	router.get("/a/:test/", &d);
-  router.get("/e/:test", &e);
+	router.get("/e/:test", &e);
 
 	auto res = createTestHTTPServerResponse();
 	router.handleRequest(createTestHTTPServerRequest(URL("http://localhost/")), res);
@@ -532,6 +532,7 @@ final class URLRouter : HTTPServerRequestHandler {
 	//assert(ensureMatch("/foo%2fbar/", "/foo/bar/") !is null);
 	//assert(ensureMatch("/:foo/", "/foo%2Fbar/", ["foo": "foo/bar"]) is null);
 	assert(ensureMatch("/:foo/", "/foo/bar/") !is null);
+	assert(ensureMatch("/test", "/tes%74") is null);
 }
 
 unittest { // issue #2561
@@ -760,6 +761,36 @@ private struct MatchTree(T) {
 		return false;
 	}
 
+	private static uint hexDigit(char ch) @safe nothrow @nogc {
+		assert(ch >= '0' && ch <= '9' || ch >= 'A' && ch <= 'F' || ch >= 'a' && ch <= 'f');
+		if (ch >= '0' && ch <= '9') return ch - '0';
+		else if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+		else return ch - 'A' + 10;
+	}
+
+	/// Reads a single character from text, decoding any unreserved percent-encoded character, so
+	/// that it matches the format used for route matches.
+	static char nextMatchChar(string text, ref size_t i) {
+		import std.ascii : isHexDigit;
+
+		char ch = text[i];
+		// See if we have to decode an encoded unreserved character.
+		if (ch == '%' && i + 2 < text.length && isHexDigit(text[i+1]) && isHexDigit(text[i+2])) {
+			uint c = hexDigit(text[i+1]) * 16 + hexDigit(text[i+2]);
+			// Check if we have an encoded unreserved character:
+			// https://en.wikipedia.org/wiki/Percent-encoding
+			if (c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9'
+					|| c == '-' || c == '_' || c == '.' || c == '~') {
+				// Decode the character before performing route matching.
+				ch = cast(char) c;
+				i += 3;
+				return ch;
+			}
+		}
+		i += 1;
+		return ch;
+	}
+
 	private inout(Node)* matchTerminals(string text)
 	inout {
 		if (!m_nodes.length) return null;
@@ -767,7 +798,12 @@ private struct MatchTree(T) {
 		auto n = &m_nodes[0];
 
 		// follow the path through the match graph
-		foreach (i, char ch; text) {
+
+		// Routes match according to their percent-encoded normal form, with reserved-characters
+		// percent-encoded and unreserved-charcters not percent-encoded.
+		size_t i = 0;
+		while (i < text.length) {
+			char ch = nextMatchChar(text, i);
 			auto nidx = n.edges[cast(size_t)ch];
 			if (nidx == NodeIndex.max) return null;
 			n = &m_nodes[nidx];
@@ -789,7 +825,8 @@ private struct MatchTree(T) {
 		dst[] = null;
 
 		// follow the path through the match graph
-		foreach (i, char ch; text) {
+		size_t i = 0;
+		while (i < text.length) {
 			auto var = term.varMap.get(nidx, VarIndex.max);
 
 			// detect end of variable
@@ -804,6 +841,7 @@ private struct MatchTree(T) {
 				activevarstart = i;
 			}
 
+			char ch = nextMatchChar(text, i);
 			nidx = m_nodes[nidx].edges[cast(ubyte)ch];
 			assert(nidx != NodeIndex.max);
 		}
