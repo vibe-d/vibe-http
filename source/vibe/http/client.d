@@ -565,7 +565,7 @@ final class HTTPClient {
 		{
 			try responder(res);
 			catch (Exception e) {
-				logDebug("Error while handling response: %s", e.toString().sanitize());
+				logDebug("Error while handling response: %s", () => e.toString().sanitize());
 				user_exception = e;
 			}
 			if (res.statusCode < 200) {
