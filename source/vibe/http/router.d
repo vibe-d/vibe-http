@@ -131,7 +131,8 @@ final class URLRouter : HTTPServerRequestHandler {
 		assert(count(path, ':') <= maxRouteParameters, "Too many route parameters");
 		logDebug("add route %s %s", method, path);
 		// Perform URL-encoding on the path before adding it as a route.
-		string iPath = (cast(InetPath) PosixPath(path)).toString();
+		//string iPath = (cast(InetPath) PosixPath(path)).toString();
+		string iPath = InetPath(path).toString();
 		m_routes.addTerminal(iPath, Route(method, iPath, handlerDelegate(handler)));
 		return this;
 	}
@@ -457,11 +458,13 @@ final class URLRouter : HTTPServerRequestHandler {
 	void c(HTTPServerRequest req, HTTPServerResponse) { assert(req.params["test"] == "x", "Wrong variable contents: "~req.params["test"]); result ~= "C"; }
 	void d(HTTPServerRequest req, HTTPServerResponse) { assert(req.params["test"] == "y", "Wrong variable contents: "~req.params["test"]); result ~= "D"; }
 	void e(HTTPServerRequest req, HTTPServerResponse) { assert(req.params["test"] == "z/z", "Wrong variable contents: "~req.params["test"]); result ~= "E"; }
+	void f(HTTPServerRequest req, HTTPServerResponse) { result ~= "F"; }
 	router.get("/test", &a);
 	router.post("/test", &b);
 	router.get("/a/:test", &c);
 	router.get("/a/:test/", &d);
 	router.get("/e/:test", &e);
+	router.get("/f%2F", &f);
 
 	auto res = createTestHTTPServerResponse();
 	router.handleRequest(createTestHTTPServerRequest(URL("http://localhost/")), res);
@@ -481,6 +484,8 @@ final class URLRouter : HTTPServerRequestHandler {
 	assert(result == "ABCD", "Didn't match 1-character infix variable.");
 	router.handleRequest(createTestHTTPServerRequest(URL("http://localhost/e/z%2Fz"), HTTPMethod.GET), res);
 	assert(result == "ABCDE", "URL-escaped '/' confused router.");
+        router.handleRequest(createTestHTTPServerRequest(URL("http://localhost/f%2F"), HTTPMethod.GET), res);
+	assert(result == "ABCDEF", "Unable to match '%2F' in path.");
 }
 
 @safe unittest {
@@ -522,8 +527,8 @@ final class URLRouter : HTTPServerRequestHandler {
 		return ret;
 	}
 
-	assert(ensureMatch("/foo bar/", "/foo%20bar/") is null);   // normalized pattern: "/foo%20bar/"
-	//assert(ensureMatch("/foo%20bar/", "/foo%20bar/") is null); // normalized pattern: "/foo%20bar/"
+	//assert(ensureMatch("/foo bar/", "/foo%20bar/") is null);   // normalized pattern: "/foo%20bar/"
+	assert(ensureMatch("/foo%20bar/", "/foo%20bar/") is null); // normalized pattern: "/foo%20bar/"
 	assert(ensureMatch("/foo/bar/", "/foo/bar/") is null);     // normalized pattern: "/foo/bar/"
 	//assert(ensureMatch("/foo/bar/", "/foo%2fbar/") !is null);
 	//assert(ensureMatch("/foo%2fbar/", "/foo%2fbar/") is null); // normalized pattern: "/foo%2Fbar/"
