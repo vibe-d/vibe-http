@@ -126,13 +126,17 @@ final class URLRouter : HTTPServerRequestHandler {
 		if (isValidHandler!Handler)
 	{
 		import vibe.core.path : InetPath, PosixPath;
-		import std.algorithm;
+		import vibe.textfilter.urlencode : urlDecode;
+		import std.algorithm : count, map;
 		assert(path.length, "Cannot register null or empty path!");
 		assert(count(path, ':') <= maxRouteParameters, "Too many route parameters");
 		logDebug("add route %s %s", method, path);
 		// Perform URL-encoding on the path before adding it as a route.
-		//string iPath = (cast(InetPath) PosixPath(path)).toString();
-		string iPath = InetPath(path).toString();
+		string iPath = PosixPath(path)
+			.bySegment
+			.map!(s => InetPath.Segment(urlDecode(s.name), s.separator))
+			.InetPath
+			.toString;
 		m_routes.addTerminal(iPath, Route(method, iPath, handlerDelegate(handler)));
 		return this;
 	}
@@ -215,8 +219,6 @@ final class URLRouter : HTTPServerRequestHandler {
 		//       segments (i.e. containing path separators) here. Any request
 		//       handlers later in the queue may still choose to process them
 		//       appropriately.
-		//try path = (cast(PosixPath)req.requestPath).toString();
-		// ^ This causes URLs like /bob/x%2Fb to fail to match.
 		try path = req.requestPath.toString();
 		catch (Exception e) return;
 
@@ -527,7 +529,7 @@ final class URLRouter : HTTPServerRequestHandler {
 		return ret;
 	}
 
-	//assert(ensureMatch("/foo bar/", "/foo%20bar/") is null);   // normalized pattern: "/foo%20bar/"
+	assert(ensureMatch("/foo bar/", "/foo%20bar/") is null);   // normalized pattern: "/foo%20bar/"
 	assert(ensureMatch("/foo%20bar/", "/foo%20bar/") is null); // normalized pattern: "/foo%20bar/"
 	assert(ensureMatch("/foo/bar/", "/foo/bar/") is null);     // normalized pattern: "/foo/bar/"
 	//assert(ensureMatch("/foo/bar/", "/foo%2fbar/") !is null);
