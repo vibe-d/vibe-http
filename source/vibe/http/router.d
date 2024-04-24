@@ -201,7 +201,7 @@ final class URLRouter : HTTPServerRequestHandler {
 	/// Handles a HTTP request by dispatching it to the registered route handlers.
 	void handleRequest(HTTPServerRequest req, HTTPServerResponse res)
 	{
-		import vibe.core.path : PosixPath, InetPathFormat;
+		import vibe.textfilter.urlencode : urlDecode;
 
 		auto method = req.method;
 
@@ -232,10 +232,7 @@ final class URLRouter : HTTPServerRequestHandler {
 
 				logDebugV("route match: %s -> %s %s %s", req.requestPath, r.method, r.pattern, values);
 				foreach (i, v; values) {
-					import std.uri : decodeComponent;
-					import vibe.core.path : InetPath;
-					req.params[m_routes.getTerminalVarNames(ridx)[i]] = decodeComponent(v);
-					//req.params[m_routes.getTerminalVarNames(ridx)[i]] = InetPathFormat.decodeSingleSegment(v);
+					req.params[m_routes.getTerminalVarNames(ridx)[i]] = urlDecode(v);
 				}
 				if (m_computeBasePath) req.params["routerRootDir"] = calcBasePath();
 				r.cb(req, res);
@@ -768,8 +765,9 @@ private struct MatchTree(T) {
 		return false;
 	}
 
+	/// Given a hexadecimal character in [0-9a-fA-F], convert it to an integer value in [0, 15].
 	private static uint hexDigit(char ch) @safe nothrow @nogc {
-		assert(ch >= '0' && ch <= '9' || ch >= 'A' && ch <= 'F' || ch >= 'a' && ch <= 'f');
+		assert((ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'F') || (ch >= 'a' && ch <= 'f'));
 		if (ch >= '0' && ch <= '9') return ch - '0';
 		else if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
 		else return ch - 'A' + 10;
