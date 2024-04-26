@@ -1,0 +1,16 @@
+1.1.0 - 2024-04-26
+==================
+
+- Fixed the proxy code to properly forward multiple headers with the same name (by Alexibu) - [pull #30][issue30]
+- `URLRouter` now properly handles URL encoded path segments, both at registration and at match time (by Vijay Nayar) - [pull #35][issue35]
+
+[issue30]: https://github.com/vibe-d/vibe-http/issues/30
+[issue35]: https://github.com/vibe-d/vibe-http/issues/35
+
+
+1.0.0 - 2024-02-17
+==================
+
+This is the first stable release, based on the code base in the vibe.d main
+repository, at this point in time. Directly after this, vibe.d 0.10.0 got
+released, in turn removing its copy of the HTTP code.
