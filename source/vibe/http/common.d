@@ -173,6 +173,19 @@ T enforceBadRequest(T)(T condition, lazy string message = null, string file = __
 
 /**
 	Represents an HTTP request made to a server.
+
+	This request is composed of the following parts:
+	- An HTTP connection to a particular host.
+	- An HTTP Method like GET, POST, PUT, etc.
+	- A MIME Entity sent via the request containing:
+	- Headers like "Content-Type".
+	- A body which could be HTML, a PDF file, or any other contents.
+
+	The HTTPClientRequest has methods to write its body and HTTPClientResponse has methods to
+	read its body.
+
+	The HTTPServerRequest has methods to read its body and HTTPServerResponse has methods to
+	write its body.
 */
 class HTTPRequest {
 	@safe:
@@ -351,6 +364,7 @@ final class MultiPart {
 	//JsonValue json;
 	string[string] form;
 }
+
 
 /**
  * Returns:
