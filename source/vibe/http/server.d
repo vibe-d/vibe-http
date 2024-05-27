@@ -26,7 +26,6 @@ import vibe.stream.counting;
 import vibe.stream.operations;
 import vibe.stream.tls;
 import vibe.stream.wrapper : ConnectionProxyStream, createConnectionProxyStream, createConnectionProxyStreamFL;
-import vibe.stream.zlib;
 import vibe.textfilter.urlencode;
 import vibe.internal.freelistref;
 import vibe.internal.string : formatAlloc, icmp2;
@@ -464,7 +463,8 @@ HTTPServerResponse createTestHTTPServerResponse(OutputStream data_sink = null,
 	SessionStore session_store = null,
 	TestHTTPResponseMode data_mode = TestHTTPResponseMode.plain)
 @safe {
-	import vibe.stream.wrapper;
+	import vibe.stream.wrapper : createProxyStream;
+	import vibe.http.internal.http1.server : HTTP1ServerExchange;
 
 	HTTPServerSettings settings;
 	if (session_store) {
@@ -472,14 +472,21 @@ HTTPServerResponse createTestHTTPServerResponse(OutputStream data_sink = null,
 		settings.sessionStore = session_store;
 	}
 
-	InterfaceProxy!Stream outstr;
+	final class TestExchange : HTTP1ServerExchange {
+		this(StreamProxy conn, OutputStream body_writer)
+		{
+			super(conn, ConnectionStreamProxy.init);
+			m_bodyWriter = body_writer;
+		}
+	}
+
+	StreamProxy outstr;
 	if (data_sink && data_mode == TestHTTPResponseMode.plain)
 		outstr = createProxyStream(Stream.init, data_sink);
 	else outstr = createProxyStream(Stream.init, nullSink);
 
-	auto ret = new HTTPServerResponse(outstr, InterfaceProxy!ConnectionStream.init,
-		settings, () @trusted { return vibeThreadAllocator(); } ());
-	if (data_sink && data_mode == TestHTTPResponseMode.bodyOnly) ret.m_bodyWriter = data_sink;
+	auto exchange = new TestExchange(outstr, data_sink && data_mode == TestHTTPResponseMode.bodyOnly ? data_sink : null);
+	auto ret = new HTTPServerResponse(exchange, settings, () @trusted { return vibeThreadAllocator(); } ());
 	return ret;
 }
 
@@ -1165,34 +1172,32 @@ final class HTTPServerResponse : HTTPResponse {
 	alias Allocator = typeof(vibeThreadAllocator());
 
 	package {
-		InterfaceProxy!Stream m_conn;
-		InterfaceProxy!ConnectionStream m_rawConnection;
-		InterfaceProxy!OutputStream m_bodyWriter;
+		HTTPServerExchange m_exchange;
 		Allocator m_requestAlloc;
-		FreeListRef!ChunkedOutputStream m_chunkedBodyWriter;
-		FreeListRef!CountingOutputStream m_countingWriter;
-		FreeListRef!ZlibOutputStream m_zlibOutputStream;
 		HTTPServerSettings m_settings;
 		Session m_session;
-		bool m_headerWritten = false;
-		bool m_isHeadResponse = false;
 		bool m_tls;
-		bool m_requiresConnectionClose;
 		SysTime m_timeFinalized;
 	}
 
-	static if (!is(Stream == InterfaceProxy!Stream)) {
+	static if (!is(Stream == StreamProxy)) {
+		deprecated("Use the constructor taking a HTTPServerExchange argument instead")
 		this(Stream conn, ConnectionStream raw_connection, HTTPServerSettings settings, Allocator req_alloc)
 		@safe scope {
-			this(InterfaceProxy!Stream(conn), InterfaceProxy!ConnectionStream(raw_connection), settings, req_alloc);
+			this(StreamProxy(conn), InterfaceProxy!ConnectionStream(raw_connection), settings, req_alloc);
 		}
 	}
 
-	this(InterfaceProxy!Stream conn, InterfaceProxy!ConnectionStream raw_connection, HTTPServerSettings settings, Allocator req_alloc)
+	deprecated("Use the constructor taking a HTTPServerExchange argument instead")
+	this(StreamProxy conn, ConnectionStreamProxy raw_connection, HTTPServerSettings settings, Allocator req_alloc)
 	@safe scope {
-		m_conn = conn;
-		m_rawConnection = raw_connection;
-		m_countingWriter = createCountingOutputStreamFL(conn);
+		import vibe.http.internal.http1.server : HTTP1ServerExchange;
+		this(new HTTP1ServerExchange(conn, raw_connection), settings, req_alloc);
+	}
+
+	this(HTTPServerExchange exchange, HTTPServerSettings settings, Allocator req_alloc)
+	@safe {
+		m_exchange = exchange;
 		m_settings = settings;
 		m_requestAlloc = req_alloc;
 	}
@@ -1247,11 +1252,11 @@ scope:
 
 	/** Determines if the HTTP header has already been written.
 	*/
-	@property bool headerWritten() const @safe { return m_headerWritten; }
+	@property bool headerWritten() const @safe { return m_exchange.headerWritten; }
 
 	/** Determines if the response does not need a body.
 	*/
-	bool isHeadResponse() const @safe { return m_isHeadResponse; }
+	bool isHeadResponse() const @safe { return m_exchange.isHeadResponse; }
 
 	/** Determines if the response is sent over an encrypted connection.
 	*/
@@ -1329,26 +1334,13 @@ scope:
 	void writeRawBody(RandomAccessStream)(RandomAccessStream stream) @safe
 		if (isRandomAccessStream!RandomAccessStream)
 	{
-		assert(!m_headerWritten, "A body was already written!");
-		writeHeader();
-		if (m_isHeadResponse) return;
-
-		auto bytes = stream.size - stream.tell();
-		stream.pipe(m_conn);
-		m_countingWriter.increment(bytes);
+		m_exchange.writeBody(this, RandomAccessStreamProxy(stream));
 	}
 	/// ditto
-	void writeRawBody(InputStream)(InputStream stream, size_t num_bytes = 0) @safe
+	void writeRawBody(InputStream)(InputStream stream, size_t num_bytes = size_t.max) @safe
 		if (isInputStream!InputStream && !isRandomAccessStream!InputStream)
 	{
-		assert(!m_headerWritten, "A body was already written!");
-		writeHeader();
-		if (m_isHeadResponse) return;
-
-		if (num_bytes > 0) {
-			stream.pipe(m_conn, num_bytes);
-			m_countingWriter.increment(num_bytes);
-		} else stream.pipe(m_countingWriter, num_bytes);
+		m_exchange.writeBody(this, InputStreamProxy(stream), num_bytes == 0 ? size_t.max : num_bytes);
 	}
 	/// ditto
 	void writeRawBody(RandomAccessStream)(RandomAccessStream stream, int status) @safe
@@ -1433,13 +1425,7 @@ scope:
 	 */
 	void writeVoidBody()
 	@safe {
-		if (!m_isHeadResponse) {
-			assert("Content-Length" !in headers);
-			assert("Transfer-Encoding" !in headers);
-		}
-		assert(!headerWritten);
-		writeHeader();
-		m_conn.flush();
+		m_exchange.writeVoidBody(this);
 	}
 
 	/** A stream for writing the body of the HTTP response.
@@ -1449,64 +1435,8 @@ scope:
 	*/
 	@property InterfaceProxy!OutputStream bodyWriter()
 	@safe scope {
-		assert(!!m_conn);
-		if (m_bodyWriter) {
-			// for test responses, the body writer is pre-set, without headers
-			// being written, so we may need to do that here
-			if (!m_headerWritten) writeHeader();
-
-			return m_bodyWriter;
-		}
-
-		assert(!m_headerWritten, "A void body was already written!");
-		assert(this.statusCode >= 200, "1xx responses can't have body");
-
-		if (m_isHeadResponse) {
-			// for HEAD requests, we define a NullOutputWriter for convenience
-			// - no body will be written. However, the request handler should call writeVoidBody()
-			// and skip writing of the body in this case.
-			if ("Content-Length" !in headers)
-				headers["Transfer-Encoding"] = "chunked";
-			writeHeader();
-			m_bodyWriter = nullSink;
-			return m_bodyWriter;
-		}
-
-		if ("Content-Encoding" in headers && "Content-Length" in headers) {
-			// we do not known how large the compressed body will be in advance
-			// so remove the content-length and use chunked transfer
-			headers.remove("Content-Length");
-		}
-
-		if (auto pcl = "Content-Length" in headers) {
-			writeHeader();
-			m_countingWriter.writeLimit = (*pcl).to!ulong;
-			m_bodyWriter = m_countingWriter;
-		} else if (httpVersion <= HTTPVersion.HTTP_1_0) {
-			if ("Connection" in headers)
-				headers.remove("Connection"); // default to "close"
-			writeHeader();
-			m_bodyWriter = m_conn;
-		} else {
-			headers["Transfer-Encoding"] = "chunked";
-			writeHeader();
-			m_chunkedBodyWriter = createChunkedOutputStreamFL(m_countingWriter);
-			m_bodyWriter = m_chunkedBodyWriter;
-		}
-
-		if (auto pce = "Content-Encoding" in headers) {
-			if (icmp2(*pce, "gzip") == 0) {
-				m_zlibOutputStream = createGzipOutputStreamFL(m_bodyWriter);
-				m_bodyWriter = m_zlibOutputStream;
-			} else if (icmp2(*pce, "deflate") == 0) {
-				m_zlibOutputStream = createDeflateOutputStreamFL(m_bodyWriter);
-				m_bodyWriter = m_zlibOutputStream;
-			} else {
-				logWarn("Unsupported Content-Encoding set in response: '"~*pce~"'");
-			}
-		}
-
-		return m_bodyWriter;
+		assert(!!m_exchange);
+		return m_exchange.bodyWriter(this);
 	}
 
 
@@ -1523,26 +1453,12 @@ scope:
 	*/
 	ConnectionStream switchProtocol(string protocol)
 	@safe {
-		statusCode = HTTPStatus.switchingProtocols;
-		if (protocol.length) headers["Upgrade"] = protocol;
-		writeVoidBody();
-		m_requiresConnectionClose = true;
-		m_headerWritten = true;
-		return createConnectionProxyStream(m_conn, m_rawConnection);
+		return m_exchange.switchProtocol(this, protocol);
 	}
 	/// ditto
 	void switchProtocol(string protocol, scope void delegate(scope ConnectionStream) @safe del)
 	@safe {
-		statusCode = HTTPStatus.switchingProtocols;
-		if (protocol.length) headers["Upgrade"] = protocol;
-		writeVoidBody();
-		m_requiresConnectionClose = true;
-		m_headerWritten = true;
-		() @trusted {
-			auto conn = createConnectionProxyStreamFL(m_conn, m_rawConnection);
-			del(conn);
-		} ();
-		finalize();
+		m_exchange.switchProtocol(this, protocol, del);
 	}
 
 	/** Special method for handling CONNECT proxy tunnel
@@ -1553,16 +1469,12 @@ scope:
 	*/
 	ConnectionStream connectProxy()
 	@safe {
-		return createConnectionProxyStream(m_conn, m_rawConnection);
+		return m_exchange.connectProxy(this);
 	}
 	/// ditto
 	void connectProxy(scope void delegate(scope ConnectionStream) @safe del)
 	@safe {
-		() @trusted {
-			auto conn = createConnectionProxyStreamFL(m_conn, m_rawConnection);
-			del(conn);
-		} ();
-		finalize();
+		m_exchange.connectProxy(this, del);
 	}
 
 	/** Sets the specified cookie value.
@@ -1632,7 +1544,7 @@ scope:
 		m_session = Session.init;
 	}
 
-	@property ulong bytesWritten() @safe const { return m_countingWriter.bytesWritten; }
+	@property ulong bytesWritten() @safe const { return m_exchange.bytesWritten; }
 
 	/**
 		Waits until either the connection closes, data arrives, or until the
@@ -1646,9 +1558,7 @@ scope:
 	*/
 	bool waitForConnectionClose(Duration timeout = Duration.max)
 	@safe {
-		if (!m_rawConnection || !m_rawConnection.connected) return true;
-		m_rawConnection.waitForData(timeout);
-		return !m_rawConnection.connected;
+		return m_exchange.waitForConnectionClose(timeout);
 	}
 
 	/**
@@ -1661,8 +1571,7 @@ scope:
 	*/
 	@property bool connected()
 	@safe const {
-		if (!m_rawConnection) return false;
-		return m_rawConnection.connected;
+		return m_exchange.connected;
 	}
 
 	/**
@@ -1674,85 +1583,29 @@ scope:
 	*/
 	void finalize()
 	@safe {
-		if (m_zlibOutputStream) {
-			m_zlibOutputStream.finalize();
-			m_zlibOutputStream.destroy();
-		}
-		if (m_chunkedBodyWriter) {
-			m_chunkedBodyWriter.finalize();
-			m_chunkedBodyWriter.destroy();
-		}
-
-		// ignore exceptions caused by an already closed connection - the client
-		// may have closed the connection already and this doesn't usually indicate
-		// a problem.
-		if (m_rawConnection && m_rawConnection.connected) {
-			try if (m_conn) m_conn.flush();
-			catch (Exception e) logDebug("Failed to flush connection after finishing HTTP response: %s", e.msg);
-			if (!isHeadResponse && bytesWritten < headers.get("Content-Length", "0").to!ulong) {
-				logDebug("HTTP response only written partially before finalization. Terminating connection.");
-				m_requiresConnectionClose = true;
-			}
-
-			m_rawConnection = InterfaceProxy!ConnectionStream.init;
-		}
-
-		if (m_conn) {
-			m_conn = InterfaceProxy!Stream.init;
-			m_timeFinalized = Clock.currTime(UTC());
-		}
-	}
-
-	private void writeHeader()
-	@safe {
-		import vibe.stream.wrapper;
-
-		assert(!m_headerWritten, "Try to write header after body has already begun.");
-		assert(this.httpVersion != HTTPVersion.HTTP_1_0 || this.statusCode >= 200, "Informational status codes aren't supported by HTTP/1.0.");
-
-		// Don't set m_headerWritten for 1xx status codes
-		if (this.statusCode >= 200) m_headerWritten = true;
-		auto dst = streamOutputRange!1024(m_conn);
-
-		void writeLine(T...)(string fmt, T args)
-		@safe {
-			formattedWrite(() @trusted { return &dst; } (), fmt, args);
-			dst.put("\r\n");
-			logTrace(fmt, args);
-		}
-
-		logTrace("---------------------");
-		logTrace("HTTP server response:");
-		logTrace("---------------------");
-
-		// write the status line
-		writeLine("%s %d %s",
-			getHTTPVersionString(this.httpVersion),
-			this.statusCode,
-			this.statusPhrase.length ? this.statusPhrase : httpStatusText(this.statusCode));
-
-		// write all normal headers
-		foreach (k, v; this.headers.byKeyValue) {
-			dst.put(k);
-			dst.put(": ");
-			dst.put(v);
-			dst.put("\r\n");
-			logTrace("%s: %s", k, v);
-		}
-
-		logTrace("---------------------");
-
-		// write cookies
-		foreach (n, cookie; () @trusted { return this.cookies.byKeyValue; } ()) {
-			dst.put("Set-Cookie: ");
-			cookie.writeString(() @trusted { return &dst; } (), n);
-			dst.put("\r\n");
-		}
-
-		// finalize response header
-		dst.put("\r\n");
+		m_exchange.finalize(this);
 	}
 }
+
+interface HTTPServerExchange {
+@safe:
+	@property bool isHeadResponse() const;
+	@property bool headerWritten() const;
+	@property ulong bytesWritten() const;
+	@property bool connected() const;
+
+	bool waitForConnectionClose(Duration timeout);
+	void writeBody(HTTPServerResponse res, RandomAccessStreamProxy streamx);
+	void writeBody(HTTPServerResponse res, InputStreamProxy stream, ulong num_bytes = ulong.max);
+	void writeVoidBody(HTTPServerResponse res);
+	OutputStreamProxy bodyWriter(HTTPServerResponse res);
+	ConnectionStream switchProtocol(HTTPServerResponse res, string protocol);
+	void switchProtocol(HTTPServerResponse res, string protocol, scope void delegate(scope ConnectionStream) @safe del);
+	ConnectionStream connectProxy(HTTPServerResponse res);
+	void connectProxy(HTTPServerResponse res, scope void delegate(scope ConnectionStream) @safe del);
+	void finalize(HTTPServerResponse res);
+}
+
 
 /**
 	Represents the request listener for a specific `listenHTTP` call.
