@@ -18,15 +18,14 @@ import vibe.core.connectionpool;
 import vibe.core.core;
 import vibe.core.log;
 import vibe.data.json;
+import vibe.http.internal.http1.client;
 import vibe.inet.message;
 import vibe.inet.url;
 import vibe.stream.counting;
 import vibe.stream.tls;
 import vibe.stream.operations;
-import vibe.stream.wrapper : createConnectionProxyStream;
 import vibe.stream.zlib;
 import vibe.internal.freelistref;
-import vibe.internal.interfaceproxy : InterfaceProxy, interfaceProxy;
 
 import core.exception : AssertError;
 import std.algorithm : splitter;
@@ -83,9 +82,9 @@ HTTPClientResponse requestHTTP(URL url, scope void delegate(scope HTTPClientRequ
 	);
 
 	// make sure the connection stays locked if the body still needs to be read
-	if( res.m_client ) res.lockedConnection = cli;
+	if (!res.done) res.m_exchange.lockedConnection = cli;
 
-	logTrace("Returning HTTPClientResponse for conn %s", () @trusted { return cast(void*)res.lockedConnection.__conn; } ());
+	logTrace("Returning HTTPClientResponse for conn %s", () @trusted { return cast(void*)res.m_exchange.lockedConnection.__conn; } ());
 	return res;
 }
 /// ditto
@@ -377,14 +376,14 @@ final class HTTPClient {
 
 	enum maxHeaderLineLength = 4096;
 
-	private {
+	package {
 		Rebindable!(const(HTTPClientSettings)) m_settings;
 		string m_server;
 		string m_tlsPeerName;
 		ushort m_port;
 		bool m_useTLS;
 		TCPConnection m_conn;
-		InterfaceProxy!Stream m_stream;
+		StreamProxy m_stream;
 		TLSStream m_tlsStream;
 		TLSContext m_tls;
 		static __gshared m_userAgent = "vibe.d/"~vibeVersionString~" (HTTPClient, +http://vibed.org/)";
@@ -459,7 +458,7 @@ final class HTTPClient {
 			}
 
 			if (m_useTLS) () @trusted { return destroy(m_stream); } ();
-			m_stream = InterfaceProxy!Stream.init;
+			m_stream = StreamProxy.init;
 			() @trusted { return destroy(m_conn); } ();
 			m_conn = TCPConnection.init;
 		}
@@ -504,11 +503,12 @@ final class HTTPClient {
 		SysTime connected_time;
 		has_body = doRequestWithRetry(requester, true, close_conn, connected_time);
 		m_responding = true;
+		auto exchange = new HTTP1ClientExchange(this, close_conn);
 
 		static if (is(T == HTTPClientResponse))
-			res = new HTTPClientResponse(this, close_conn);
+			res = new HTTPClientResponse(exchange);
 		else
-			res = scoped!HTTPClientResponse(this, close_conn);
+			res = scoped!HTTPClientResponse(exchange);
 
 		res.initialize(has_body, request_allocator, connected_time);
 
@@ -552,7 +552,8 @@ final class HTTPClient {
 		bool has_body = doRequestWithRetry(requester, false, close_conn, connected_time);
 
 		m_responding = true;
-		auto res = scoped!HTTPClientResponse(this, close_conn);
+		auto exchange = new HTTP1ClientExchange(this, close_conn);
+		auto res = scoped!HTTPClientResponse(exchange);
 		res.initialize(has_body, request_allocator, connected_time);
 
 		// proxy implementation
@@ -572,7 +573,8 @@ final class HTTPClient {
 				// just an informational status -> read and handle next response
 				if (m_responding) res.dropBody();
 				if (m_conn) {
-					res = scoped!HTTPClientResponse(this, close_conn);
+					exchange = new HTTP1ClientExchange(this, close_conn);
+					res = scoped!HTTPClientResponse(exchange);
 					res.initialize(has_body, request_allocator, connected_time);
 					continue;
 				}
@@ -601,7 +603,8 @@ final class HTTPClient {
 		}
 		bool has_body = doRequestWithRetry(requester, false, close_conn, connected_time);
 		m_responding = true;
-		auto res = new HTTPClientResponse(this, close_conn);
+		auto exchange = new HTTP1ClientExchange(this, close_conn);
+		auto res = new HTTPClientResponse(exchange);
 		res.initialize(has_body, () @trusted { return vibeThreadAllocator(); } (), connected_time);
 
 		// proxy implementation
@@ -784,7 +787,7 @@ final class HTTPClientRequest : HTTPRequest {
 	import vibe.internal.array : FixedAppender;
 
 	private {
-		InterfaceProxy!OutputStream m_bodyWriter;
+		OutputStreamProxy m_bodyWriter;
 		FreeListRef!ChunkedOutputStream m_chunkedStream;
 		bool m_headerWritten = false;
 		FixedAppender!(string, 22) m_contentLengthBuffer;
@@ -794,7 +797,7 @@ final class HTTPClientRequest : HTTPRequest {
 
 
 	/// private
-	this(InterfaceProxy!Stream conn, TCPConnection raw_conn)
+	this(StreamProxy conn, TCPConnection raw_conn)
 	{
 		super(conn);
 		m_rawConn = raw_conn;
@@ -906,7 +909,7 @@ final class HTTPClientRequest : HTTPRequest {
 		The first retrieval will cause the request header to be written, make sure
 		that all headers are set up in advance.s
 	*/
-	@property InterfaceProxy!OutputStream bodyWriter()
+	@property OutputStreamProxy bodyWriter()
 	{
 		if (m_bodyWriter) return m_bodyWriter;
 
@@ -987,22 +990,12 @@ final class HTTPClientResponse : HTTPResponse {
 	@safe:
 
 	private {
-		HTTPClient m_client;
-		LockedConnection!HTTPClient lockedConnection;
-		FreeListRef!LimitedInputStream m_limitedInputStream;
-		FreeListRef!ChunkedInputStream m_chunkedInputStream;
-		FreeListRef!ZlibInputStream m_zlibInputStream;
-		FreeListRef!EndCallbackInputStream m_endCallback;
-		InterfaceProxy!InputStream m_bodyReader;
-		bool m_closeConn;
-		int m_maxRequests;
+		HTTPClientExchange m_exchange;
 	}
 
 	/// Contains the keep-alive 'max' parameter, indicates how many requests a client can
 	/// make before the server closes the connection.
-	@property int maxRequests() const {
-		return m_maxRequests;
-	}
+	@property int maxRequests() const { return m_exchange.maxRequests; }
 
 
 	/// All cookies that shall be set on the client for this request
@@ -1018,117 +1011,30 @@ final class HTTPClientResponse : HTTPResponse {
 	}
 
 	/// private
-	this(HTTPClient client, bool close_conn)
+	this(HTTPClientExchange exchange)
 	nothrow {
-		m_client = client;
-		m_closeConn = close_conn;
+		m_exchange = exchange;
 	}
 
 	private void initialize(Allocator)(bool has_body, Allocator alloc, SysTime connected_time = Clock.currTime(UTC()))
 	{
-		scope(failure) finalize(true);
-
-		// read and parse status line ("HTTP/#.# #[ $]\r\n")
-		logTrace("HTTP client reading status line");
-		string stln = () @trusted { return cast(string)m_client.m_stream.readLine(HTTPClient.maxHeaderLineLength, "\r\n", alloc); } ();
-		logTrace("stln: %s", stln);
-		this.httpVersion = parseHTTPVersion(stln);
-
-		enforce(stln.startsWith(" "));
-		stln = stln[1 .. $];
-		this.statusCode = parse!int(stln);
-		if( stln.length > 0 ){
-			enforce(stln.startsWith(" "));
-			stln = stln[1 .. $];
-			this.statusPhrase = stln;
-		}
-
-		// read headers until an empty line is hit
-		parseRFC5322Header(m_client.m_stream, this.headers, HTTPClient.maxHeaderLineLength, alloc, false);
-
-		logTrace("---------------------");
-		logTrace("HTTP client response:");
-		logTrace("---------------------");
-		logTrace("%s", this);
-		foreach (k, v; this.headers.byKeyValue)
-			logTrace("%s: %s", k, v);
-		logTrace("---------------------");
-		Duration server_timeout;
-		bool has_server_timeout;
-		if (auto pka = "Keep-Alive" in this.headers) {
-			foreach(s; splitter(*pka, ',')){
-				auto pair = s.splitter('=');
-				auto name = pair.front.strip();
-				pair.popFront();
-				if (icmp(name, "timeout") == 0) {
-					has_server_timeout = true;
-					server_timeout = pair.front.to!int().seconds;
-				} else if (icmp(name, "max") == 0) {
-					m_maxRequests = pair.front.to!int();
-				}
-			}
-		}
-		Duration elapsed = Clock.currTime(UTC()) - connected_time;
-		if (this.headers.get("Connection") == "close") {
-			// this header will trigger m_client.disconnect() in m_client.doRequest() when it goes out of scope
-		} else if (has_server_timeout && m_client.m_keepAliveTimeout > server_timeout) {
-			m_client.m_keepAliveLimit = Clock.currTime(UTC()) + server_timeout - elapsed;
-		} else if (this.httpVersion == HTTPVersion.HTTP_1_1) {
-			m_client.m_keepAliveLimit = Clock.currTime(UTC()) + m_client.m_keepAliveTimeout;
-		}
-
-		if (!has_body) finalize();
+		m_exchange.readResponse(this, has_body, alloc, connected_time);
 	}
 
 	~this()
 	{
-		debug if (m_client) {
+		debug if (!this.done) {
 			import core.stdc.stdio;
 			printf("WARNING: HTTPClientResponse not fully processed before being finalized\n");
 		}
 	}
 
+	@property bool done() const nothrow { return m_exchange.done; }
+
 	/**
 		An input stream suitable for reading the response body.
 	*/
-	@property InterfaceProxy!InputStream bodyReader()
-	{
-		if( m_bodyReader ) return m_bodyReader;
-
-		assert (m_client, "Response was already read or no response body, may not use bodyReader.");
-
-		// prepare body the reader
-		if (auto pte = "Transfer-Encoding" in this.headers) {
-			enforce(*pte == "chunked");
-			m_chunkedInputStream = createChunkedInputStreamFL(m_client.m_stream);
-			m_bodyReader = this.m_chunkedInputStream;
-		} else if (auto pcl = "Content-Length" in this.headers) {
-			m_limitedInputStream = createLimitedInputStreamFL(m_client.m_stream, to!ulong(*pcl));
-			m_bodyReader = m_limitedInputStream;
-		} else if (isKeepAliveResponse) {
-			m_limitedInputStream = createLimitedInputStreamFL(m_client.m_stream, 0);
-			m_bodyReader = m_limitedInputStream;
-		} else {
-			m_bodyReader = m_client.m_stream;
-		}
-
-		if( auto pce = "Content-Encoding" in this.headers ){
-			if( *pce == "deflate" ){
-				m_zlibInputStream = createDeflateInputStreamFL(m_bodyReader);
-				m_bodyReader = m_zlibInputStream;
-			} else if( *pce == "gzip" || *pce == "x-gzip"){
-				m_zlibInputStream = createGzipInputStreamFL(m_bodyReader);
-				m_bodyReader = m_zlibInputStream;
-			}
-			else enforce(*pce == "identity" || *pce == "", "Unsuported content encoding: "~*pce);
-		}
-
-		// be sure to free resouces as soon as the response has been read
-		m_endCallback = createEndCallbackInputStreamFL(m_bodyReader, &this.finalize);
-		m_bodyReader = m_endCallback;
-
-		return m_bodyReader;
-	}
+	@property InputStreamProxy bodyReader() { return m_exchange.bodyReader(this); }
 
 	/**
 		Provides unsafe means to read raw data from the connection.
@@ -1140,21 +1046,15 @@ final class HTTPClientResponse : HTTPResponse {
 		taken. Failure to read the right amount of data will lead to
 		protocol corruption in later requests.
 	*/
-	void readRawBody(scope void delegate(scope InterfaceProxy!InputStream stream) @safe del)
+	void readRawBody(scope void delegate(scope InputStreamProxy stream) @safe del)
 	{
-		assert(!m_bodyReader, "May not mix use of readRawBody and bodyReader.");
-		del(interfaceProxy!InputStream(m_client.m_stream));
-		finalize();
+		m_exchange.readRawBody(del);
 	}
 	/// ditto
-	static if (!is(InputStream == InterfaceProxy!InputStream))
+	static if (!is(InputStream == InputStreamProxy))
 	void readRawBody(scope void delegate(scope InputStream stream) @safe del)
 	{
-		import vibe.internal.interfaceproxy : asInterface;
-
-		assert(!m_bodyReader, "May not mix use of readRawBody and bodyReader.");
-		del(m_client.m_stream.asInterface!(.InputStream));
-		finalize();
+		m_exchange.readRawBody(del);
 	}
 
 	/**
@@ -1170,12 +1070,12 @@ final class HTTPClientResponse : HTTPResponse {
 	*/
 	void dropBody()
 	{
-		if (m_client) {
+		if (!this.done) {
 			if( bodyReader.empty ){
 				finalize();
 			} else {
 				bodyReader.pipe(nullSink);
-				assert(!lockedConnection.__conn);
+				assert(!m_exchange.lockedConnection.__conn);
 			}
 		}
 	}
@@ -1191,7 +1091,7 @@ final class HTTPClientResponse : HTTPResponse {
 	*/
 	void disconnect()
 	{
-		finalize(true);
+		m_exchange.finalize(true);
 	}
 
 	/**
@@ -1213,64 +1113,37 @@ final class HTTPClientResponse : HTTPResponse {
 	*/
 	ConnectionStream switchProtocol(string new_protocol)
 	{
-		enforce(statusCode == HTTPStatus.switchingProtocols, "Server did not send a 101 - Switching Protocols response");
-		string *resNewProto = "Upgrade" in headers;
-		enforce(resNewProto, "Server did not send an Upgrade header");
-		enforce(!new_protocol.length || !icmp(*resNewProto, new_protocol),
-			"Expected Upgrade: " ~ new_protocol ~", received Upgrade: " ~ *resNewProto);
-		auto stream = createConnectionProxyStream!(typeof(m_client.m_stream), typeof(m_client.m_conn))(m_client.m_stream, m_client.m_conn);
-		m_closeConn = true; // cannot reuse connection for further requests!
-		return stream;
+		return m_exchange.switchProtocol(this, new_protocol);
 	}
 	/// ditto
 	void switchProtocol(string new_protocol, scope void delegate(ConnectionStream str) @safe del)
 	{
-		enforce(statusCode == HTTPStatus.switchingProtocols, "Server did not send a 101 - Switching Protocols response");
-		string *resNewProto = "Upgrade" in headers;
-		enforce(resNewProto, "Server did not send an Upgrade header");
-		enforce(!new_protocol.length || !icmp(*resNewProto, new_protocol),
-			"Expected Upgrade: " ~ new_protocol ~", received Upgrade: " ~ *resNewProto);
-		auto stream = createConnectionProxyStream(m_client.m_stream, m_client.m_conn);
-		scope (exit) () @trusted { destroy(stream); } ();
-		m_closeConn = true;
-		del(stream);
-	}
-
-	private @property isKeepAliveResponse()
-	const {
-		string conn;
-		if (this.httpVersion == HTTPVersion.HTTP_1_0) {
-			// Workaround for non-standard-conformant servers - for example see #1780
-			auto pcl = "Content-Length" in this.headers;
-			if (pcl) conn = this.headers.get("Connection", "close");
-			else return false; // can't use keepalive when no content length is set
-		}
-		else conn = this.headers.get("Connection", "keep-alive");
-		return icmp(conn, "close") != 0;
+		m_exchange.switchProtocol(this, new_protocol, del);
 	}
 
 	private void finalize()
 	{
-		finalize(m_closeConn);
-	}
-
-	private void finalize(bool disconnect)
-	{
-		// ignore duplicate and too early calls to finalize
-		// (too early happesn for empty response bodies)
-		if (!m_client) return;
-
-		auto cli = m_client;
-		m_client = null;
-		cli.m_responding = false;
-		destroy(m_endCallback);
-		destroy(m_zlibInputStream);
-		destroy(m_chunkedInputStream);
-		destroy(m_limitedInputStream);
-		if (disconnect) cli.disconnect();
-		destroy(lockedConnection);
+		m_exchange.finalize(m_exchange.closeConnection);
 	}
 }
+
+interface HTTPClientExchange {
+@safe:
+	@property int maxRequests() const nothrow;
+	InputStreamProxy bodyReader(HTTPClientResponse res);
+	@property bool closeConnection() const nothrow;
+	@property bool done() const nothrow;
+	@property ref LockedConnection!HTTPClient lockedConnection();
+	void finalize(bool disconnect);
+	void readResponse(HTTPClientResponse res, bool has_body, typeof(createRequestAllocator()) alloc, SysTime connected_time);
+	void readResponse(HTTPClientResponse res, bool has_body, IAllocator alloc, SysTime connected_time);
+	void readRawBody(scope void delegate(scope InputStreamProxy stream) @safe del);
+	static if (!is(InputStream == InputStreamProxy))
+	void readRawBody(scope void delegate(scope InputStream stream) @safe del);
+	ConnectionStream switchProtocol(HTTPClientResponse res, string new_protocol);
+	void switchProtocol(HTTPClientResponse res, string new_protocol, scope void delegate(ConnectionStream str) @safe del);
+}
+
 
 /** Returns clean host string. In case of unix socket it performs urlDecode on host. */
 package auto getFilteredHost(URL url)
