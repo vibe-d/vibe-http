@@ -33,6 +33,7 @@ class HTTP1ClientExchange : HTTPClientExchange {
 
 	this(HTTPClient client, bool close_conn)
 	{
+		m_client = client;
 		m_closeConn = close_conn;
 	}
 
