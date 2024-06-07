@@ -4,9 +4,11 @@ import vibe.container.internal.utilallocator;
 import vibe.core.connectionpool;
 import vibe.core.log;
 import vibe.http.client;
+import vibe.internal.array : FixedAppender;
 import vibe.internal.freelistref;
 import vibe.stream.counting;
 import vibe.stream.operations;
+import vibe.stream.tls;
 import vibe.stream.wrapper : createConnectionProxyStream;
 import vibe.stream.zlib;
 
@@ -28,13 +30,20 @@ class HTTP1ClientExchange : HTTPClientExchange {
 		InputStreamProxy m_bodyReader;
 		bool m_closeConn;
 		int m_maxRequests;
+
+		// request
+		OutputStreamProxy m_bodyWriter;
+		FreeListRef!ChunkedOutputStream m_chunkedStream;
+		bool m_headerWritten = false;
+		FixedAppender!(string, 22) m_contentLengthBuffer;
+		TCPConnection m_rawConn;
+		TLSCertificateInformation m_peerCertificate;
 	}
 @safe:
 
-	this(HTTPClient client, bool close_conn)
+	this(HTTPClient client)
 	{
 		m_client = client;
-		m_closeConn = close_conn;
 	}
 
 	@property int maxRequests() const { return m_maxRequests; }

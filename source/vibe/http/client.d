@@ -464,7 +464,7 @@ final class HTTPClient {
 		}
 	}
 
-	private void doProxyRequest(T, U)(ref T res, U requester, ref bool close_conn, ref bool has_body)
+	private void doProxyRequest(T, U)(ref T res, U requester, ref HTTPClientExchange exchange, ref bool has_body)
 	@trusted { // scope new
 		import std.conv : to;
 		scope request_allocator = createRequestAllocator();
@@ -547,18 +547,17 @@ final class HTTPClient {
 			disconnect();
 		}
 
-		bool close_conn;
+		HTTPClientExchange exchange;
 		SysTime connected_time;
-		bool has_body = doRequestWithRetry(requester, false, close_conn, connected_time);
+		bool has_body = doRequestWithRetry(requester, false, exchange, connected_time);
 
 		m_responding = true;
-		auto exchange = new HTTP1ClientExchange(this, close_conn);
 		auto res = scoped!HTTPClientResponse(exchange);
 		res.initialize(has_body, request_allocator, connected_time);
 
 		// proxy implementation
 		if (res.headers.get("Proxy-Authenticate", null) !is null) {
-			doProxyRequest(res, requester, close_conn, has_body);
+			doProxyRequest(res, requester, exchange, has_body);
 		}
 
 		Exception user_exception;
@@ -615,7 +614,7 @@ final class HTTPClient {
 		return res;
 	}
 
-	private bool doRequestWithRetry(scope void delegate(HTTPClientRequest req) requester, bool confirmed_proxy_auth /* basic only */, out bool close_conn, out SysTime connected_time)
+	private bool doRequestWithRetry(scope void delegate(HTTPClientRequest req) requester, bool confirmed_proxy_auth /* basic only */, out HTTPClientExchange exchange, out SysTime connected_time)
 	{
 		if (m_conn && m_conn.connected && Clock.currTime(UTC()) > m_keepAliveLimit){
 			logDebug("Disconnected to avoid timeout");
@@ -630,8 +629,7 @@ final class HTTPClient {
 		foreach (i; 0 .. is_persistent_request ? 2 : 1) {
 		 	connected_time = Clock.currTime(UTC());
 
-			close_conn = false;
-			has_body = doRequest(requester, close_conn, false, connected_time);
+			has_body = doRequest(requester, exchange, false, connected_time);
 
 			logTrace("HTTP client waiting for response");
 			if (!m_stream.empty) break;
@@ -639,7 +637,7 @@ final class HTTPClient {
 		return has_body;
 	}
 
-	private bool doRequest(scope void delegate(HTTPClientRequest req) requester, ref bool close_conn, bool confirmed_proxy_auth = false /* basic only */, SysTime connected_time = Clock.currTime(UTC()))
+	private bool doRequest(scope void delegate(HTTPClientRequest req) requester, ref HTTPClientExchange exchange, bool confirmed_proxy_auth = false /* basic only */, SysTime connected_time = Clock.currTime(UTC()))
 	{
 		assert(!m_requesting, "Interleaved HTTP client requests detected!");
 		assert(!m_responding, "Interleaved HTTP client request/response detected!");
@@ -739,7 +737,8 @@ final class HTTPClient {
 		}
 
 		return () @trusted { // scoped
-			auto req = scoped!HTTPClientRequest(m_stream, m_conn);
+			auto exchange = new HTTP1ClientExchange(this);
+			auto req = scoped!HTTPClientRequest(exchange);
 			if (m_useTLS)
 				req.m_peerCertificate = m_tlsStream.peerCertificate;
 
@@ -784,23 +783,15 @@ private auto connectTCPWithTimeout(NetworkAddress addr, NetworkAddress bind_addr
 	Represents a HTTP client request (as sent to the server).
 */
 final class HTTPClientRequest : HTTPRequest {
-	import vibe.internal.array : FixedAppender;
 
 	private {
-		OutputStreamProxy m_bodyWriter;
-		FreeListRef!ChunkedOutputStream m_chunkedStream;
-		bool m_headerWritten = false;
-		FixedAppender!(string, 22) m_contentLengthBuffer;
-		TCPConnection m_rawConn;
-		TLSCertificateInformation m_peerCertificate;
 	}
 
 
 	/// private
-	this(StreamProxy conn, TCPConnection raw_conn)
+	this(HTTPClientExchange exchange)
 	{
-		super(conn);
-		m_rawConn = raw_conn;
+		m_exchange = exchange;
 	}
 
 	@property NetworkAddress localAddress() const { return m_rawConn.localAddress; }

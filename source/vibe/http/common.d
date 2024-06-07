@@ -177,10 +177,6 @@ T enforceBadRequest(T)(T condition, lazy string message = null, string file = __
 class HTTPRequest {
 	@safe:
 
-	protected {
-		InterfaceProxy!Stream m_conn;
-	}
-
 	public {
 		/// The HTTP protocol version used for the request
 		HTTPVersion httpVersion = HTTPVersion.HTTP_1_1;
@@ -201,11 +197,6 @@ class HTTPRequest {
 
 		/// All request _headers
 		InetHeaderMap headers;
-	}
-
-	protected this(InterfaceProxy!Stream conn)
-	{
-		m_conn = conn;
 	}
 
 	protected this()
