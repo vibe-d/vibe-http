@@ -69,6 +69,7 @@ void handleHTTP1Connection(TLSStreamType)(TCPConnection connection, TLSStreamTyp
 
 private bool handleRequest(TLSStreamType, Allocator)(StreamProxy http_stream, TCPConnection tcp_connection, HTTPServerContext listen_info, ref HTTPServerSettings settings, ref bool keep_alive, scope Allocator request_allocator)
 @safe {
+	import vibe.container.internal.utilallocator : make;
 	import vibe.http.internal.utils : formatRFC822DateAlloc;
 	import std.algorithm.searching : canFind, startsWith;
 	import std.conv : parse, to;
@@ -102,7 +103,7 @@ private bool handleRequest(TLSStreamType, Allocator)(StreamProxy http_stream, TC
 
 	// Create the response object
 	ConnectionStreamProxy cproxy = tcp_connection;
-	auto exchange = new HTTP1ServerExchange(http_stream, cproxy);
+	auto exchange = () @trusted { return request_allocator.make!HTTP1ServerExchange(http_stream, cproxy); } ();
 	auto res = FreeListRef!HTTPServerResponse(exchange, settings, request_allocator/*.Scoped_payload*/);
 	req.tls = res.m_tls = listen_info.tlsContext !is null;
 	if (req.tls) {
