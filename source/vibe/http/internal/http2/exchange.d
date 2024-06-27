@@ -2,7 +2,7 @@ module vibe.http.internal.http2.exchange;
 
 import vibe.http.internal.http2.multiplexing;
 import vibe.http.internal.http2.settings;
-import vibe.http.internal.http2.http2 : HTTP2ConnectionStream, HTTP2StreamState;
+import vibe.http.internal.http2.server : HTTP2ConnectionStream, HTTP2StreamState;
 import vibe.http.internal.http2.hpack.hpack;
 import vibe.http.internal.http2.hpack.tables;
 import vibe.http.internal.http2.frame;

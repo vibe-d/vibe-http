@@ -5,7 +5,7 @@
 
 import vibe.http.server;
 import vibe.stream.tls;
-import vibe.http.internal.http2.http2 : http2Callback; // ALPN negotiation
+import vibe.http.internal.http2.server : http2Callback; // ALPN negotiation
 import vibe.core.core : runApplication;
 
 /* ==== declare two handlers (could use the same one) ==== */

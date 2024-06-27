@@ -1,6 +1,6 @@
 module vibe.http.internal.http1;
 
-import vibe.http.internal.http2.http2;
+import vibe.http.internal.http2.server;
 import vibe.http.internal.http2.settings;
 import vibe.core.stream;
 import vibe.core.core : runTask;

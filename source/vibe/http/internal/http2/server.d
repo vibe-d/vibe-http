@@ -1,4 +1,4 @@
-module vibe.http.internal.http2.http2;
+module vibe.http.internal.http2.server;
 
 import vibe.http.internal.http2.error;
 import vibe.http.internal.http2.multiplexing;
