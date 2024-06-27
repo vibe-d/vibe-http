@@ -195,7 +195,8 @@ unittest
 void handleHTTPConnection(TCPConnection connection, HTTPServerContext context)
 @safe {
 	import vibe.http.internal.http1.server : handleHTTP1Connection;
-
+	import vibe.http.internal.http2.server : handleHTTP2Connection;
+	import vibe.http.internal.http2.settings : HTTP2ServerContext, HTTP2Settings;
 
 	version(HaveNoTLS) {
 		alias TLSStreamType = Stream;
@@ -235,6 +236,15 @@ void handleHTTPConnection(TCPConnection connection, HTTPServerContext context)
 			logDebug("Accept TLS connection: %s", context.tlsContext.kind);
 			// TODO: reverse DNS lookup for peer_name of the incoming connection for TLS client certificate verification purposes
 			tls_stream = createTLSStreamFL(http_stream, context.tlsContext, TLSStreamState.accepting, null, connection.remoteAddress);
+
+			Nullable!string proto = tls_stream.alpn;
+			if(!proto.isNull && proto == "h2") {
+				HTTP2Settings settings;
+				auto h2context = new HTTP2ServerContext(context, settings);
+				handleHTTP2Connection(tls_stream, connection, h2context);
+				return;
+			}
+
 			http_stream = tls_stream;
 		}
 	}
