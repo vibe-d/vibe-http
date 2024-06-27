@@ -547,7 +547,7 @@ final class ChunkedOutputStream : OutputStream {
 		}
 	}
 
-	size_t write(scope const ubyte[] bytes_, IOMode mode)
+	size_t write(scope const(ubyte)[] bytes_, IOMode mode)
 	{
 		assert(!m_finalized);
 		const(ubyte)[] bytes = bytes_;

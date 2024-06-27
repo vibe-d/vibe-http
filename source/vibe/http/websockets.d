@@ -910,7 +910,7 @@ final class OutgoingWebSocketMessage : OutputStream {
 		m_rng = rng;
 	}
 
-	size_t write(scope const ubyte[] bytes, IOMode mode)
+	size_t write(scope const(ubyte)[] bytes, IOMode mode)
 	{
 		assert(!m_finalized);
 
@@ -922,6 +922,8 @@ final class OutgoingWebSocketMessage : OutputStream {
 		m_buffer.put(bytes);
 		return bytes.length;
 	}
+
+	alias write = OutputStream.write;
 
 	void flush()
 	{

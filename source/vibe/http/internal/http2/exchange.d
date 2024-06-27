@@ -566,7 +566,7 @@ private final class HeaderOutputStream : OutputStream {
         return bytes.length;
 	}
 	/// DITTO
-    size_t write(scope const(ubyte[]) bytes, IOMode)
+    size_t write(scope const(ubyte)[] bytes, IOMode)
     {
         () @trusted { m_destination.put(cast(string)bytes); } ();
         return bytes.length;
