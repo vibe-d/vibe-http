@@ -69,6 +69,7 @@ void handleHTTP1Connection(TLSStreamType)(TCPConnection connection, TLSStreamTyp
 
 private bool handleRequest(TLSStreamType, Allocator)(StreamProxy http_stream, TCPConnection tcp_connection, HTTPServerContext listen_info, ref HTTPServerSettings settings, ref bool keep_alive, scope Allocator request_allocator)
 @safe {
+	import vibe.http.internal.utils : formatRFC822DateAlloc;
 	import std.algorithm.searching : canFind, startsWith;
 	import std.conv : parse, to;
 	import std.string : indexOf;
@@ -150,7 +151,22 @@ private bool handleRequest(TLSStreamType, Allocator)(StreamProxy http_stream, TC
 		}
 
 		// basic request parsing
-		parseRequestHeader(req, reqReader, request_allocator, settings.maxRequestHeaderSize, settings.maxRequestHeaderLineSize);
+		uint h2 = parseRequestHeader(req, reqReader, request_allocator, settings.maxRequestHeaderSize, settings.maxRequestHeaderLineSize);
+		if (h2) {
+			import vibe.http.internal.http2.server : handleHTTP2Connection;
+			import vibe.http.internal.http2.settings : HTTP2ServerContext, HTTP2Settings;
+
+			// start http/2 with prior knowledge
+			uint len = 22 - h2;
+			ubyte[] dummy; dummy.length = len;
+
+			http_stream.read(dummy); // finish reading connection preface
+			auto h2settings = HTTP2Settings();
+			auto h2context = new HTTP2ServerContext(listen_info, h2settings);
+			handleHTTP2Connection(tcp_connection, tcp_connection, h2context, true);
+			return true;
+		}
+
 		logTrace("Got request header.");
 
 		// find the matching virtual host
@@ -341,7 +357,7 @@ private bool handleRequest(TLSStreamType, Allocator)(StreamProxy http_stream, TC
 }
 
 
-private void parseRequestHeader(InputStream, Allocator)(HTTPServerRequest req, InputStream http_stream, Allocator alloc, ulong max_header_size, size_t max_header_line_size)
+private uint parseRequestHeader(InputStream, Allocator)(HTTPServerRequest req, InputStream http_stream, Allocator alloc, ulong max_header_size, size_t max_header_line_size)
 	if (isInputStream!InputStream)
 {
 	import std.string : indexOf;
@@ -351,6 +367,8 @@ private void parseRequestHeader(InputStream, Allocator)(HTTPServerRequest req, I
 
 	logTrace("HTTP server reading status line");
 	auto reqln = () @trusted { return cast(string)stream.readLine(max_header_line_size, "\r\n", alloc); }();
+
+	if(reqln == "PRI * HTTP/2.0") return cast(uint)reqln.length;
 
 	logTrace("--------------------");
 	logTrace("HTTP server request:");
@@ -378,37 +396,8 @@ private void parseRequestHeader(InputStream, Allocator)(HTTPServerRequest req, I
 	foreach (k, v; req.headers.byKeyValue)
 		logTrace("%s: %s", k, v);
 	logTrace("--------------------");
-}
 
-private struct CacheTime
-{
-	string cachedDate;
-	SysTime nextUpdate;
-
-	this(SysTime nextUpdate) @safe @nogc pure nothrow
-	{
-		this.nextUpdate = nextUpdate;
-	}
-
-	void update(SysTime time) @safe
-	{
-		this.nextUpdate = time + 1.seconds;
-		this.nextUpdate.fracSecs = nsecs(0);
-	}
-}
-
-private string formatRFC822DateAlloc(SysTime time)
-@safe {
-	static LAST = CacheTime(SysTime.min());
-
-	if (time > LAST.nextUpdate) {
-		auto app = new FixedAppender!(string, 32);
-		writeRFC822DateTimeString(app, time);
-		LAST.update(time);
-		LAST.cachedDate = () @trusted { return app.data; } ();
-		return () @trusted { return app.data; } ();
-	} else
-		return LAST.cachedDate;
+	return 0;
 }
 
 class HTTP1ServerExchange : HTTPServerExchange {
