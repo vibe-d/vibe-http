@@ -28,7 +28,7 @@ void tlsHandleReq(HTTPServerRequest req, HTTPServerResponse res)
 // sends a very big data frame
 void bigHandleReq(size_t DIM)(HTTPServerRequest req, HTTPServerResponse res)
 @trusted {
-	import vibe.utils.array : FixedAppender;
+	import vibe.container.internal.appender : FixedAppender;
 	import std.range : iota;
 
 	FixedAppender!(immutable(char)[], DIM) appender;
