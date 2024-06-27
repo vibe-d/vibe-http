@@ -110,8 +110,16 @@ HTTPServerRequestDelegateS proxyRequest(HTTPProxySettings settings)
 			assert (scon);
 
 			import vibe.core.core : runTask;
-			runTask({ scon.pipe(ccon); });
-			ccon.pipe(scon);
+			runTask({
+				try scon.pipe(ccon);
+				catch (Exception e) {
+					logException(e, "Failed to forward proxy data from server to client");
+					try scon.close();
+					catch (Exception e) logException(e, "Failed to close server connection after error");
+					try ccon.close();
+					catch (Exception e) logException(e, "Failed to close client connection after error");
+				}
+			});
 			return;
 		}
 
@@ -121,7 +129,7 @@ HTTPServerRequestDelegateS proxyRequest(HTTPProxySettings settings)
 
 
 		import std.algorithm : splitter, canFind;
-		import vibe.utils.string : icmp2;
+		import vibe.internal.string : icmp2;
 		bool isUpgrade = pConnection && (*pConnection).splitter(',').canFind!(a => a.icmp2("upgrade"));
 
 		void setupClientRequest(scope HTTPClientRequest creq)
@@ -145,7 +153,7 @@ HTTPServerRequestDelegateS proxyRequest(HTTPProxySettings settings)
 
 		void handleClientResponse(scope HTTPClientResponse cres)
 		{
-			import vibe.utils.string;
+			import vibe.internal.string : icmp2;
 
 			// copy the response to the original requester
 			res.statusCode = cres.statusCode;
@@ -158,7 +166,10 @@ HTTPServerRequestDelegateS proxyRequest(HTTPProxySettings settings)
 				auto ccon = cres.switchProtocol("");
 
 				import vibe.core.core : runTask;
-				runTask({ ccon.pipe(scon); });
+				runTask({
+					try ccon.pipe(scon);
+					catch (Exception e) logException(e, "Failed to transfer data from client to server after switching protocols");
+				});
 
 				scon.pipe(ccon);
 				return;

@@ -15,13 +15,12 @@ import vibe.core.log;
 import vibe.inet.url;
 import vibe.inet.webform;
 import vibe.data.json;
-import vibe.internal.allocator;
+import vibe.container.internal.utilallocator;
 import vibe.internal.freelistref;
 import vibe.internal.interfaceproxy : InterfaceProxy;
+import vibe.internal.string : formatAlloc, icmp2;
 import vibe.stream.wrapper : ConnectionProxyStream, createConnectionProxyStream, createConnectionProxyStreamFL;
 import vibe.stream.tls;
-import vibe.utils.array;
-import vibe.utils.string;
 import vibe.stream.counting;
 import vibe.stream.operations;
 import vibe.stream.zlib;
@@ -769,7 +768,7 @@ enum SessionOption {
 	Represents a HTTP request as received by the server side.
  */
 struct HTTPServerRequest {
-	import vibe.utils.dictionarylist : DictionaryList;
+	import vibe.container.dictionarylist : DictionaryList;
 
 	private HTTPServerRequestData* m_data;
 
@@ -827,7 +826,7 @@ struct HTTPServerRequest {
 
 	@property ref InetHeaderMap headers() pure nothrow { return m_data.headers; }
 
-	@property scope bool persistent() const pure nothrow { return m_data.persistent; }
+	@property scope bool persistent() const pure { return m_data.persistent; }
 
 	@property scope string queryString() const pure nothrow { return m_data.queryString; }
 	// ditto
@@ -847,16 +846,16 @@ struct HTTPServerRequest {
 	// ditto
 	@property void httpVersion(HTTPVersion hver) nothrow { m_data.httpVersion = hver; }
 
-	@property scope string host() const pure nothrow { return m_data.host; }
+	@property scope string host() const pure { return m_data.host; }
 	// ditto
 	@property void host(string v) { m_data.headers["Host"] = v; }
 
-	@property scope string contentType() const pure nothrow { return m_data.contentType; }
+	@property scope string contentType() const pure { return m_data.contentType; }
 
 	// ditto
 	@property void contentType(string ct) { m_data.headers["Content-Type"] = ct; }
 
-	@property scope string contentTypeParameters() const pure nothrow { return m_data.contentTypeParameters; }
+	@property scope string contentTypeParameters() const pure { return m_data.contentTypeParameters; }
 
 	@property scope NetworkAddress clientAddress() const pure nothrow { return m_data.clientAddress; }
 	// ditto
@@ -1549,7 +1548,7 @@ unittest {
 
 
 struct HTTPServerRequestData {
-	import vibe.utils.dictionarylist;
+	import vibe.container.dictionarylist;
 
 	@disable this(this);
 
@@ -1665,7 +1664,7 @@ struct HTTPServerRequestData {
 			the request URI. By default, the first cookie will be returned, which is
 			the or one of the cookies with the closest path match.
 		*/
-		@property ref CookieValueMap cookies() @safe {
+		@property ref CookieValueMap cookies() @safe return {
 			if (_cookies.isNull) {
 				_cookies = CookieValueMap.init;
 				if (auto pv = "cookie" in headers)
@@ -1679,7 +1678,7 @@ struct HTTPServerRequestData {
 
 			The fields are stored in the same order as they are received.
 		*/
-		@property ref FormFields query() @safe {
+		@property ref FormFields query() @safe return {
 			if (_query.isNull) {
 				_query = FormFields.init;
 				parseURLEncodedForm(queryString, _query.get);
@@ -1689,7 +1688,7 @@ struct HTTPServerRequestData {
 		}
 		Nullable!FormFields _query;
 
-		import vibe.utils.dictionarylist;
+		import vibe.container.dictionarylist;
 		/* A map of general parameters for the request.
 
 			This map is supposed to be used by middleware functionality to store
@@ -1726,7 +1725,7 @@ struct HTTPServerRequestData {
 
 			A JSON request must have the Content-Type "application/json" or "application/vnd.api+json".
 		*/
-		@property ref Json json() @safe {
+		@property ref Json json() @safe return {
 			if (_json.isNull) {
 				if (icmp2(contentType, "application/json") == 0 || icmp2(contentType, "application/vnd.api+json") == 0 ) {
 					auto bodyStr = bodyReader.readAllUTF8();
@@ -1748,7 +1747,7 @@ struct HTTPServerRequestData {
 				A form request must either have the Content-Type
 				"application/x-www-form-urlencoded" or "multipart/form-data".
 		*/
-		@property ref FormFields form() @safe {
+		@property ref FormFields form() @safe return {
 			if (_form.isNull)
 				parseFormAndFiles();
 
@@ -1792,7 +1791,7 @@ struct HTTPServerRequestData {
 
 		/** Shortcut to the 'Host' header (always present for HTTP 1.1)
 		 */
-		@property string host() const pure nothrow { auto ph = "Host" in headers; return ph ? *ph : null; }
+		@property string host() const pure { auto ph = "Host" in headers; return ph ? *ph : null; }
 		/// ditto
 		@property void host(string v) { headers["Host"] = v; }
 
@@ -1804,7 +1803,7 @@ struct HTTPServerRequestData {
 		  headers["Content-Type"] to get the raw value.
 		 */
 		@property string contentType()
-			const pure nothrow {
+			const pure {
 				auto pv = "Content-Type" in headers;
 				if( !pv ) return null;
 				auto idx = std.string.indexOf(*pv, ';');
@@ -1819,7 +1818,7 @@ struct HTTPServerRequestData {
 		  this contains the character set used for text based content types.
 		 */
 		@property string contentTypeParameters()
-		const pure nothrow {
+		const pure {
 			auto pv = "Content-Type" in headers;
 			if( !pv ) return null;
 			auto idx = std.string.indexOf(*pv, ';');
@@ -1828,7 +1827,7 @@ struct HTTPServerRequestData {
 
 		/** Determines if the connection persists across requests.
 		*/
-		@property bool persistent() const pure nothrow
+		@property bool persistent() const pure
 		{
 			auto ph = "connection" in headers;
 			switch(httpVersion) {
@@ -2731,6 +2730,8 @@ uint parseRequestHeader(InputStream)(HTTPServerRequest reqStruct, InputStream ht
 
 string formatRFC822DateAlloc(IAllocator alloc, SysTime time)
 @safe {
+	import vibe.container.internal.appender : AllocAppender;
+
 	auto app = AllocAppender!string(alloc);
 	writeRFC822DateTimeString(app, time);
 	return () @trusted { return app.data; } ();

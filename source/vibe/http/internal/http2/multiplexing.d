@@ -1,12 +1,11 @@
 module vibe.http.internal.http2.multiplexing;
 
-import vibe.utils.hashmap;
+import vibe.container.hashmap;
+import vibe.container.internal.utilallocator;
 import vibe.core.sync;
 import vibe.core.log;
 import vibe.core.net;
 import vibe.core.core : yield;
-import vibe.internal.allocator;
-import vibe.internal.utilallocator: RegionListAllocator;
 
 import std.exception;
 import std.container : RedBlackTree;
@@ -143,11 +142,13 @@ struct HTTP2Multiplexer {
 	@disable this();
 
 	this(Alloc)(Alloc alloc, const uint max, const ulong wsize, const uint tsize=4096) @trusted
-	{
+	nothrow {
 		m_alloc = alloc;
-		m_lock = m_alloc.make!TaskMutex();
-		m_cond = m_alloc.make!TaskCondition(m_lock);
-		m_open = m_alloc.make!H2Queue();
+		try {
+			m_lock = alloc.make!TaskMutex();
+			m_cond = alloc.make!TaskCondition(m_lock);
+			m_open = alloc.make!H2Queue();
+		} catch (Exception e) assert(false, e.msg);
 		m_last = 0;
 		m_max = max;
 		m_wsize = wsize;

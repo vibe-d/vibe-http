@@ -6,20 +6,19 @@ import vibe.http.internal.http2.http2 : HTTP2ConnectionStream, HTTP2StreamState;
 import vibe.http.internal.http2.hpack.hpack;
 import vibe.http.internal.http2.hpack.tables;
 import vibe.http.internal.http2.frame;
-
 import vibe.http.common;
 import vibe.http.status;
 import vibe.http.server;
+
+import vibe.container.internal.utilallocator;
 import vibe.core.log;
 import vibe.core.stream;
 import vibe.core.core;
 import vibe.internal.interfaceproxy;
 import vibe.stream.tls;
-import vibe.internal.allocator;
 import vibe.internal.array;
-import vibe.internal.utilallocator: RegionListAllocator;
+import vibe.internal.string : formatAlloc, icmp2;
 import vibe.stream.wrapper : ConnectionProxyStream, createConnectionProxyStream, createConnectionProxyStreamFL;
-import vibe.utils.string;
 import vibe.stream.memory;
 import vibe.inet.url;
 import vibe.inet.message;
@@ -567,7 +566,7 @@ private final class HeaderOutputStream : OutputStream {
         return bytes.length;
 	}
 	/// DITTO
-    size_t write(const(ubyte[]) bytes, IOMode)
+    size_t write(scope const(ubyte[]) bytes, IOMode)
     {
         () @trusted { m_destination.put(cast(string)bytes); } ();
         return bytes.length;

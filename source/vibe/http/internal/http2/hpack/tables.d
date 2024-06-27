@@ -7,7 +7,7 @@ import vibe.http.status;
 import vibe.http.common;
 import vibe.core.log;
 import vibe.core.sync;
-import vibe.internal.array : FixedRingBuffer;
+import vibe.container.ringbuffer : RingBuffer;
 
 import std.variant;
 import std.traits;
@@ -175,7 +175,7 @@ HTTP2SettingValue computeEntrySize(HTTP2HeaderTableField f) @safe
 	final switch (f.value.kind) {
 		case k.str: ret += f.value.get!string.length; break;
 		case k.strarr: ret += f.value.get!(string[]).map!(s => s.length).sum(); break;
-		case k.status: ret += cast(size_t)log10(cast(int)f.value.get!HTTPStatus) + 1; break;
+		case k.status: ret += cast(size_t)log10(cast(double)f.value.get!HTTPStatus) + 1; break;
 		case k.method: ret += httpMethodString(f.value.get!HTTPMethod).length; break;
 	}
 	return ret;
@@ -184,11 +184,11 @@ HTTP2SettingValue computeEntrySize(HTTP2HeaderTableField f) @safe
 private struct DynamicTable {
 	private {
 		// default table is 4096 octs. / n. octets of an empty HTTP2HeaderTableField struct (32)
-		FixedRingBuffer!(HTTP2HeaderTableField, DEFAULT_DYNAMIC_TABLE_SIZE/HTTP2HeaderTableField.sizeof, false) m_table;
+		RingBuffer!(HTTP2HeaderTableField, DEFAULT_DYNAMIC_TABLE_SIZE/HTTP2HeaderTableField.sizeof, false) m_table;
 
 		// extra table is a circular buffer, initially empty, used when
 		// maxsize > DEFAULT_DYNAMIC_TABLE_SIZE
-		FixedRingBuffer!HTTP2HeaderTableField m_extraTable;
+		RingBuffer!HTTP2HeaderTableField m_extraTable;
 
 		// as defined in SETTINGS_HEADER_TABLE_SIZE
 		HTTP2SettingValue m_maxsize;
@@ -203,7 +203,7 @@ private struct DynamicTable {
 		size_t m_extraIndex = 0;
 	}
 
-	this(HTTP2SettingValue ms) @trusted
+	this(HTTP2SettingValue ms) @trusted nothrow
 	{
 		m_maxsize = ms;
 
@@ -212,7 +212,7 @@ private struct DynamicTable {
 		}
 	}
 
-	@property void dispose() { m_extraTable.dispose(); }
+	@property void dispose() nothrow { m_extraTable.dispose(); }
 
 	// number of elements inside dynamic table
 	@property size_t size() @safe @nogc { return m_size; }
@@ -256,11 +256,11 @@ private struct DynamicTable {
 
 		if(m_extraIndex > 0) {
 			m_size -= computeEntrySize(m_extraTable.back);
-			m_extraTable.popFront();
+			m_extraTable.removeFront();
 			m_extraIndex--;
 		} else {
 			m_size -= computeEntrySize(m_table.back);
-			m_table.popFront();
+			m_table.removeFront();
 			m_index--;
 		}
 	}
@@ -312,14 +312,15 @@ struct IndexingTable {
 	}
 
 	// requires the maximum size for the dynamic table
-	this(HTTP2SettingValue ms) @trusted
+	this(HTTP2SettingValue ms) @trusted nothrow
 	{
 		m_dynamic = DynamicTable(ms);
-		m_lock = new RecursiveTaskMutex;
+		try m_lock = new RecursiveTaskMutex;
+		catch (Exception e) assert(false, e.msg);
 	}
 
 	~this()
-	{
+	nothrow {
 		m_dynamic.dispose();
 	}
 

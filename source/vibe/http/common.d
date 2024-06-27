@@ -14,12 +14,11 @@ import vibe.core.net;
 import vibe.inet.message;
 import vibe.stream.operations;
 import vibe.textfilter.urlencode : urlEncode, urlDecode;
-import vibe.utils.array;
 import vibe.internal.freelistref;
 import vibe.internal.interfaceproxy : InterfaceProxy, interfaceProxy;
-import vibe.internal.allocator;
-import vibe.utils.dictionarylist;
-import vibe.utils.string;
+import vibe.container.internal.utilallocator;
+import vibe.container.dictionarylist;
+import vibe.container.internal.appender;
 
 import std.algorithm;
 import std.array;
@@ -548,7 +547,7 @@ final class ChunkedOutputStream : OutputStream {
 		}
 	}
 
-	size_t write(in ubyte[] bytes_, IOMode mode)
+	size_t write(scope const ubyte[] bytes_, IOMode mode)
 	{
 		assert(!m_finalized);
 		const(ubyte)[] bytes = bytes_;

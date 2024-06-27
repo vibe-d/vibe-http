@@ -10,17 +10,16 @@ import vibe.core.stream;
 import vibe.core.core : runTask;
 import vibe.core.net;
 import vibe.http.server;
-import vibe.internal.allocator;
+import vibe.container.internal.utilallocator;
 import vibe.internal.freelistref;
 import vibe.internal.interfaceproxy : InterfaceProxy;
+import vibe.internal.string : icmp2, formatAlloc;
 import vibe.core.file;
 import vibe.core.log;
 import vibe.inet.url;
 import vibe.inet.webform;
 import vibe.data.json;
 import vibe.stream.wrapper : ConnectionProxyStream, createConnectionProxyStream, createConnectionProxyStreamFL;
-import vibe.utils.array;
-import vibe.utils.string;
 import vibe.stream.counting;
 import vibe.stream.operations;
 import vibe.stream.zlib;
@@ -79,7 +78,7 @@ void handleHTTP1Connection(ConnectionStream)(ConnectionStream connection, HTTPSe
 }
 
 private void handleHTTP1RequestChain(ConnectionStream)(ConnectionStream connection, HTTPContext context)
-@safe
+@safe nothrow
 {
 	//logInfo("HTTP/1 Request Chain Handler");
 
@@ -97,12 +96,18 @@ private void handleHTTP1RequestChain(ConnectionStream)(ConnectionStream connecti
 
 	while(true) {
 		CB cb = {connection, context};
-		auto st = connection.waitForDataAsync(cb);
+		try {
+			auto st = connection.waitForDataAsync(cb);
 
-		final switch(st) {
-			case WaitForDataAsyncStatus.waiting: return;
-			case WaitForDataAsyncStatus.noMoreData: connection.close; return;
-			case WaitForDataAsyncStatus.dataAvailable: handleHTTP1Request(connection, context); break;
+			final switch(st) {
+				case WaitForDataAsyncStatus.waiting: return;
+				case WaitForDataAsyncStatus.noMoreData: connection.close; return;
+				case WaitForDataAsyncStatus.dataAvailable: handleHTTP1Request(connection, context); break;
+			}
+		} catch (Exception e) {
+			logException(e, "Failed to handle HTTP/2 frame chain");
+			connection.close();
+			return;
 		}
 	}
 }
@@ -117,7 +122,7 @@ private void handleHTTP1Request(ConnectionStream)(ConnectionStream connection, H
 	http_stream = connection;
 	bool keep_alive;
 	() @trusted {
-		import vibe.internal.utilallocator: RegionListAllocator;
+		import vibe.container.internal.utilallocator: RegionListAllocator;
 		version (VibeManualMemoryManagement)
 			scope request_allocator = new RegionListAllocator!(shared(Mallocator), false)(1024, Mallocator.instance);
 		else
@@ -194,10 +199,12 @@ private bool originalHandleRequest(InterfaceProxy!Stream http_stream, TCPConnect
 	// Error page handler
 	void errorOut(int code, string msg, string debug_msg, Throwable ex)
 	@safe {
+		import std.encoding : sanitize;
+
 		assert(!res.headerWritten);
 
 		// stack traces sometimes contain random bytes - make sure they are replaced
-		debug_msg = sanitizeUTF8(cast(const(ubyte)[])debug_msg);
+		debug_msg = () @trusted { return sanitize(debug_msg); } ();
 
 		res.setStatusCode(code);
 		if (settings.errorPageHandler) {

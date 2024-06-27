@@ -11,7 +11,6 @@ import vibe.core.file;
 import vibe.core.log;
 import vibe.core.sync : InterruptibleTaskMutex, performLocked;
 import vibe.http.server;
-import vibe.utils.array : FixedAppender;
 
 import std.array;
 import std.conv;

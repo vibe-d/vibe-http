@@ -10,14 +10,13 @@ import vibe.http.internal.http2.hpack.hpack;
 import vibe.http.internal.http2.hpack.exception;
 import vibe.http.server;
 
+import vibe.container.internal.utilallocator;
 import vibe.core.log;
 import vibe.core.net;
 import vibe.core.core;
 import vibe.core.stream;
 import vibe.stream.tls;
 import vibe.internal.array;
-import vibe.internal.allocator;
-import vibe.internal.utilallocator : RegionListAllocator;
 import vibe.internal.freelistref;
 import vibe.internal.interfaceproxy;
 
@@ -225,7 +224,7 @@ void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream,
 
 /// async frame handler: in charge of closing the connection if no data flows
 private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TCPConnection
-		connection, HTTP2ServerContext context) @safe
+		connection, HTTP2ServerContext context) @safe nothrow
 	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStream))
 {
 	logTrace("HTTP/2 Frame Chain Handler");
@@ -243,29 +242,35 @@ private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TC
 	}
 
 	while(true) {
-		CB cb = {stream, connection, context};
-		auto st = connection.waitForDataAsync(cb);
+		try {
+			CB cb = {stream, connection, context};
+			auto st = connection.waitForDataAsync(cb);
 
-		final switch(st) {
-			case WaitForDataAsyncStatus.waiting:
-				return;
+			final switch(st) {
+				case WaitForDataAsyncStatus.waiting:
+					return;
 
-			case WaitForDataAsyncStatus.noMoreData:
-				stream.finalize();
-				connection.close();
-				return;
-
-			case WaitForDataAsyncStatus.dataAvailable:
-				// start the frame handler
-				bool close = handleHTTP2Frame(stream, connection, context);
-
-				// determine if this connection needs to be closed
-				if(close) {
-					logTrace("Closing connection.");
+				case WaitForDataAsyncStatus.noMoreData:
 					stream.finalize();
 					connection.close();
 					return;
-				}
+
+				case WaitForDataAsyncStatus.dataAvailable:
+					// start the frame handler
+					bool close = handleHTTP2Frame(stream, connection, context);
+
+					// determine if this connection needs to be closed
+					if(close) {
+						logTrace("Closing connection.");
+						stream.finalize();
+						connection.close();
+						return;
+					}
+			}
+		} catch (Exception e) {
+			logException(e, "Failed to handle HTTP/2 frame chain");
+			connection.close();
+			return;
 		}
 	}
 }
@@ -275,7 +280,7 @@ private bool handleHTTP2Frame(ConnectionStream)(ConnectionStream stream, TCPConn
 		connection, HTTP2ServerContext context) @trusted
 	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStream))
 {
-	import vibe.internal.utilallocator: RegionListAllocator;
+	import vibe.container.internal.utilallocator: RegionListAllocator;
 	logTrace("HTTP/2 Frame Handler");
 
 	bool close = false;
@@ -379,7 +384,8 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 		header = payload.unpackHTTP2Frame(rawBuf.data, endStream, endHeaders, isAck, sdep);
 	} catch (HTTP2Exception e) {
 		if (stream.state != HTTP2StreamState.IDLE || stream.streamId == 0) {
-			auto f = buildGOAWAYFrame(stream.streamId, e.code);
+			ubyte[GOAWAYFrameLength] f;
+			f.buildGOAWAYFrame(stream.streamId, e.code);
 			stream.write(f);
 			stream.state = HTTP2StreamState.CLOSED;
 			logWarn("%s: %s", "Sent GOAWAY Frame", e.message);
@@ -662,15 +668,15 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 
 
 	} catch(HTTP2Exception e) {
-		auto f = buildGOAWAYFrame(stream.streamId, e.code);
+		ubyte[GOAWAYFrameLength] f;
+		f.buildGOAWAYFrame(stream.streamId, e.code);
 		stream.write(f);
 		logWarn("%s: %s", "Sent GOAWAY Frame", e.message);
 		stream.state = HTTP2StreamState.CLOSED;
 		return true;
-
-
 	} catch(HPACKException e) {
-		auto f = buildGOAWAYFrame(stream.streamId, HTTP2Error.COMPRESSION_ERROR);
+		ubyte[GOAWAYFrameLength] f;
+		f.buildGOAWAYFrame(stream.streamId, HTTP2Error.COMPRESSION_ERROR);
 		stream.write(f);
 		stream.state = HTTP2StreamState.CLOSED;
 		logWarn("%s: %s", "Sent GOAWAY Frame", e.message);
@@ -921,7 +927,7 @@ struct HTTP2ConnectionStream(CS)
 unittest {
 	import vibe.core.core : runApplication;
 	// empty handler, just to test if protocol switching works
-	void handleReq(HTTPServerRequest req, HTTPServerResponse res)
+	void handleReq(scope HTTPServerRequest req, scope HTTPServerResponse res)
 	@safe {
 		if (req.path == "/")
 			res.writeBody("Hello, World! This response is sent through HTTP/2");
@@ -931,14 +937,14 @@ unittest {
 	settings.port = 8090;
 	settings.bindAddresses = ["localhost"];
 
-	listenHTTP!handleReq(settings);
+	listenHTTP(settings, &handleReq);
 	//runApplication();
 }
 
 unittest {
 	import vibe.core.core : runApplication;
 
-	void handleRequest (HTTPServerRequest req, HTTPServerResponse res)
+	void handleRequest(scope HTTPServerRequest req, scope HTTPServerResponse res)
 	@safe {
 		if (req.path == "/")
 			res.writeBody("Hello, World! This response is sent through HTTP/2\n");
@@ -957,7 +963,7 @@ unittest {
 	settings.tlsContext.alpnCallback(http2Callback);
 
 	// dummy, just for testing
-	listenHTTP!handleRequest(settings);
+	listenHTTP(settings, &handleRequest);
 	//runApplication();
 }
 

@@ -5,11 +5,11 @@ import vibe.http.internal.http2.hpack.encoder;
 import vibe.http.internal.http2.hpack.decoder;
 import vibe.http.internal.http2.hpack.tables;
 
-
 import std.range;
 import std.typecons;
 import std.array; // appender
 import std.algorithm.iteration;
+import vibe.container.internal.utilallocator: RegionListAllocator;
 
 
 /// interface for the HPACK encoder
@@ -34,7 +34,6 @@ unittest {
 	//// Following examples can be found in Appendix C of the HPACK RFC
 	import vibe.http.status;
 	import vibe.http.common;
-	import vibe.internal.utilallocator: RegionListAllocator;
 	import std.experimental.allocator;
 	import std.experimental.allocator.gc_allocator;
 
@@ -141,7 +140,6 @@ unittest {
 unittest {
 	//// Following examples can be found in Appendix C of the HPACK RFC
 
-	import vibe.internal.utilallocator: RegionListAllocator;
 	import std.experimental.allocator;
 	import std.experimental.allocator.gc_allocator;
 
@@ -249,7 +247,6 @@ unittest {
 
 /// Mallocator
 unittest {
-	import vibe.internal.utilallocator: RegionListAllocator;
 	import std.experimental.allocator;
 	import std.experimental.allocator.mallocator;
 	import std.experimental.allocator.gc_allocator;

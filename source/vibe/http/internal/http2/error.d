@@ -3,13 +3,13 @@ module vibe.http.internal.http2.error;
 import vibe.http.internal.http2.hpack.exception;
 import vibe.http.internal.http2.frame;
 
+import vibe.container.internal.utilallocator;
 import vibe.core.log;
 import vibe.core.net;
 import vibe.core.core;
 import vibe.core.stream;
 import vibe.stream.tls;
 import vibe.internal.array;
-import vibe.internal.allocator;
 import vibe.internal.freelistref;
 import vibe.internal.interfaceproxy;
 
@@ -44,7 +44,7 @@ enum GOAWAYFrameLength = 17;
 
 /// creates a GOAWAY frame as defined in RFC 7540, section 6.8
 void buildGOAWAYFrame(R)(ref R buf, const uint streamId, HTTP2Error error)
-@safe @nogc
+@safe @nogc if (isOutputRange!(R, ubyte))
 {
 	assert(buf.length == GOAWAYFrameLength, "Unable to create GOAWAY frame");
 
@@ -56,14 +56,9 @@ void buildGOAWAYFrame(R)(ref R buf, const uint streamId, HTTP2Error error)
 	buf.putBytes!4(error);
 }
 /// ditto
-auto buildGOAWAYFrame(uint sid, HTTP2Error code) @safe
-{
-	BatchBuffer!(ubyte, GOAWAYFrameLength) gbuf;
-
-	gbuf.putN(GOAWAYFrameLength);
-	gbuf.buildGOAWAYFrame(sid, code);
-
-	return gbuf.peekDst;
+void buildGOAWAYFrame(ref ubyte[GOAWAYFrameLength] dst, uint sid, HTTP2Error code)
+@safe @nogc {
+	dst[].buildGOAWAYFrame(sid, code);
 }
 
 

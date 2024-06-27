@@ -22,9 +22,10 @@ import vibe.stream.tls;
 import vibe.stream.operations;
 import vibe.stream.wrapper : createConnectionProxyStream;
 import vibe.stream.zlib;
-import vibe.utils.array;
-import vibe.utils.dictionarylist;
-import vibe.internal.allocator;
+import vibe.container.dictionarylist;
+import vibe.container.internal.appender;
+import vibe.container.internal.utilallocator;
+import vibe.container.ringbuffer;
 import vibe.internal.freelistref;
 import vibe.internal.interfaceproxy : InterfaceProxy, interfaceProxy;
 
@@ -213,7 +214,7 @@ auto connectHTTP(string host, ushort port = 0, bool use_tls = false, const(HTTPC
 				ret.connect(host, port, use_tls, sttngs);
 				return ret;
 			});
-		if (s_connections.full) s_connections.popFront();
+		if (s_connections.full) s_connections.removeFront();
 		s_connections.put(tuple(ckey, pool));
 	}
 
@@ -230,7 +231,7 @@ static ~this()
 }
 
 private struct ConnInfo { string host; ushort port; bool useTLS; string proxyIP; ushort proxyPort; NetworkAddress bind_addr; }
-private static vibe.utils.array.FixedRingBuffer!(Tuple!(ConnInfo, ConnectionPool!HTTPClient), 16) s_connections;
+private static RingBuffer!(Tuple!(ConnInfo, ConnectionPool!HTTPClient), 16) s_connections;
 
 
 /**************************************************************************************************/
@@ -461,7 +462,6 @@ final class HTTPClient {
 	private void doProxyRequest(T, U)(ref T res, U requester, ref bool close_conn, ref bool has_body)
 	@trusted { // scope new
 		import std.conv : to;
-		import vibe.internal.utilallocator: RegionListAllocator;
 		version (VibeManualMemoryManagement)
 			scope request_allocator = new RegionListAllocator!(shared(Mallocator), false)(1024, Mallocator.instance);
 		else
@@ -533,7 +533,7 @@ final class HTTPClient {
 	*/
 	void request(scope void delegate(scope HTTPClientRequest req) requester, scope void delegate(scope HTTPClientResponse) responder)
 	@trusted { // scope new
-		import vibe.internal.utilallocator: RegionListAllocator;
+		import vibe.container.internal.utilallocator: RegionListAllocator;
 		version (VibeManualMemoryManagement)
 			scope request_allocator = new RegionListAllocator!(shared(Mallocator), false)(1024, Mallocator.instance);
 		else

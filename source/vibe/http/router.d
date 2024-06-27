@@ -957,7 +957,7 @@ private struct MatchGraphBuilder {
 		//logInfo("Disambiguate with %s initial nodes", m_nodes.length);
 		if (!m_nodes.length) return;
 
-		import vibe.utils.hashmap;
+		import vibe.container.hashmap : HashMap;
 		HashMap!(size_t, NodeIndex) combined_nodes;
 		Array!bool visited;
 		visited.length = m_nodes.length * 2;
