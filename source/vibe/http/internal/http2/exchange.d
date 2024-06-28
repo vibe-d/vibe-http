@@ -309,7 +309,9 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream,
 	parsed = true;
 	logTrace("persist: %s", req.persistent);
 	//keep_alive = req.persistent;
-	logDebug("Received %s request on stream ID %d", req.method, stream.streamId);
+	logDebug("Received request on stream ID %d: %s %s", stream.streamId, req.method, req.requestPath);
+	foreach (k, v; req.headers.byKeyValue)
+		logDebugV("%s: %s", k, v);
 
 	// utility to format the status line
 	auto statusLine = AllocAppender!string(alloc);
@@ -447,7 +449,7 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream,
 				}
 
 			} catch (Exception e) {
-				logDebug("[DATA] "~e.msg);
+				logException(e, "Failed to send DATA frame");
 				return;
 			}
 		}
