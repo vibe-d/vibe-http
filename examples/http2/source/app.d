@@ -49,18 +49,21 @@ void main()
 	auto settings = new HTTPServerSettings;
 	settings.port = 8090;
 	settings.bindAddresses = ["127.0.0.1"];
+	settings.options |= HTTPServerOption.enableHTTP2;
 	listenHTTP(settings, &handleReq);
 
 /* ==== cleartext HTTP/2 support (h2c) with a heavy DATA frame ==== */
 	auto bigSettings = new HTTPServerSettings;
-	settings.port = 8092;
-	settings.bindAddresses = ["127.0.0.1"];
-	listenHTTP(settings, &bigHandleReq!100000);
+	bigSettings.port = 8092;
+	bigSettings.bindAddresses = ["127.0.0.1"];
+	bigSettings.options |= HTTPServerOption.enableHTTP2;
+	listenHTTP(bigSettings, &bigHandleReq!100000);
 
 /* ========== HTTPS (h2) support ========== */
 	auto tlsSettings = new HTTPServerSettings;
 	tlsSettings.port = 8091;
 	tlsSettings.bindAddresses = ["127.0.0.1"];
+	tlsSettings.options |= HTTPServerOption.enableHTTP2;
 
 	/// setup TLS context by using cert and key in example rootdir
 	tlsSettings.tlsContext = createTLSContext(TLSContextKind.server);
@@ -75,6 +78,7 @@ void main()
 	auto bigTLSSettings = new HTTPServerSettings;
 	bigTLSSettings.port = 8093;
 	bigTLSSettings.bindAddresses = ["127.0.0.1"];
+	bigTLSSettings.options |= HTTPServerOption.enableHTTP2;
 
 	/// setup TLS context by using cert and key in example rootdir
 	bigTLSSettings.tlsContext = createTLSContext(TLSContextKind.server);

@@ -238,7 +238,7 @@ void handleHTTPConnection(TCPConnection connection, HTTPServerContext context)
 			tls_stream = createTLSStreamFL(http_stream, context.tlsContext, TLSStreamState.accepting, null, connection.remoteAddress);
 
 			Nullable!string proto = tls_stream.alpn;
-			if(!proto.isNull && proto == "h2") {
+			if(!proto.isNull && proto == "h2" && (context.m_virtualHosts[0].settings.options & HTTPServerOption.enableHTTP2)) {
 				HTTP2Settings settings;
 				auto h2context = new HTTP2ServerContext(context, settings);
 				handleHTTP2Connection(tls_stream, connection, h2context);
@@ -576,6 +576,8 @@ enum HTTPServerOption {
 	reusePort                 = 1<<8,
 	/// Enable address reuse in `listenTCP()`
 	reuseAddress              = 1<<10,
+	/// Enable *experimental* HTTP/2 support
+	enableHTTP2               = 1<<11,
 	/** The default set of options.
 
 		Includes all parsing options, as well as the `errorStackTraces`

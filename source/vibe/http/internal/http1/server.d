@@ -152,7 +152,7 @@ private bool handleRequest(TLSStreamType, Allocator)(StreamProxy http_stream, TC
 		}
 
 		// basic request parsing
-		uint h2 = parseRequestHeader(req, reqReader, request_allocator, settings.maxRequestHeaderSize, settings.maxRequestHeaderLineSize);
+		uint h2 = parseRequestHeader(req, reqReader, request_allocator, settings.maxRequestHeaderSize, settings.maxRequestHeaderLineSize, !!(settings.options & HTTPServerOption.enableHTTP2));
 		if (h2) {
 			import vibe.http.internal.http2.server : handleHTTP2Connection;
 			import vibe.http.internal.http2.settings : HTTP2ServerContext, HTTP2Settings;
@@ -358,7 +358,7 @@ private bool handleRequest(TLSStreamType, Allocator)(StreamProxy http_stream, TC
 }
 
 
-private uint parseRequestHeader(InputStream, Allocator)(HTTPServerRequest req, InputStream http_stream, Allocator alloc, ulong max_header_size, size_t max_header_line_size)
+private uint parseRequestHeader(InputStream, Allocator)(HTTPServerRequest req, InputStream http_stream, Allocator alloc, ulong max_header_size, size_t max_header_line_size, bool enable_http2)
 	if (isInputStream!InputStream)
 {
 	import std.string : indexOf;
@@ -369,7 +369,7 @@ private uint parseRequestHeader(InputStream, Allocator)(HTTPServerRequest req, I
 	logTrace("HTTP server reading status line");
 	auto reqln = () @trusted { return cast(string)stream.readLine(max_header_line_size, "\r\n", alloc); }();
 
-	if(reqln == "PRI * HTTP/2.0") return cast(uint)reqln.length;
+	if(reqln == "PRI * HTTP/2.0" && enable_http2) return cast(uint)reqln.length;
 
 	logTrace("--------------------");
 	logTrace("HTTP server request:");
