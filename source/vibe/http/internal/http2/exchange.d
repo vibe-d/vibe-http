@@ -256,6 +256,7 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream,
 		tcpc, h2context, headers, table, alloc); } ();
 	scope (exit) () @trusted { destroy(exchange); } ();
 	auto res = () @trusted { return alloc.make!HTTPServerResponse(exchange, settings, alloc); } ();
+	res.httpVersion = HTTPVersion.HTTP_2;
 
 	// setup compressed output
 	if (settings.useCompressionIfPossible) {
