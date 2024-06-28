@@ -216,9 +216,6 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream,
 		req.host = tcp_connection.localAddress.toString;
 	}
 
-	if(req.tls) req.requestURI = "https://" ~ req.host ~ req.path;
-	else req.requestURI = "http://" ~ req.host ~ req.path;
-
 	string reqhost;
 	ushort reqport = 0;
 	{
@@ -689,14 +686,18 @@ void parseHTTP2RequestHeader(R)(ref R headers, HTTPServerRequest req) @safe
 	if(!host.empty) req.host = cast(string)host[0].value;
 
 	//Path
-	req.requestPath = InetPath(cast(string)headers.find!((h,m) => h.name == m)(":path")[0].value);
+	auto pathstr = cast(string)headers.find!((h,m) => h.name == m)(":path")[0].value;
+	if(req.tls) req.requestURI = "https://" ~ req.host ~ pathstr;
+	else req.requestURI = "http://" ~ req.host ~ pathstr;
 
-	//URI
-	req.requestURI = req.host;
+	auto url = URL.parse(req.requestURI);
+	req.queryString = url.queryString;
+	req.username = url.username;
+	req.password = url.password;
+	req.requestPath = url.path;
 
 	//HTTP version
 	req.httpVersion = HTTPVersion.HTTP_2;
-
 
 	//headers
 	foreach(h; headers.filter!(f => !f.name.startsWith(":"))) {
