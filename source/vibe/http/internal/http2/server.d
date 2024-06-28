@@ -248,9 +248,11 @@ private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TC
 
 			final switch(st) {
 				case WaitForDataAsyncStatus.waiting:
+					logTrace("need to wait for more data asynchronously");
 					return;
 
 				case WaitForDataAsyncStatus.noMoreData:
+					logTrace("connection closed by remote side");
 					stream.finalize();
 					connection.close();
 					return;

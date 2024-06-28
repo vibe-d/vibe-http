@@ -239,6 +239,7 @@ void handleHTTPConnection(TCPConnection connection, HTTPServerContext context)
 
 			Nullable!string proto = tls_stream.alpn;
 			if(!proto.isNull && proto == "h2" && (context.m_virtualHosts[0].settings.options & HTTPServerOption.enableHTTP2)) {
+				logTrace("Using HTTP/2 as requested per ALPN");
 				HTTP2Settings settings;
 				auto h2context = new HTTP2ServerContext(context, settings);
 				handleHTTP2Connection(tls_stream, connection, h2context);
