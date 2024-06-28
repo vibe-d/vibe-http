@@ -44,20 +44,21 @@ void main()
 {
 	//import vibe.core.log;
 	//setLogLevel(LogLevel.trace);
+	HTTPListener[] listeners;
 
 /* ==== cleartext HTTP/2 support (h2c) ==== */
 	auto settings = new HTTPServerSettings;
 	settings.port = 8090;
 	settings.bindAddresses = ["127.0.0.1"];
 	settings.options |= HTTPServerOption.enableHTTP2;
-	listenHTTP(settings, &handleReq);
+	listeners ~= listenHTTP(settings, &handleReq);
 
 /* ==== cleartext HTTP/2 support (h2c) with a heavy DATA frame ==== */
 	auto bigSettings = new HTTPServerSettings;
 	bigSettings.port = 8092;
 	bigSettings.bindAddresses = ["127.0.0.1"];
 	bigSettings.options |= HTTPServerOption.enableHTTP2;
-	listenHTTP(bigSettings, &bigHandleReq!100000);
+	listeners ~= listenHTTP(bigSettings, &bigHandleReq!100000);
 
 /* ========== HTTPS (h2) support ========== */
 	auto tlsSettings = new HTTPServerSettings;
@@ -72,7 +73,7 @@ void main()
 
 	// set alpn callback to support HTTP/2 protocol negotiation
 	tlsSettings.tlsContext.alpnCallback(http2Callback);
-	listenHTTP(tlsSettings, &tlsHandleReq);
+	listeners ~= listenHTTP(tlsSettings, &tlsHandleReq);
 
 /* ========== HTTPS (h2) support with a heavy DATA frame ========== */
 	auto bigTLSSettings = new HTTPServerSettings;
@@ -87,8 +88,11 @@ void main()
 
 	// set alpn callback to support HTTP/2 protocol negotiation
 	bigTLSSettings.tlsContext.alpnCallback(http2Callback);
-	auto l = listenHTTP(bigTLSSettings, &bigHandleReq!100000);
-	scope(exit) l.stopListening();
+	listeners ~= listenHTTP(bigTLSSettings, &bigHandleReq!100000);
+
+	scope(exit)
+		foreach (l; listeners)
+			l.stopListening();
 
 /* ========== Run both `listenHTTP` handlers ========== */
 	// UNCOMMENT to run
