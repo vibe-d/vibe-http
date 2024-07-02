@@ -982,13 +982,18 @@ final class HTTPServerRequest : HTTPRequest {
 		the request URI. By default, the first cookie will be returned, which is
 		the or one of the cookies with the closest path match.
 	*/
-	@property ref inout CookieValueMap cookies()
+	@property ref CookieValueMap cookies()
 	@safe return {
 		if (m_cookies.isNull) {
 			m_cookies = CookieValueMap.init;
 			if (auto pv = "cookie" in headers)
 				parseCookies(*pv, m_cookies.get);
 		}
+		return m_cookies.get;
+	}
+
+	@property ref const CookieValueMap cookies() cons
+	{
 		return m_cookies.get;
 	}
 
