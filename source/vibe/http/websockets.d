@@ -573,7 +573,7 @@ scope:
 		this(conn, null, null, rng, client_res);
 	}
 
-	private this(ConnectionStream conn, in HTTPServerRequest request, HTTPServerResponse res)
+	private this(ConnectionStream conn, HTTPServerRequest request, HTTPServerResponse res)
 	{
 		this(conn, request, res, null, null);
 	}
