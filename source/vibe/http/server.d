@@ -992,7 +992,7 @@ final class HTTPServerRequest : HTTPRequest {
 		return m_cookies.get;
 	}
 
-	@property ref const CookieValueMap cookies() cons
+	@property ref const CookieValueMap cookies() const
 	{
 		return m_cookies.get;
 	}
