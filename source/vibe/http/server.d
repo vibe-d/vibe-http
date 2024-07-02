@@ -982,7 +982,7 @@ final class HTTPServerRequest : HTTPRequest {
 		the request URI. By default, the first cookie will be returned, which is
 		the or one of the cookies with the closest path match.
 	*/
-	@property ref CookieValueMap cookies()
+	@property ref inout CookieValueMap cookies()
 	@safe return {
 		if (m_cookies.isNull) {
 			m_cookies = CookieValueMap.init;
