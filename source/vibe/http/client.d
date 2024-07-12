@@ -774,7 +774,12 @@ final class HTTPClient {
 
 private auto connectTCPWithTimeout(NetworkAddress addr, NetworkAddress bind_address, Duration timeout)
 {
-	return connectTCP(addr, bind_address, timeout);
+	auto ret = connectTCP(addr, bind_address, timeout);
+
+	// Avoid additional latency in the request-response cycle
+	ret.tcpNoDelay = true;
+
+	return ret;
 }
 
 /**
