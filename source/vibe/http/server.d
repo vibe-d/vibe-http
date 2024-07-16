@@ -26,7 +26,6 @@ import vibe.stream.counting;
 import vibe.stream.operations;
 import vibe.stream.tls;
 import vibe.stream.wrapper : ConnectionProxyStream, createConnectionProxyStream, createConnectionProxyStreamFL;
-import vibe.stream.zlib;
 import vibe.textfilter.urlencode;
 import vibe.internal.freelistref;
 import vibe.internal.string : formatAlloc, icmp2;
@@ -195,6 +194,16 @@ unittest
 */
 void handleHTTPConnection(TCPConnection connection, HTTPServerContext context)
 @safe {
+	import vibe.http.internal.http1.server : handleHTTP1Connection;
+	import vibe.http.internal.http2.server : handleHTTP2Connection;
+	import vibe.http.internal.http2.settings : HTTP2ServerContext, HTTP2Settings;
+
+	version(HaveNoTLS) {
+		alias TLSStreamType = Stream;
+	} else {
+		alias TLSStreamType = ReturnType!(createTLSStreamFL!(InterfaceProxy!Stream));
+	}
+
 	InterfaceProxy!Stream http_stream;
 	http_stream = connection;
 
@@ -213,9 +222,7 @@ void handleHTTPConnection(TCPConnection connection, HTTPServerContext context)
 	// based driver.
 	connection.tcpNoDelay = true;
 
-	version(HaveNoTLS) {} else {
-		TLSStreamType tls_stream;
-	}
+	TLSStreamType tls_stream;
 
 	if (!connection.waitForData(10.seconds())) {
 		logDebug("Client didn't send the initial request in a timely manner. Closing connection.");
@@ -229,35 +236,21 @@ void handleHTTPConnection(TCPConnection connection, HTTPServerContext context)
 			logDebug("Accept TLS connection: %s", context.tlsContext.kind);
 			// TODO: reverse DNS lookup for peer_name of the incoming connection for TLS client certificate verification purposes
 			tls_stream = createTLSStreamFL(http_stream, context.tlsContext, TLSStreamState.accepting, null, connection.remoteAddress);
+
+			Nullable!string proto = tls_stream.alpn;
+			if(!proto.isNull && proto == "h2" && (context.m_virtualHosts[0].settings.options & HTTPServerOption.enableHTTP2)) {
+				logTrace("Using HTTP/2 as requested per ALPN");
+				HTTP2Settings settings;
+				auto h2context = new HTTP2ServerContext(context, settings);
+				handleHTTP2Connection(tls_stream, connection, h2context);
+				return;
+			}
+
 			http_stream = tls_stream;
 		}
 	}
 
-	while (!connection.empty) {
-		HTTPServerSettings settings;
-		bool keep_alive;
-
-		version(HaveNoTLS) {} else {
-			// handle oderly TLS shutdowns
-			if (tls_stream && tls_stream.empty) break;
-		}
-
-		() @trusted {
-			scope request_allocator = createRequestAllocator();
-			scope (exit) freeRequestAllocator(request_allocator);
-
-			handleRequest(http_stream, connection, context, settings, keep_alive, request_allocator);
-		} ();
-		if (!keep_alive) { logTrace("No keep-alive - disconnecting client."); break; }
-
-		logTrace("Waiting for next request...");
-		// wait for another possible request on a keep-alive connection
-		if (!connection.waitForData(settings.keepAliveTimeout)) {
-			if (!connection.connected) logTrace("Client disconnected.");
-			else logDebug("Keep-alive connection timed out!");
-			break;
-		}
-	}
+	handleHTTP1Connection(connection, tls_stream, http_stream, context);
 
 	logTrace("Done handling connection.");
 }
@@ -481,7 +474,8 @@ HTTPServerResponse createTestHTTPServerResponse(OutputStream data_sink = null,
 	SessionStore session_store = null,
 	TestHTTPResponseMode data_mode = TestHTTPResponseMode.plain)
 @safe {
-	import vibe.stream.wrapper;
+	import vibe.stream.wrapper : createProxyStream;
+	import vibe.http.internal.http1.server : HTTP1ServerExchange;
 
 	HTTPServerSettings settings;
 	if (session_store) {
@@ -489,14 +483,21 @@ HTTPServerResponse createTestHTTPServerResponse(OutputStream data_sink = null,
 		settings.sessionStore = session_store;
 	}
 
-	InterfaceProxy!Stream outstr;
+	final class TestExchange : HTTP1ServerExchange {
+		this(StreamProxy conn, OutputStream body_writer)
+		{
+			super(conn, ConnectionStreamProxy.init);
+			m_bodyWriter = body_writer;
+		}
+	}
+
+	StreamProxy outstr;
 	if (data_sink && data_mode == TestHTTPResponseMode.plain)
 		outstr = createProxyStream(Stream.init, data_sink);
 	else outstr = createProxyStream(Stream.init, nullSink);
 
-	auto ret = new HTTPServerResponse(outstr, InterfaceProxy!ConnectionStream.init,
-		settings, () @trusted { return vibeThreadAllocator(); } ());
-	if (data_sink && data_mode == TestHTTPResponseMode.bodyOnly) ret.m_bodyWriter = data_sink;
+	auto exchange = new TestExchange(outstr, data_sink && data_mode == TestHTTPResponseMode.bodyOnly ? data_sink : null);
+	auto ret = new HTTPServerResponse(exchange, settings, () @trusted { return vibeThreadAllocator(); } ());
 	return ret;
 }
 
@@ -576,6 +577,8 @@ enum HTTPServerOption {
 	reusePort                 = 1<<8,
 	/// Enable address reuse in `listenTCP()`
 	reuseAddress              = 1<<10,
+	/// Enable *experimental* HTTP/2 support
+	enableHTTP2               = 1<<11,
 	/** The default set of options.
 
 		Includes all parsing options, as well as the `errorStackTraces`
@@ -667,7 +670,7 @@ final class HTTPServerSettings {
 		this.errorPageHandler = (req, res, err) @trusted { del(req, res, err); };
 	}
 
-	private HTTPServerErrorPageHandler errorPageHandler_ = null;
+	package HTTPServerErrorPageHandler errorPageHandler_ = null;
 
 	/// If set, a HTTPS server will be started instead of plain HTTP.
 	TLSContext tlsContext;
@@ -850,7 +853,7 @@ final class HTTPServerRequest : HTTPRequest {
 	import std.variant : Variant;
 	import vibe.container.dictionarylist : DictionaryList;
 
-	private {
+	package {
 		SysTime m_timeCreated;
 		HTTPServerSettings m_settings;
 		ushort m_port;
@@ -1181,35 +1184,33 @@ final class HTTPServerRequest : HTTPRequest {
 final class HTTPServerResponse : HTTPResponse {
 	alias Allocator = typeof(vibeThreadAllocator());
 
-	private {
-		InterfaceProxy!Stream m_conn;
-		InterfaceProxy!ConnectionStream m_rawConnection;
-		InterfaceProxy!OutputStream m_bodyWriter;
+	package {
+		HTTPServerExchange m_exchange;
 		Allocator m_requestAlloc;
-		FreeListRef!ChunkedOutputStream m_chunkedBodyWriter;
-		FreeListRef!CountingOutputStream m_countingWriter;
-		FreeListRef!ZlibOutputStream m_zlibOutputStream;
 		HTTPServerSettings m_settings;
 		Session m_session;
-		bool m_headerWritten = false;
-		bool m_isHeadResponse = false;
 		bool m_tls;
-		bool m_requiresConnectionClose;
 		SysTime m_timeFinalized;
 	}
 
-	static if (!is(Stream == InterfaceProxy!Stream)) {
+	static if (!is(Stream == StreamProxy)) {
+		deprecated("Use the constructor taking a HTTPServerExchange argument instead")
 		this(Stream conn, ConnectionStream raw_connection, HTTPServerSettings settings, Allocator req_alloc)
 		@safe scope {
-			this(InterfaceProxy!Stream(conn), InterfaceProxy!ConnectionStream(raw_connection), settings, req_alloc);
+			this(StreamProxy(conn), InterfaceProxy!ConnectionStream(raw_connection), settings, req_alloc);
 		}
 	}
 
-	this(InterfaceProxy!Stream conn, InterfaceProxy!ConnectionStream raw_connection, HTTPServerSettings settings, Allocator req_alloc)
+	deprecated("Use the constructor taking a HTTPServerExchange argument instead")
+	this(StreamProxy conn, ConnectionStreamProxy raw_connection, HTTPServerSettings settings, Allocator req_alloc)
 	@safe scope {
-		m_conn = conn;
-		m_rawConnection = raw_connection;
-		m_countingWriter = createCountingOutputStreamFL(conn);
+		import vibe.http.internal.http1.server : HTTP1ServerExchange;
+		this(new HTTP1ServerExchange(conn, raw_connection), settings, req_alloc);
+	}
+
+	this(HTTPServerExchange exchange, HTTPServerSettings settings, Allocator req_alloc)
+	@safe {
+		m_exchange = exchange;
 		m_settings = settings;
 		m_requestAlloc = req_alloc;
 	}
@@ -1264,11 +1265,11 @@ scope:
 
 	/** Determines if the HTTP header has already been written.
 	*/
-	@property bool headerWritten() const @safe { return m_headerWritten; }
+	@property bool headerWritten() const @safe { return m_exchange.headerWritten; }
 
 	/** Determines if the response does not need a body.
 	*/
-	bool isHeadResponse() const @safe { return m_isHeadResponse; }
+	bool isHeadResponse() const @safe { return m_exchange.isHeadResponse; }
 
 	/** Determines if the response is sent over an encrypted connection.
 	*/
@@ -1346,26 +1347,13 @@ scope:
 	void writeRawBody(RandomAccessStream)(RandomAccessStream stream) @safe
 		if (isRandomAccessStream!RandomAccessStream)
 	{
-		assert(!m_headerWritten, "A body was already written!");
-		writeHeader();
-		if (m_isHeadResponse) return;
-
-		auto bytes = stream.size - stream.tell();
-		stream.pipe(m_conn);
-		m_countingWriter.increment(bytes);
+		m_exchange.writeBody(this, RandomAccessStreamProxy(stream));
 	}
 	/// ditto
-	void writeRawBody(InputStream)(InputStream stream, size_t num_bytes = 0) @safe
+	void writeRawBody(InputStream)(InputStream stream, size_t num_bytes = size_t.max) @safe
 		if (isInputStream!InputStream && !isRandomAccessStream!InputStream)
 	{
-		assert(!m_headerWritten, "A body was already written!");
-		writeHeader();
-		if (m_isHeadResponse) return;
-
-		if (num_bytes > 0) {
-			stream.pipe(m_conn, num_bytes);
-			m_countingWriter.increment(num_bytes);
-		} else stream.pipe(m_countingWriter, num_bytes);
+		m_exchange.writeBody(this, InputStreamProxy(stream), num_bytes == 0 ? size_t.max : num_bytes);
 	}
 	/// ditto
 	void writeRawBody(RandomAccessStream)(RandomAccessStream stream, int status) @safe
@@ -1450,13 +1438,7 @@ scope:
 	 */
 	void writeVoidBody()
 	@safe {
-		if (!m_isHeadResponse) {
-			assert("Content-Length" !in headers);
-			assert("Transfer-Encoding" !in headers);
-		}
-		assert(!headerWritten);
-		writeHeader();
-		m_conn.flush();
+		m_exchange.writeVoidBody(this);
 	}
 
 	/** A stream for writing the body of the HTTP response.
@@ -1466,64 +1448,8 @@ scope:
 	*/
 	@property InterfaceProxy!OutputStream bodyWriter()
 	@safe scope {
-		assert(!!m_conn);
-		if (m_bodyWriter) {
-			// for test responses, the body writer is pre-set, without headers
-			// being written, so we may need to do that here
-			if (!m_headerWritten) writeHeader();
-
-			return m_bodyWriter;
-		}
-
-		assert(!m_headerWritten, "A void body was already written!");
-		assert(this.statusCode >= 200, "1xx responses can't have body");
-
-		if (m_isHeadResponse) {
-			// for HEAD requests, we define a NullOutputWriter for convenience
-			// - no body will be written. However, the request handler should call writeVoidBody()
-			// and skip writing of the body in this case.
-			if ("Content-Length" !in headers)
-				headers["Transfer-Encoding"] = "chunked";
-			writeHeader();
-			m_bodyWriter = nullSink;
-			return m_bodyWriter;
-		}
-
-		if ("Content-Encoding" in headers && "Content-Length" in headers) {
-			// we do not known how large the compressed body will be in advance
-			// so remove the content-length and use chunked transfer
-			headers.remove("Content-Length");
-		}
-
-		if (auto pcl = "Content-Length" in headers) {
-			writeHeader();
-			m_countingWriter.writeLimit = (*pcl).to!ulong;
-			m_bodyWriter = m_countingWriter;
-		} else if (httpVersion <= HTTPVersion.HTTP_1_0) {
-			if ("Connection" in headers)
-				headers.remove("Connection"); // default to "close"
-			writeHeader();
-			m_bodyWriter = m_conn;
-		} else {
-			headers["Transfer-Encoding"] = "chunked";
-			writeHeader();
-			m_chunkedBodyWriter = createChunkedOutputStreamFL(m_countingWriter);
-			m_bodyWriter = m_chunkedBodyWriter;
-		}
-
-		if (auto pce = "Content-Encoding" in headers) {
-			if (icmp2(*pce, "gzip") == 0) {
-				m_zlibOutputStream = createGzipOutputStreamFL(m_bodyWriter);
-				m_bodyWriter = m_zlibOutputStream;
-			} else if (icmp2(*pce, "deflate") == 0) {
-				m_zlibOutputStream = createDeflateOutputStreamFL(m_bodyWriter);
-				m_bodyWriter = m_zlibOutputStream;
-			} else {
-				logWarn("Unsupported Content-Encoding set in response: '"~*pce~"'");
-			}
-		}
-
-		return m_bodyWriter;
+		assert(!!m_exchange);
+		return m_exchange.bodyWriter(this);
 	}
 
 
@@ -1540,26 +1466,12 @@ scope:
 	*/
 	ConnectionStream switchProtocol(string protocol)
 	@safe {
-		statusCode = HTTPStatus.switchingProtocols;
-		if (protocol.length) headers["Upgrade"] = protocol;
-		writeVoidBody();
-		m_requiresConnectionClose = true;
-		m_headerWritten = true;
-		return createConnectionProxyStream(m_conn, m_rawConnection);
+		return m_exchange.switchProtocol(this, protocol);
 	}
 	/// ditto
 	void switchProtocol(string protocol, scope void delegate(scope ConnectionStream) @safe del)
 	@safe {
-		statusCode = HTTPStatus.switchingProtocols;
-		if (protocol.length) headers["Upgrade"] = protocol;
-		writeVoidBody();
-		m_requiresConnectionClose = true;
-		m_headerWritten = true;
-		() @trusted {
-			auto conn = createConnectionProxyStreamFL(m_conn, m_rawConnection);
-			del(conn);
-		} ();
-		finalize();
+		m_exchange.switchProtocol(this, protocol, del);
 	}
 
 	/** Special method for handling CONNECT proxy tunnel
@@ -1570,16 +1482,12 @@ scope:
 	*/
 	ConnectionStream connectProxy()
 	@safe {
-		return createConnectionProxyStream(m_conn, m_rawConnection);
+		return m_exchange.connectProxy(this);
 	}
 	/// ditto
 	void connectProxy(scope void delegate(scope ConnectionStream) @safe del)
 	@safe {
-		() @trusted {
-			auto conn = createConnectionProxyStreamFL(m_conn, m_rawConnection);
-			del(conn);
-		} ();
-		finalize();
+		m_exchange.connectProxy(this, del);
 	}
 
 	/** Sets the specified cookie value.
@@ -1649,7 +1557,7 @@ scope:
 		m_session = Session.init;
 	}
 
-	@property ulong bytesWritten() @safe const { return m_countingWriter.bytesWritten; }
+	@property ulong bytesWritten() @safe const { return m_exchange.bytesWritten; }
 
 	/**
 		Waits until either the connection closes, data arrives, or until the
@@ -1663,9 +1571,7 @@ scope:
 	*/
 	bool waitForConnectionClose(Duration timeout = Duration.max)
 	@safe {
-		if (!m_rawConnection || !m_rawConnection.connected) return true;
-		m_rawConnection.waitForData(timeout);
-		return !m_rawConnection.connected;
+		return m_exchange.waitForConnectionClose(timeout);
 	}
 
 	/**
@@ -1678,8 +1584,7 @@ scope:
 	*/
 	@property bool connected()
 	@safe const {
-		if (!m_rawConnection) return false;
-		return m_rawConnection.connected;
+		return m_exchange.connected;
 	}
 
 	/**
@@ -1691,85 +1596,29 @@ scope:
 	*/
 	void finalize()
 	@safe {
-		if (m_zlibOutputStream) {
-			m_zlibOutputStream.finalize();
-			m_zlibOutputStream.destroy();
-		}
-		if (m_chunkedBodyWriter) {
-			m_chunkedBodyWriter.finalize();
-			m_chunkedBodyWriter.destroy();
-		}
-
-		// ignore exceptions caused by an already closed connection - the client
-		// may have closed the connection already and this doesn't usually indicate
-		// a problem.
-		if (m_rawConnection && m_rawConnection.connected) {
-			try if (m_conn) m_conn.flush();
-			catch (Exception e) logDebug("Failed to flush connection after finishing HTTP response: %s", e.msg);
-			if (!isHeadResponse && bytesWritten < headers.get("Content-Length", "0").to!ulong) {
-				logDebug("HTTP response only written partially before finalization. Terminating connection.");
-				m_requiresConnectionClose = true;
-			}
-
-			m_rawConnection = InterfaceProxy!ConnectionStream.init;
-		}
-
-		if (m_conn) {
-			m_conn = InterfaceProxy!Stream.init;
-			m_timeFinalized = Clock.currTime(UTC());
-		}
-	}
-
-	private void writeHeader()
-	@safe {
-		import vibe.stream.wrapper;
-
-		assert(!m_headerWritten, "Try to write header after body has already begun.");
-		assert(this.httpVersion != HTTPVersion.HTTP_1_0 || this.statusCode >= 200, "Informational status codes aren't supported by HTTP/1.0.");
-
-		// Don't set m_headerWritten for 1xx status codes
-		if (this.statusCode >= 200) m_headerWritten = true;
-		auto dst = streamOutputRange!1024(m_conn);
-
-		void writeLine(T...)(string fmt, T args)
-		@safe {
-			formattedWrite(() @trusted { return &dst; } (), fmt, args);
-			dst.put("\r\n");
-			logTrace(fmt, args);
-		}
-
-		logTrace("---------------------");
-		logTrace("HTTP server response:");
-		logTrace("---------------------");
-
-		// write the status line
-		writeLine("%s %d %s",
-			getHTTPVersionString(this.httpVersion),
-			this.statusCode,
-			this.statusPhrase.length ? this.statusPhrase : httpStatusText(this.statusCode));
-
-		// write all normal headers
-		foreach (k, v; this.headers.byKeyValue) {
-			dst.put(k);
-			dst.put(": ");
-			dst.put(v);
-			dst.put("\r\n");
-			logTrace("%s: %s", k, v);
-		}
-
-		logTrace("---------------------");
-
-		// write cookies
-		foreach (n, cookie; () @trusted { return this.cookies.byKeyValue; } ()) {
-			dst.put("Set-Cookie: ");
-			cookie.writeString(() @trusted { return &dst; } (), n);
-			dst.put("\r\n");
-		}
-
-		// finalize response header
-		dst.put("\r\n");
+		m_exchange.finalize(this);
 	}
 }
+
+interface HTTPServerExchange {
+@safe:
+	@property bool isHeadResponse() const;
+	@property bool headerWritten() const;
+	@property ulong bytesWritten() const;
+	@property bool connected() const;
+
+	bool waitForConnectionClose(Duration timeout);
+	void writeBody(HTTPServerResponse res, RandomAccessStreamProxy streamx);
+	void writeBody(HTTPServerResponse res, InputStreamProxy stream, ulong num_bytes = ulong.max);
+	void writeVoidBody(HTTPServerResponse res);
+	OutputStreamProxy bodyWriter(HTTPServerResponse res);
+	ConnectionStream switchProtocol(HTTPServerResponse res, string protocol);
+	void switchProtocol(HTTPServerResponse res, string protocol, scope void delegate(scope ConnectionStream) @safe del);
+	ConnectionStream connectProxy(HTTPServerResponse res);
+	void connectProxy(HTTPServerResponse res, scope void delegate(scope ConnectionStream) @safe del);
+	void finalize(HTTPServerResponse res);
+}
+
 
 /**
 	Represents the request listener for a specific `listenHTTP` call.
@@ -1831,14 +1680,14 @@ struct HTTPListener {
 	unique name.
 */
 final class HTTPServerContext {
-	private struct VirtualHost {
+	package struct VirtualHost {
 		HTTPServerRequestDelegate requestHandler;
 		HTTPServerSettings settings;
 		HTTPLogger[] loggers;
 		size_t id;
 	}
 
-	private {
+	package {
 		TCPListener m_listener;
 		VirtualHost[] m_virtualHosts;
 		string m_bindAddress;
@@ -1960,7 +1809,7 @@ final class HTTPServerContext {
 /* Private types                                                                                  */
 /**************************************************************************************************/
 
-private final class LimitedHTTPInputStream : LimitedInputStream {
+package final class LimitedHTTPInputStream : LimitedInputStream {
 @safe:
 
 	this(InterfaceProxy!InputStream stream, ulong byte_limit, bool silent_limit = false) {
@@ -1971,7 +1820,7 @@ private final class LimitedHTTPInputStream : LimitedInputStream {
 	}
 }
 
-private final class TimeoutHTTPInputStream : InputStream {
+package final class TimeoutHTTPInputStream : InputStream {
 @safe:
 
 	private {
@@ -2100,315 +1949,6 @@ private HTTPListener listenHTTPPlain(HTTPServerSettings settings, HTTPServerRequ
 	return HTTPListener(vid);
 }
 
-private alias TLSStreamType = ReturnType!(createTLSStreamFL!(InterfaceProxy!Stream));
-
-
-private bool handleRequest(Allocator)(InterfaceProxy!Stream http_stream, TCPConnection tcp_connection, HTTPServerContext listen_info, ref HTTPServerSettings settings, ref bool keep_alive, scope Allocator request_allocator)
-@safe {
-	import std.algorithm.searching : canFind;
-
-	SysTime reqtime = Clock.currTime(UTC());
-
-	// some instances that live only while the request is running
-	FreeListRef!HTTPServerRequest req = FreeListRef!HTTPServerRequest(reqtime, listen_info.bindPort);
-	FreeListRef!TimeoutHTTPInputStream timeout_http_input_stream;
-	FreeListRef!LimitedHTTPInputStream limited_http_input_stream;
-	FreeListRef!ChunkedInputStream chunked_input_stream;
-
-	// store the IP address
-	req.clientAddress = tcp_connection.remoteAddress;
-
-	if (!listen_info.hasVirtualHosts) {
-		logWarn("Didn't find a HTTP listening context for incoming connection. Dropping.");
-		keep_alive = false;
-		return false;
-	}
-
-	// Default to the first virtual host for this listener
-	HTTPServerContext.VirtualHost context = listen_info.m_virtualHosts[0];
-	HTTPServerRequestDelegate request_task = context.requestHandler;
-	settings = context.settings;
-
-	// temporarily set to the default settings, the virtual host specific settings will be set further down
-	req.m_settings = settings;
-
-	// Create the response object
-	InterfaceProxy!ConnectionStream cproxy = tcp_connection;
-	auto res = FreeListRef!HTTPServerResponse(http_stream, cproxy, settings, request_allocator/*.Scoped_payload*/);
-	req.tls = res.m_tls = listen_info.tlsContext !is null;
-	if (req.tls) {
-		version (HaveNoTLS) assert(false);
-		else {
-			static if (is(InterfaceProxy!ConnectionStream == ConnectionStream))
-				req.clientCertificate = (cast(TLSStream)http_stream).peerCertificate;
-			else
-				req.clientCertificate = http_stream.extract!TLSStreamType.peerCertificate;
-		}
-	}
-
-	// Error page handler
-	void errorOut(int code, string msg, string debug_msg, Throwable ex)
-	@safe {
-		assert(!res.headerWritten);
-
-		res.statusCode = code;
-		if (settings && settings.errorPageHandler) {
-			/*scope*/ auto err = new HTTPServerErrorInfo;
-			err.code = code;
-			err.message = msg;
-			err.debugMessage = debug_msg;
-			err.exception = ex;
-			settings.errorPageHandler_(req, res, err);
-		} else {
-			if (debug_msg.length)
-				res.writeBody(format("%s - %s\n\n%s\n\nInternal error information:\n%s", code, httpStatusText(code), msg, debug_msg));
-			else res.writeBody(format("%s - %s\n\n%s", code, httpStatusText(code), msg));
-		}
-		assert(res.headerWritten);
-	}
-
-	bool parsed = false;
-	/*bool*/ keep_alive = false;
-
-	// parse the request
-	try {
-		logTrace("reading request..");
-
-		// limit the total request time
-		InterfaceProxy!InputStream reqReader = http_stream;
-		if (settings.maxRequestTime > dur!"seconds"(0) && settings.maxRequestTime != Duration.max) {
-			timeout_http_input_stream = FreeListRef!TimeoutHTTPInputStream(reqReader, settings.maxRequestTime, reqtime);
-			reqReader = timeout_http_input_stream;
-		}
-
-		// basic request parsing
-		parseRequestHeader(req, reqReader, request_allocator, settings.maxRequestHeaderSize, settings.maxRequestHeaderLineSize);
-		logTrace("Got request header.");
-
-		// find the matching virtual host
-		string reqhost;
-		ushort reqport = 0;
-		{
-			string s = req.host;
-			enforceHTTP(s.length > 0 || req.httpVersion <= HTTPVersion.HTTP_1_0, HTTPStatus.badRequest, "Missing Host header.");
-			if (s.startsWith('[')) { // IPv6 address
-				auto idx = s.indexOf(']');
-				enforce(idx > 0, "Missing closing ']' for IPv6 address.");
-				reqhost = s[1 .. idx];
-				s = s[idx+1 .. $];
-			} else if (s.length) { // host name or IPv4 address
-				auto idx = s.indexOf(':');
-				if (idx < 0) idx = s.length;
-				enforceHTTP(idx > 0, HTTPStatus.badRequest, "Missing Host header.");
-				reqhost = s[0 .. idx];
-				s = s[idx .. $];
-			}
-			if (s.startsWith(':')) reqport = s[1 .. $].to!ushort;
-		}
-
-		foreach (ctx; listen_info.m_virtualHosts)
-			if (icmp2(ctx.settings.hostName, reqhost) == 0 &&
-				(!reqport || reqport == ctx.settings.port))
-			{
-				context = ctx;
-				settings = ctx.settings;
-				request_task = ctx.requestHandler;
-				break;
-			}
-		req.m_settings = settings;
-		res.m_settings = settings;
-
-		// setup compressed output
-		if (settings.useCompressionIfPossible) {
-			if (auto pae = "Accept-Encoding" in req.headers) {
-				if (canFind(*pae, "gzip")) {
-					res.headers["Content-Encoding"] = "gzip";
-				} else if (canFind(*pae, "deflate")) {
-					res.headers["Content-Encoding"] = "deflate";
-				}
-			}
-		}
-
-		// limit request size
-		if (auto pcl = "Content-Length" in req.headers) {
-			string v = *pcl;
-			auto contentLength = parse!ulong(v); // DMDBUG: to! thinks there is a H in the string
-			enforceBadRequest(v.length == 0, "Invalid content-length");
-			enforceBadRequest(settings.maxRequestSize <= 0 || contentLength <= settings.maxRequestSize, "Request size too big");
-			limited_http_input_stream = FreeListRef!LimitedHTTPInputStream(reqReader, contentLength);
-		} else if (auto pt = "Transfer-Encoding" in req.headers) {
-			enforceBadRequest(icmp(*pt, "chunked") == 0);
-			chunked_input_stream = createChunkedInputStreamFL(reqReader);
-			InterfaceProxy!InputStream ciproxy = chunked_input_stream;
-			limited_http_input_stream = FreeListRef!LimitedHTTPInputStream(ciproxy, settings.maxRequestSize, true);
-		} else {
-			limited_http_input_stream = FreeListRef!LimitedHTTPInputStream(reqReader, 0);
-		}
-		req.bodyReader = limited_http_input_stream;
-
-		// handle Expect header
-		if (auto pv = "Expect" in req.headers) {
-			if (icmp2(*pv, "100-continue") == 0) {
-				logTrace("sending 100 continue");
-				http_stream.write("HTTP/1.1 100 Continue\r\n\r\n");
-			}
-		}
-
-		// eagerly parse the URL as its lightweight and defacto @nogc
-		auto url = URL.parse(req.requestURI);
-		req.queryString = url.queryString;
-		req.username = url.username;
-		req.password = url.password;
-		req.requestPath = url.path;
-
-		// lookup the session
-		if (settings.sessionStore) {
-			// use the first cookie that contains a valid session ID in case
-			// of multiple matching session cookies
-			foreach (val; req.cookies.getAll(settings.sessionIdCookie)) {
-				req.session = settings.sessionStore.open(val);
-				res.m_session = req.session;
-				if (req.session) break;
-			}
-		}
-
-		// write default headers
-		if (req.method == HTTPMethod.HEAD) res.m_isHeadResponse = true;
-		if (settings.serverString.length)
-			res.headers["Server"] = settings.serverString;
-		res.headers["Date"] = formatRFC822DateAlloc(reqtime);
-		if (req.persistent)
-			res.headers["Keep-Alive"] = formatAlloc(
-				request_allocator, "timeout=%d", settings.keepAliveTimeout.total!"seconds"());
-
-		// finished parsing the request
-		parsed = true;
-		logTrace("persist: %s", req.persistent);
-		keep_alive = req.persistent;
-
-		if (context.settings.rejectConnectionPredicate !is null)
-		{
-			import std.socket : Address, parseAddress;
-
-			auto forward = req.headers.get("X-Forwarded-For", null);
-			if (forward !is null)
-			{
-				try {
-					auto ix = forward.indexOf(',');
-					if (ix != -1)
-						forward = forward[0 .. ix];
-					if (context.settings.rejectConnectionPredicate(NetworkAddress(parseAddress(forward))))
-						errorOut(HTTPStatus.forbidden,
-							httpStatusText(HTTPStatus.forbidden), null, null);
-				} catch (Exception e)
-					logTrace("Malformed X-Forwarded-For header: %s", e.msg);
-			}
-		}
-
-		// handle the request
-		logTrace("handle request (body %d)", req.bodyReader.leastSize);
-		res.httpVersion = req.httpVersion;
-		request_task(req, res);
-
-		// if no one has written anything, return 404
-		if (!res.headerWritten) {
-			string dbg_msg;
-			logDiagnostic("No response written for %s", req.requestURI);
-			if (settings.options & HTTPServerOption.errorStackTraces)
-				dbg_msg = format("No routes match path '%s'", req.requestURI);
-			errorOut(HTTPStatus.notFound, httpStatusText(HTTPStatus.notFound), dbg_msg, null);
-		}
-	} catch (HTTPStatusException err) {
-		if (!res.headerWritten) errorOut(err.status, err.msg, err.debugMessage, err);
-		else logDiagnostic("HTTPStatusException while writing the response: %s", err.msg);
-		debug logDebug("Exception while handling request %s %s: %s", req.method,
-					   req.requestURI, () @trusted { return err.toString().sanitize; } ());
-		if (!parsed || res.headerWritten || justifiesConnectionClose(err.status))
-			keep_alive = false;
-	} catch (UncaughtException e) {
-		auto status = parsed ? HTTPStatus.internalServerError : HTTPStatus.badRequest;
-		string dbg_msg;
-		if (settings.options & HTTPServerOption.errorStackTraces)
-			dbg_msg = () @trusted { return e.toString().sanitize; } ();
-		if (!res.headerWritten && tcp_connection.connected)
-			errorOut(status, httpStatusText(status), dbg_msg, e);
-		else logDiagnostic("Error while writing the response: %s", e.msg);
-		debug logDebug("Exception while handling request %s %s: %s", req.method,
-					   req.requestURI, () @trusted { return e.toString().sanitize(); } ());
-		if (!parsed || res.headerWritten || !cast(Exception)e) keep_alive = false;
-	}
-
-	if (tcp_connection.connected && keep_alive) {
-		if (req.bodyReader && !req.bodyReader.empty) {
-			req.bodyReader.pipe(nullSink);
-			logTrace("dropped body");
-		}
-	}
-
-	// finalize (e.g. for chunked encoding)
-	res.finalize();
-
-	if (res.m_requiresConnectionClose)
-		keep_alive = false;
-
-	// NOTE: req.m_files may or may not be parsed/filled with actual data, as
-	//       it is lazily initialized when calling the .files or .form
-	//       properties
-	foreach (k, v ; req.m_files.byKeyValue) {
-		if (existsFile(v.tempPath)) {
-			removeFile(v.tempPath);
-			logDebug("Deleted upload tempfile %s", v.tempPath.toString());
-		}
-	}
-
-	if (!req.noLog) {
-		// log the request to access log
-		foreach (log; context.loggers)
-			log.log(req, res);
-	}
-
-	//logTrace("return %s (used pool memory: %s/%s)", keep_alive, request_allocator.allocatedSize, request_allocator.totalSize);
-	logTrace("return %s", keep_alive);
-	return keep_alive != false;
-}
-
-
-private void parseRequestHeader(InputStream, Allocator)(HTTPServerRequest req, InputStream http_stream, Allocator alloc, ulong max_header_size, size_t max_header_line_size)
-	if (isInputStream!InputStream)
-{
-	auto stream = FreeListRef!LimitedHTTPInputStream(http_stream, max_header_size);
-
-	logTrace("HTTP server reading status line");
-	auto reqln = () @trusted { return cast(string)stream.readLine(max_header_line_size, "\r\n", alloc); }();
-
-	logTrace("--------------------");
-	logTrace("HTTP server request:");
-	logTrace("--------------------");
-	logTrace("%s", reqln);
-
-	//Method
-	auto pos = reqln.indexOf(' ');
-	enforceBadRequest(pos >= 0, "invalid request method");
-
-	req.method = httpMethodFromString(reqln[0 .. pos]);
-	reqln = reqln[pos+1 .. $];
-	//Path
-	pos = reqln.indexOf(' ');
-	enforceBadRequest(pos >= 0, "invalid request path");
-
-	req.requestURI = reqln[0 .. pos];
-	reqln = reqln[pos+1 .. $];
-
-	req.httpVersion = parseHTTPVersion(reqln);
-
-	//headers
-	parseRFC5322Header(stream, req.headers, max_header_line_size, alloc, false);
-
-	foreach (k, v; req.headers.byKeyValue)
-		logTrace("%s: %s", k, v);
-	logTrace("--------------------");
-}
-
 private void parseCookies(string str, ref CookieValueMap cookies)
 @safe {
 	import std.encoding : sanitize;
@@ -2457,36 +1997,5 @@ shared static this()
 	}
 }
 
-private struct CacheTime
-{
-	string cachedDate;
-	SysTime nextUpdate;
-
-	this(SysTime nextUpdate) @safe @nogc pure nothrow
-	{
-		this.nextUpdate = nextUpdate;
-	}
-
-	void update(SysTime time) @safe
-	{
-		this.nextUpdate = time + 1.seconds;
-		this.nextUpdate.fracSecs = nsecs(0);
-	}
-}
-
-private string formatRFC822DateAlloc(SysTime time)
-@safe {
-	static LAST = CacheTime(SysTime.min());
-
-	if (time > LAST.nextUpdate) {
-		auto app = new FixedAppender!(string, 32);
-		writeRFC822DateTimeString(app, time);
-		LAST.update(time);
-		LAST.cachedDate = () @trusted { return app.data; } ();
-		return () @trusted { return app.data; } ();
-	} else
-		return LAST.cachedDate;
-}
-
-version (VibeDebugCatchAll) private alias UncaughtException = Throwable;
-else private alias UncaughtException = Exception;
+version (VibeDebugCatchAll) package alias UncaughtException = Throwable;
+else package alias UncaughtException = Exception;

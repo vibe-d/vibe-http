@@ -1,3 +1,11 @@
+1.1.1 - 2024-07-12
+==================
+
+- The client implementation now also uses `TCP_NODELAY` - [pull #40][issue40]
+
+[issue40]: https://github.com/vibe-d/vibe-http/issues/40
+
+
 1.1.0 - 2024-04-26
 ==================
 
