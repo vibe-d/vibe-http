@@ -610,7 +610,7 @@ scope:
 	/**
 		The HTTP request that established the web socket connection.
 	*/
-	@property HTTPServerRequest request() { return m_request; }
+	@property inout(HTTPServerRequest) request() inout { return m_request; }
 
 	/**
 		Checks if data is readily available for read.
