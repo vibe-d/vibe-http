@@ -165,6 +165,7 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream,
 
 	// initialize request
 	auto req = () @trusted { return alloc.make!HTTPServerRequest(reqtime, listen_info.bindPort); } ();
+	scope (exit) () @trusted { alloc.dispose(req); } ();
 	// store the IP address
 	req.clientAddress = tcp_connection.remoteAddress;
 
@@ -251,8 +252,9 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream,
 
 	auto exchange = () @trusted { return alloc.make!(HTTP2ServerExchange!UStream)(stream,
 		tcpc, h2context, headers, table, alloc); } ();
-	scope (exit) () @trusted { destroy(exchange); } ();
+	scope (exit) () @trusted { alloc.dispose(exchange); } ();
 	auto res = () @trusted { return alloc.make!HTTPServerResponse(exchange, settings, alloc); } ();
+	scope (exit) () @trusted { alloc.dispose(res); } ();
 	res.httpVersion = HTTPVersion.HTTP_2;
 
 	// setup compressed output
