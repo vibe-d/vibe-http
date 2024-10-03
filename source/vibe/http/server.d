@@ -1660,8 +1660,8 @@ struct HTTPListener {
 						logInfo("Stopped to listen for HTTP%s requests on %s:%s", l.tlsContext ? "S": "", l.bindAddress, l.bindPort);
 						s_listeners = s_listeners[0 .. lidx] ~ s_listeners[lidx+1 .. $];
 					}
+					break;
 				}
-				break;
 			}
 		}
 	}
