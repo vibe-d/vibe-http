@@ -1897,7 +1897,7 @@ private HTTPListener listenHTTPPlain(HTTPServerSettings settings, HTTPServerRequ
 			auto ret = listenTCP(listen_info.bindPort, (TCPConnection conn) nothrow @safe {
 					try handleHTTPConnection(conn, listen_info);
 					catch (Exception e) {
-						logError("HTTP connection handler has thrown: %s", e.msg);
+						logError("HTTP connection handler has thrown at the peer %s: %s", conn.peerAddress, e.msg);
 						debug logDebug("Full error: %s", () @trusted { return e.toString().sanitize(); } ());
 						try conn.close();
 						catch (Exception e) logError("Failed to close connection: %s", e.msg);
