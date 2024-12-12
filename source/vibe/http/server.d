@@ -1312,6 +1312,12 @@ scope:
 		else if ("Content-Type" !in headers) headers["Content-Type"] = "application/octet-stream";
 		data.pipe(bodyWriter);
 	}
+	/// ditto
+	void writeBody(scope InputStream data, int status, string content_type = null)
+	{
+		statusCode = status;
+		writeBody(data, content_type);
+	}
 
 	/** Writes the entire response body as a single string.
 
@@ -1325,7 +1331,6 @@ scope:
 
 		See_Also: `HTTPStatusCode`
 	*/
-	/// ditto
 	void writeBody(string data, string content_type = null)
 	@safe {
 		if (!content_type.length && "Content-Type" !in headers)
@@ -1665,8 +1670,8 @@ struct HTTPListener {
 						logInfo("Stopped to listen for HTTP%s requests on %s:%s", l.tlsContext ? "S": "", l.bindAddress, l.bindPort);
 						s_listeners = s_listeners[0 .. lidx] ~ s_listeners[lidx+1 .. $];
 					}
+					break;
 				}
-				break;
 			}
 		}
 	}
@@ -1902,7 +1907,7 @@ private HTTPListener listenHTTPPlain(HTTPServerSettings settings, HTTPServerRequ
 			auto ret = listenTCP(listen_info.bindPort, (TCPConnection conn) nothrow @safe {
 					try handleHTTPConnection(conn, listen_info);
 					catch (Exception e) {
-						logError("HTTP connection handler has thrown: %s", e.msg);
+						logError("HTTP connection handler has thrown at the peer %s: %s", conn.peerAddress, e.msg);
 						debug logDebug("Full error: %s", () @trusted { return e.toString().sanitize(); } ());
 						try conn.close();
 						catch (Exception e) logError("Failed to close connection: %s", e.msg);

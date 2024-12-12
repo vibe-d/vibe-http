@@ -733,6 +733,7 @@ final class Cookie {
 	enum SameSite {
 		default_,
 		lax,
+		none,
 		strict,
 	}
 
@@ -845,6 +846,7 @@ final class Cookie {
 			case default_: break;
 			case lax: dst.put("; SameSite=Lax"); break;
 			case strict: dst.put("; SameSite=Strict"); break;
+			case none: dst.put("; SameSite=None"); break;
 		}
 	}
 

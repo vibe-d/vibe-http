@@ -515,7 +515,7 @@ final class WebSocket {
 		ConnectionStream m_conn;
 		bool m_sentCloseFrame = false;
 		IncomingWebSocketMessage m_nextMessage = null;
-		const HTTPServerRequest m_request;
+		HTTPServerRequest m_request;
 		HTTPServerResponse m_serverResponse;
 		HTTPClientResponse m_clientResponse;
 		Task m_reader;
@@ -543,7 +543,7 @@ scope:
 	 *	 rng = Source of entropy to use.  If null, assume we're a server socket
 	 *   client_res = For client sockets, the response object (keeps the http client locked until the socket is done)
 	 */
-	private this(ConnectionStream conn, const HTTPServerRequest request, HTTPServerResponse server_res, RandomNumberStream rng, HTTPClientResponse client_res)
+	private this(ConnectionStream conn, HTTPServerRequest request, HTTPServerResponse server_res, RandomNumberStream rng, HTTPClientResponse client_res)
 	{
 		m_ownerTask = Task.getThis();
 		m_conn = conn;
@@ -573,7 +573,7 @@ scope:
 		this(conn, null, null, rng, client_res);
 	}
 
-	private this(ConnectionStream conn, in HTTPServerRequest request, HTTPServerResponse res)
+	private this(ConnectionStream conn, HTTPServerRequest request, HTTPServerResponse res)
 	{
 		this(conn, request, res, null, null);
 	}
@@ -610,7 +610,7 @@ scope:
 	/**
 		The HTTP request that established the web socket connection.
 	*/
-	@property const(HTTPServerRequest) request() const { return m_request; }
+	@property inout(HTTPServerRequest) request() inout { return m_request; }
 
 	/**
 		Checks if data is readily available for read.
