@@ -881,7 +881,8 @@ scope:
 			if (!m_pongReceived) {
 				logDebug("Pong skipped. Closing connection.");
 				close();
-				m_pingTimer.stop();
+				try m_readCondition.notifyAll();
+				catch (Exception e) assert(false, e.msg);
 				return;
 			}
 			m_pongReceived = false;
