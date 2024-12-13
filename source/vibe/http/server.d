@@ -995,6 +995,11 @@ final class HTTPServerRequest : HTTPRequest {
 		return m_cookies.get;
 	}
 
+	@property ref const(CookieValueMap) cookies() const
+	{
+		return m_cookies.get;
+	}
+
 	/** Contains all _form fields supplied using the _query string.
 
 		The fields are stored in the same order as they are received.
