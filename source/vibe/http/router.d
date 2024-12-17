@@ -13,6 +13,7 @@ public import vibe.http.server;
 
 import vibe.core.log;
 
+import std.digest.murmurhash : MurmurHash3;
 import std.functional;
 
 
@@ -1300,13 +1301,11 @@ struct LinkedSetBacking(T) {
 
 	LinkedSetHash getHash(Handle sh)
 	const {
-		import std.digest.md : md5Of;
-
 		// NOTE: the returned hash is order independent, to avoid bogus
 		//       mismatches when comparing lists of different order
-		LinkedSetHash ret = cast(LinkedSetHash)md5Of([]);
+		LinkedSetHash ret = linkedSetHashOf(null);
 		while (sh != Handle.init) {
-			auto h = cast(LinkedSetHash)md5Of(cast(const(ubyte)[])(&m_storage[sh.index].value)[0 .. 1]);
+			auto h = linkedSetHashOf(cast(const(ubyte)[])(&m_storage[sh.index].value)[0 .. 1]);
 			foreach (i; 0 .. ret.length) ret[i] ^= h[i];
 			sh.index = m_storage[sh.index].next;
 		}
@@ -1372,7 +1371,15 @@ unittest {
 	assert(b.getItems(s).equal([11, 7, 3, 5]));
 }
 
+alias LinkedSetHasher = MurmurHash3!(128, 64);
 alias LinkedSetHash = ulong[16/ulong.sizeof];
+LinkedSetHash linkedSetHashOf(scope const(ubyte)[] bytes)
+{
+	LinkedSetHasher h;
+	h.start();
+	h.put(bytes);
+	return cast(LinkedSetHash)h.finish();
+}
 
 private struct Stack(E)
 {
