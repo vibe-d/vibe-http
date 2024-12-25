@@ -1,3 +1,11 @@
+1.2.1 - 2024-12-25
+==================
+
+- Fixes compile errors when compiling `vibe-stream:tls` in the "notls" configuration - [pull #52][issue52]
+
+[issue52]: https://github.com/vibe-d/vibe-http/issues/52
+
+
 1.2.0 - 2024-12-18
 ==================
 
