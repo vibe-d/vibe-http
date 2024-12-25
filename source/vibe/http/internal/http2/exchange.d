@@ -196,7 +196,7 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream,
 	req.tls = istls;
 
 	if (req.tls) {
-		version (HaveNoTLS) assert(false);
+		static if (HaveNoTLS) assert(false);
 		else {
 			static if (is(InterfaceProxy!Stream == Stream))
 				req.clientCertificate = (cast(TLSStream)stream.connection).peerCertificate;

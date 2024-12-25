@@ -47,10 +47,10 @@ import std.typecons;
 import std.uri;
 
 
-version (VibeNoSSL) version = HaveNoTLS;
-else version (Have_botan) {}
-else version (Have_openssl) {}
-else version = HaveNoTLS;
+version (VibeNoSSL) enum HaveNoTLS = true;
+else version (Have_botan) enum HaveNoTLS = false;
+else version (Have_openssl) enum HaveNoTLS = false;
+else enum HaveNoTLS = true;
 
 /**************************************************************************************************/
 /* Public functions                                                                               */
@@ -198,7 +198,7 @@ void handleHTTPConnection(TCPConnection connection, HTTPServerContext context)
 	import vibe.http.internal.http2.server : handleHTTP2Connection;
 	import vibe.http.internal.http2.settings : HTTP2ServerContext, HTTP2Settings;
 
-	version(HaveNoTLS) {
+	static if (HaveNoTLS) {
 		alias TLSStreamType = Stream;
 	} else {
 		alias TLSStreamType = ReturnType!(createTLSStreamFL!(InterfaceProxy!Stream));
@@ -231,7 +231,7 @@ void handleHTTPConnection(TCPConnection connection, HTTPServerContext context)
 
 	// If this is a HTTPS server, initiate TLS
 	if (context.tlsContext) {
-		version (HaveNoTLS) assert(false, "No TLS support compiled in.");
+		static if (HaveNoTLS) assert(false, "No TLS support compiled in.");
 		else {
 			logDebug("Accept TLS connection: %s", context.tlsContext.kind);
 			// TODO: reverse DNS lookup for peer_name of the incoming connection for TLS client certificate verification purposes

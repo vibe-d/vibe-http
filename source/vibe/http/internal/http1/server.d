@@ -43,7 +43,7 @@ void handleHTTP1Connection(TLSStreamType)(TCPConnection connection, TLSStreamTyp
 		HTTPServerSettings settings;
 		bool keep_alive;
 
-		version(HaveNoTLS) {} else {
+		static if (HaveNoTLS) {} else {
 			// handle oderly TLS shutdowns
 			if (tls_stream && tls_stream.empty) break;
 		}
@@ -108,7 +108,7 @@ private bool handleRequest(TLSStreamType, Allocator)(StreamProxy http_stream, TC
 	auto res = FreeListRef!HTTPServerResponse(exchange, settings, request_allocator/*.Scoped_payload*/);
 	req.tls = res.m_tls = listen_info.tlsContext !is null;
 	if (req.tls) {
-		version (HaveNoTLS) assert(false);
+		static if (HaveNoTLS) assert(false);
 		else {
 			static if (is(InterfaceProxy!ConnectionStream == ConnectionStream))
 				req.clientCertificate = (cast(TLSStream)http_stream).peerCertificate;

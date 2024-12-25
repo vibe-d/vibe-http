@@ -22,6 +22,11 @@ if [[ $PARTS =~ (^|,)builds(,|$) ]]; then
         dub build --combined --arch=x86
         dub clean --all-packages
     fi
+
+    # test for successful notls build
+    if [ "$DC" == "dmd" ]; then
+        dub build --override-config vibe-stream:tls/notls
+    fi
 fi
 
 if [[ $PARTS =~ (^|,)unittests(,|$) ]]; then
