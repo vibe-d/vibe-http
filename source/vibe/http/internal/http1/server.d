@@ -121,8 +121,11 @@ private bool handleRequest(TLSStreamType, Allocator)(StreamProxy http_stream, TC
 	void errorOut(int code, string msg, string debug_msg, Throwable ex)
 	@safe {
 		assert(!res.headerWritten);
+		assert(msg.length > 0 && !msg.canFind('\n'), "HTTP error status message must be a non-empty single-line string");
 
 		res.statusCode = code;
+		res.statusPhrase = msg;
+
 		if (settings && settings.errorPageHandler) {
 			/*scope*/ auto err = new HTTPServerErrorInfo;
 			err.code = code;

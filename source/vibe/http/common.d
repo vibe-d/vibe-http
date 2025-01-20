@@ -332,8 +332,16 @@ class HTTPStatusException : Exception {
 		int m_status;
 	}
 
+	/** Construct a new exception corresponding to a particular HTTP status code.
+
+		Params:
+			status = The HTTP status code associated with the exception
+			message = HTTP status phrase sent together with the status code -
+				must be a single-line string
+	*/
 	this(int status, string message = null, string file = __FILE__, size_t line = __LINE__, Throwable next = null)
 	{
+		assert(message.indexOf('\n') < 0, "HTTP status phrase must be single-line!");
 		super(message.length ? message : httpStatusText(status), file, line, next);
 		m_status = status;
 	}
