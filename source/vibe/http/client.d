@@ -1268,6 +1268,7 @@ final class HTTPClientResponse : HTTPResponse {
 		auto cli = m_client;
 		m_client = null;
 		cli.m_responding = false;
+		destroy(m_bodyReader);
 		destroy(m_endCallback);
 		destroy(m_zlibInputStream);
 		destroy(m_chunkedInputStream);
