@@ -1,3 +1,11 @@
+1.2.2 - 2025-03-19
+==================
+
+- Fixes a reference counted stream being leaked to the GC after a client request - [pull #55][issue55]
+
+[issue52]: https://github.com/vibe-d/vibe-http/issues/55
+
+
 1.2.1 - 2024-12-25
 ==================
 
