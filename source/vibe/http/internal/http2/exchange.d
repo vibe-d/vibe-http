@@ -124,7 +124,8 @@ unittest {
 	import std.experimental.allocator.mallocator;
 	HTTP2Settings settings;
 	HTTPServerContext ctx;
-	auto context = new HTTP2ServerContext(ctx, settings);
+	NetworkAddress raddr;
+	auto context = new HTTP2ServerContext(ctx, settings, raddr);
 	auto table = IndexingTable(settings.headerTableSize);
 	scope alloc = new RegionListAllocator!(shared(Mallocator), false)(1024, Mallocator.instance);
 
@@ -167,7 +168,7 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream,
 	auto req = () @trusted { return alloc.make!HTTPServerRequest(reqtime, listen_info.bindPort); } ();
 	scope (exit) () @trusted { alloc.dispose(req); } ();
 	// store the IP address
-	req.clientAddress = tcp_connection.remoteAddress;
+	req.clientAddress = h2context.remoteAddress;
 
 	if (!listen_info.hasVirtualHosts) {
 		logWarn("Didn't find a HTTP listening context for incoming connection. Dropping.");
