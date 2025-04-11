@@ -313,7 +313,7 @@ final class HTTP2ServerContext
 		FreeListRef!HTTP2Multiplexer m_multiplexer;
 		bool m_initializedT = false;
 		bool m_initializedM = false;
-
+		NetworkAddress m_remoteAddress;
 	}
 
 	alias m_context this;
@@ -321,16 +321,19 @@ final class HTTP2ServerContext
 	// used to mantain the first request in case of `h2c` protocol switching
 	ubyte[] resFrame = void;
 
-	this(HTTPServerContext ctx, HTTP2Settings settings) @safe
-	{
+	this(HTTPServerContext ctx, HTTP2Settings settings, ref NetworkAddress remote_address)
+	@safe {
 		m_context = ctx;
 		m_settings = settings;
+		m_remoteAddress = remote_address;
 	}
 
 	this(HTTPServerContext ctx) @safe
 	{
 		m_context = ctx;
 	}
+
+	@property ref const(NetworkAddress) remoteAddress() const @safe { return m_remoteAddress; }
 
 	@property auto ref table() @safe { return m_table.get; }
 

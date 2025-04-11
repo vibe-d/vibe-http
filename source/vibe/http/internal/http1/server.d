@@ -36,7 +36,7 @@ import std.format : format, formattedWrite;
 		context = Information about the incoming listener and available
 			virtual hosts
 */
-void handleHTTP1Connection(TLSStreamType)(TCPConnection connection, TLSStreamType tls_stream, StreamProxy http_stream, HTTPServerContext context)
+void handleHTTP1Connection(TLSStreamType)(TCPConnection connection, TLSStreamType tls_stream, StreamProxy http_stream, HTTPServerContext context, ref NetworkAddress remote_address)
 @safe {
 
 	while (!connection.empty) {
@@ -52,7 +52,7 @@ void handleHTTP1Connection(TLSStreamType)(TCPConnection connection, TLSStreamTyp
 			scope request_allocator = createRequestAllocator();
 			scope (exit) freeRequestAllocator(request_allocator);
 
-			handleRequest!TLSStreamType(http_stream, connection, context, settings, keep_alive, request_allocator);
+			handleRequest!TLSStreamType(http_stream, connection, context, settings, keep_alive, request_allocator, remote_address);
 		} ();
 		if (!keep_alive) { logTrace("No keep-alive - disconnecting client."); break; }
 
@@ -67,7 +67,7 @@ void handleHTTP1Connection(TLSStreamType)(TCPConnection connection, TLSStreamTyp
 }
 
 
-private bool handleRequest(TLSStreamType, Allocator)(StreamProxy http_stream, TCPConnection tcp_connection, HTTPServerContext listen_info, ref HTTPServerSettings settings, ref bool keep_alive, scope Allocator request_allocator)
+private bool handleRequest(TLSStreamType, Allocator)(StreamProxy http_stream, TCPConnection tcp_connection, HTTPServerContext listen_info, ref HTTPServerSettings settings, ref bool keep_alive, scope Allocator request_allocator, ref NetworkAddress remote_address)
 @safe {
 	import vibe.container.internal.utilallocator : make, dispose;
 	import vibe.http.internal.utils : formatRFC822DateAlloc;
@@ -85,7 +85,7 @@ private bool handleRequest(TLSStreamType, Allocator)(StreamProxy http_stream, TC
 	FreeListRef!ChunkedInputStream chunked_input_stream;
 
 	// store the IP address
-	req.clientAddress = tcp_connection.remoteAddress;
+	req.clientAddress = remote_address;
 
 	if (!listen_info.hasVirtualHosts) {
 		logWarn("Didn't find a HTTP listening context for incoming connection. Dropping.");
@@ -164,7 +164,7 @@ private bool handleRequest(TLSStreamType, Allocator)(StreamProxy http_stream, TC
 
 			http_stream.read(dummy); // finish reading connection preface
 			auto h2settings = HTTP2Settings();
-			auto h2context = new HTTP2ServerContext(listen_info, h2settings);
+			auto h2context = new HTTP2ServerContext(listen_info, h2settings, remote_address);
 			handleHTTP2Connection(tcp_connection, tcp_connection, h2context, true);
 			return true;
 		}

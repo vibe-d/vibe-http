@@ -194,6 +194,12 @@ unittest
 */
 void handleHTTPConnection(TCPConnection connection, HTTPServerContext context)
 @safe {
+	auto raddr = connection.remoteAddress;
+	handleHTTPConnection(connection, context, raddr);
+}
+/// ditto
+void handleHTTPConnection(TCPConnection connection, HTTPServerContext context, ref NetworkAddress remote_address)
+@safe {
 	import vibe.http.internal.http1.server : handleHTTP1Connection;
 	import vibe.http.internal.http2.server : handleHTTP2Connection;
 	import vibe.http.internal.http2.settings : HTTP2ServerContext, HTTP2Settings;
@@ -212,7 +218,7 @@ void handleHTTPConnection(TCPConnection connection, HTTPServerContext context)
 	// check wether the client's address is banned
 	foreach (ref virtual_host; context.m_virtualHosts)
 		if ((virtual_host.settings.rejectConnectionPredicate !is null) &&
-			virtual_host.settings.rejectConnectionPredicate(connection.remoteAddress()))
+			virtual_host.settings.rejectConnectionPredicate(remote_address))
 			return;
 
 	// Set NODELAY to true, to avoid delays caused by sending the response
@@ -235,13 +241,13 @@ void handleHTTPConnection(TCPConnection connection, HTTPServerContext context)
 		else {
 			logDebug("Accept TLS connection: %s", context.tlsContext.kind);
 			// TODO: reverse DNS lookup for peer_name of the incoming connection for TLS client certificate verification purposes
-			tls_stream = createTLSStreamFL(http_stream, context.tlsContext, TLSStreamState.accepting, null, connection.remoteAddress);
+			tls_stream = createTLSStreamFL(http_stream, context.tlsContext, TLSStreamState.accepting, null, remote_address);
 
 			Nullable!string proto = tls_stream.alpn;
 			if(!proto.isNull && proto == "h2" && (context.m_virtualHosts[0].settings.options & HTTPServerOption.enableHTTP2)) {
 				logTrace("Using HTTP/2 as requested per ALPN");
 				HTTP2Settings settings;
-				auto h2context = new HTTP2ServerContext(context, settings);
+				auto h2context = new HTTP2ServerContext(context, settings, remote_address);
 				handleHTTP2Connection(tls_stream, connection, h2context);
 				return;
 			}
@@ -250,7 +256,7 @@ void handleHTTPConnection(TCPConnection connection, HTTPServerContext context)
 		}
 	}
 
-	handleHTTP1Connection(connection, tls_stream, http_stream, context);
+	handleHTTP1Connection(connection, tls_stream, http_stream, context, remote_address);
 
 	logTrace("Done handling connection.");
 }
@@ -1900,9 +1906,10 @@ private HTTPListener listenHTTPPlain(HTTPServerSettings settings, HTTPServerRequ
 			if(reuseAddress) options |= TCPListenOptions.reuseAddress; else options &= ~TCPListenOptions.reuseAddress;
 			if(reusePort) options |= TCPListenOptions.reusePort; else options &= ~TCPListenOptions.reusePort;
 			auto ret = listenTCP(listen_info.bindPort, (TCPConnection conn) nothrow @safe {
-					try handleHTTPConnection(conn, listen_info);
+					auto raddr = conn.remoteAddress;
+					try handleHTTPConnection(conn, listen_info, raddr);
 					catch (Exception e) {
-						logError("HTTP connection handler has thrown at the peer %s: %s", conn.peerAddress, e.msg);
+						logError("HTTP connection handler has thrown at the peer %s: %s", raddr, e.msg);
 						debug logDebug("Full error: %s", () @trusted { return e.toString().sanitize(); } ());
 						try conn.close();
 						catch (Exception e) logError("Failed to close connection: %s", e.msg);
