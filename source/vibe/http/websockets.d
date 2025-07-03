@@ -105,7 +105,7 @@ WebSocket connectWebSocketEx(URL url,
 	enforce(key !is null, "Response is missing the Sec-WebSocket-Accept header.");
 	enforce(*key == answerKey, "Response has wrong accept key");
 	auto conn = res.switchProtocol("websocket");
-	return new WebSocket(conn, rng, res);
+	return new WebSocket(conn, rng, res, settings);
 }
 
 /// ditto
@@ -136,7 +136,7 @@ void connectWebSocketEx(URL url,
 			enforce(key !is null, "Response is missing the Sec-WebSocket-Accept header.");
 			enforce(*key == answerKey, "Response has wrong accept key");
 			res.switchProtocol("websocket", (scope conn) @trusted {
-				scope ws = new WebSocket(conn, rng, res);
+				scope ws = new WebSocket(conn, rng, res,settings);
 				del(ws);
 				if (ws.connected) ws.close();
 			});
@@ -530,6 +530,7 @@ final class WebSocket {
 		/// The entropy generator to use
 		/// If not null, it means this is a server socket.
 		RandomNumberStream m_rng;
+		ulong m_payloadMaxLength;
 	}
 
 scope:
@@ -561,16 +562,21 @@ scope:
 			//       which is done in the mandatory call to close().
 			//       The same goes for m_pingTimer below.
 			m_reader = () @trusted { return runTask(&startReader); } ();
-			if (request !is null && request.serverSettings.webSocketPingInterval != Duration.zero) {
-				m_pongReceived = true;
-				m_pingTimer = () @trusted { return setTimer(request.serverSettings.webSocketPingInterval, &sendPing, true); } ();
+			if (request !is null)
+			{
+				if (request.serverSettings.webSocketPingInterval != Duration.zero) {
+					m_pongReceived = true;
+					m_pingTimer = () @trusted { return setTimer(request.serverSettings.webSocketPingInterval, &sendPing, true); } ();
+				}
+				m_payloadMaxLength = request.serverSettings.webSocketPayloadMaxLength;
 			}
 		});
 	}
 
-	private this(ConnectionStream conn, RandomNumberStream rng, HTTPClientResponse client_res)
+	private this(ConnectionStream conn, RandomNumberStream rng, HTTPClientResponse client_res,const(HTTPClientSettings) settings)
 	{
 		this(conn, null, null, rng, client_res);
+		m_payloadMaxLength = settings.webSocketPayloadMaxLength;
 	}
 
 	private this(ConnectionStream conn, HTTPServerRequest request, HTTPServerResponse res)
@@ -815,7 +821,7 @@ scope:
 			loop:
 			while (!m_conn.empty) {
 				assert(!m_nextMessage);
-				/*scope*/auto msg = new IncomingWebSocketMessage(m_conn, m_rng);
+				/*scope*/auto msg = new IncomingWebSocketMessage(m_conn, m_rng, m_payloadMaxLength);
 
 				switch (msg.frameOpcode) {
 					default: throw new WebSocketException("unknown frame opcode");
@@ -982,13 +988,15 @@ final class IncomingWebSocketMessage : InputStream {
 		RandomNumberStream m_rng;
 		Stream m_conn;
 		Frame m_currentFrame;
+		ulong m_payloadMaxLength;
 	}
 
-	private this(Stream conn, RandomNumberStream rng)
+	private this(Stream conn, RandomNumberStream rng, ulong payloadMaxLength)
 	{
 		assert(conn !is null);
 		m_conn = conn;
 		m_rng = rng;
+		m_payloadMaxLength = payloadMaxLength;
 		skipFrame(); // reads the first frame
 	}
 
@@ -1020,7 +1028,7 @@ final class IncomingWebSocketMessage : InputStream {
 		if (m_currentFrame.fin)
 			return false;
 
-		m_currentFrame = Frame.readFrame(m_conn);
+		m_currentFrame = Frame.readFrame(m_conn,m_payloadMaxLength);
 		return true;
 	}
 
@@ -1148,7 +1156,7 @@ private struct Frame {
 		}
 	}
 
-	static Frame readFrame(InputStream stream)
+	static Frame readFrame(InputStream stream,ulong payloadMaxLength)
 	{
 		Frame frame;
 		ubyte[8] data;
@@ -1186,9 +1194,7 @@ private struct Frame {
 			stream.read(data[0 .. 4]);
 
 		// Read payload
-		// TODO: Provide a way to limit the size read, easy
-		// DOS for server code here (rejectedsoftware/vibe.d#1496).
-		enforce!WebSocketException(length <= size_t.max);
+		enforce!WebSocketException(length <= payloadMaxLength);
 		frame.payload = new ubyte[](cast(size_t)length);
 		stream.read(frame.payload);
 
