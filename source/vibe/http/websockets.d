@@ -888,7 +888,6 @@ scope:
 						break loop;
 					case FrameOpcode.continuation:
 						throw new WebSocketException("unexpected continuation frame");
-						break;
 					case FrameOpcode.text:
 					case FrameOpcode.binary:
 						m_readMutex.performLocked!({
