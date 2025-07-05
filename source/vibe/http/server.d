@@ -748,11 +748,11 @@ final class HTTPServerSettings {
 	
 	/** Maximum payload size to accept in websocket messages
 	 */
-	ulong webSocketPayloadMaxLength = 10_000_000;
+	size_t webSocketPayloadMaxLength = 10_000_000;
 
 	/** A payload size for fragmentation of web socket messages, set to 0 to prevent fragmentation
 	 */
-	ulong webSocketFragmentSize = 0;
+	size_t webSocketFragmentSize = 0;
 
 	/** Constructs a new settings object with default values.
 	*/

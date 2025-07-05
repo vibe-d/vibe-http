@@ -530,8 +530,8 @@ final class WebSocket {
 		/// The entropy generator to use
 		/// If not null, it means this is a server socket.
 		RandomNumberStream m_rng;
-		ulong m_payloadMaxLength;
-		ulong m_fragmentSize;
+		size_t m_payloadMaxLength;
+		size_t m_fragmentSize;
 	}
 
 scope:
@@ -671,7 +671,7 @@ scope:
 	void send(scope const(char)[] data)
 	{
 		send(
-			(scope message)
+			(scope message) @safe
 			{
 				auto frameSize = m_fragmentSize ? m_fragmentSize : data.length;
 				for(size_t offset = 0; offset < data.length; offset += frameSize)
@@ -700,7 +700,7 @@ scope:
 	void send(in ubyte[] data)
 	{
 		send(
-			(scope message)
+			(scope message) @safe
 			{
 				auto frameSize = m_fragmentSize ? m_fragmentSize : data.length;
 				for(size_t offset = 0; offset < data.length; offset += frameSize)
@@ -1022,11 +1022,11 @@ final class IncomingWebSocketMessage : InputStream {
 		RandomNumberStream m_rng;
 		Stream m_conn;
 		Frame m_currentFrame;
-		ulong m_payloadMaxLength;
-		ulong m_nread;
+		size_t m_payloadMaxLength;
+		size_t m_nread;
 	}
 
-	private this(Stream conn, RandomNumberStream rng, ulong payloadMaxLength)
+	private this(Stream conn, RandomNumberStream rng, size_t payloadMaxLength)
 	{
 		assert(conn !is null);
 		m_conn = conn;
@@ -1194,7 +1194,7 @@ private struct Frame {
 		}
 	}
 
-	static Frame readFrame(InputStream stream,ulong payloadMaxLength)
+	static Frame readFrame(InputStream stream,size_t payloadMaxLength)
 	{
 		Frame frame;
 		ubyte[8] data;
