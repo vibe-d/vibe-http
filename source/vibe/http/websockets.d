@@ -13,7 +13,7 @@ module vibe.http.websockets;
 	void handleConn(scope WebSocket sock)
 	{
 		// simple echo server
-		while (sock.connected) {
+		while (sock.waitForData()) {
 			auto msg = sock.receiveText();
 			sock.send(msg);
 		}
