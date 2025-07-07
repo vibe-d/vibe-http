@@ -105,7 +105,7 @@ WebSocket connectWebSocketEx(URL url,
 	enforce(key !is null, "Response is missing the Sec-WebSocket-Accept header.");
 	enforce(*key == answerKey, "Response has wrong accept key");
 	auto conn = res.switchProtocol("websocket");
-	return new WebSocket(conn, rng, res);
+	return new WebSocket(conn, rng, res, settings);
 }
 
 /// ditto
@@ -136,7 +136,7 @@ void connectWebSocketEx(URL url,
 			enforce(key !is null, "Response is missing the Sec-WebSocket-Accept header.");
 			enforce(*key == answerKey, "Response has wrong accept key");
 			res.switchProtocol("websocket", (scope conn) @trusted {
-				scope ws = new WebSocket(conn, rng, res);
+				scope ws = new WebSocket(conn, rng, res,settings);
 				del(ws);
 				if (ws.connected) ws.close();
 			});
@@ -530,6 +530,8 @@ final class WebSocket {
 		/// The entropy generator to use
 		/// If not null, it means this is a server socket.
 		RandomNumberStream m_rng;
+		size_t m_payloadMaxLength;
+		size_t m_fragmentSize;
 	}
 
 scope:
@@ -561,16 +563,23 @@ scope:
 			//       which is done in the mandatory call to close().
 			//       The same goes for m_pingTimer below.
 			m_reader = () @trusted { return runTask(&startReader); } ();
-			if (request !is null && request.serverSettings.webSocketPingInterval != Duration.zero) {
-				m_pongReceived = true;
-				m_pingTimer = () @trusted { return setTimer(request.serverSettings.webSocketPingInterval, &sendPing, true); } ();
+			if (request !is null)
+			{
+				if (request.serverSettings.webSocketPingInterval != Duration.zero) {
+					m_pongReceived = true;
+					m_pingTimer = () @trusted { return setTimer(request.serverSettings.webSocketPingInterval, &sendPing, true); } ();
+				}
+				m_payloadMaxLength = request.serverSettings.webSocketPayloadMaxLength;
+				m_fragmentSize = request.serverSettings.webSocketFragmentSize;
 			}
 		});
 	}
 
-	private this(ConnectionStream conn, RandomNumberStream rng, HTTPClientResponse client_res)
+	private this(ConnectionStream conn, RandomNumberStream rng, HTTPClientResponse client_res,const(HTTPClientSettings) settings)
 	{
 		this(conn, null, null, rng, client_res);
+		m_payloadMaxLength = settings.webSocketPayloadMaxLength;
+		m_fragmentSize = settings.webSocketFragmentSize;
 	}
 
 	private this(ConnectionStream conn, HTTPServerRequest request, HTTPServerResponse res)
@@ -662,8 +671,21 @@ scope:
 	void send(scope const(char)[] data)
 	{
 		send(
-			(scope message) { message.write(cast(const ubyte[])data); },
-			FrameOpcode.text);
+			(scope message) @safe
+			{
+				auto frameSize = m_fragmentSize ? m_fragmentSize : data.length;
+				for(size_t offset = 0; offset < data.length; offset += frameSize)
+				{
+					if (data.length - offset <= frameSize)	//last frame
+						message.write(cast(const ubyte[])data[offset..$]);	//this is the last loop, finalise will send the finish frame
+					else
+					{
+						message.write(cast(const ubyte[])data[offset..offset+frameSize]);	//send a continuation frame
+						message.flush;
+					}
+				}
+			}
+		, FrameOpcode.text);
 	}
 
 	/**
@@ -677,7 +699,22 @@ scope:
 	*/
 	void send(in ubyte[] data)
 	{
-		send((scope message){ message.write(data); }, FrameOpcode.binary);
+		send(
+			(scope message) @safe
+			{
+				auto frameSize = m_fragmentSize ? m_fragmentSize : data.length;
+				for(size_t offset = 0; offset < data.length; offset += frameSize)
+				{
+					if (data.length - offset <= frameSize)	//last frame
+						message.write(cast(const ubyte[])data[offset..$]);	//this is the last loop, finalise will send the finish frame
+					else
+					{
+						message.write(cast(const ubyte[])data[offset..offset+frameSize]);	//send a continuation frame
+						message.flush;
+					}
+				}
+			}
+		, FrameOpcode.binary);
 	}
 
 	/**
@@ -815,7 +852,7 @@ scope:
 			loop:
 			while (!m_conn.empty) {
 				assert(!m_nextMessage);
-				/*scope*/auto msg = new IncomingWebSocketMessage(m_conn, m_rng);
+				/*scope*/auto msg = new IncomingWebSocketMessage(m_conn, m_rng, m_payloadMaxLength);
 
 				switch (msg.frameOpcode) {
 					default: throw new WebSocketException("unknown frame opcode");
@@ -849,9 +886,10 @@ scope:
 						if(!m_sentCloseFrame) close();
 						logDebug("Terminating connection (%s)", m_sentCloseFrame);
 						break loop;
+					case FrameOpcode.continuation:
+						throw new WebSocketException("unexpected continuation frame");
 					case FrameOpcode.text:
 					case FrameOpcode.binary:
-					case FrameOpcode.continuation: // FIXME: add proper support for continuation frames!
 						m_readMutex.performLocked!({
 							m_nextMessage = msg;
 							m_readCondition.notifyAll();
@@ -905,6 +943,7 @@ final class OutgoingWebSocketMessage : OutputStream {
 		FrameOpcode m_frameOpcode;
 		Appender!(ubyte[]) m_buffer;
 		bool m_finalized = false;
+		bool startFrame = true;
 	}
 
 	private this(Stream conn, FrameOpcode frameOpcode, RandomNumberStream rng)
@@ -959,8 +998,9 @@ final class OutgoingWebSocketMessage : OutputStream {
 
 		Frame frame;
 		frame.fin = fin;
-		frame.opcode = m_frameOpcode;
+		frame.opcode = startFrame ? m_frameOpcode : FrameOpcode.continuation;
 		frame.payload = m_buffer.data[Frame.maxHeaderSize .. $];
+		startFrame = false;
 		auto hsize = frame.getHeaderSize(m_rng !is null);
 		auto msg = m_buffer.data[Frame.maxHeaderSize-hsize .. $];
 		frame.writeHeader(msg[0 .. hsize], m_rng);
@@ -982,13 +1022,17 @@ final class IncomingWebSocketMessage : InputStream {
 		RandomNumberStream m_rng;
 		Stream m_conn;
 		Frame m_currentFrame;
+		size_t m_payloadMaxLength;
+		size_t m_nread;
 	}
 
-	private this(Stream conn, RandomNumberStream rng)
+	private this(Stream conn, RandomNumberStream rng, size_t payloadMaxLength)
 	{
 		assert(conn !is null);
 		m_conn = conn;
 		m_rng = rng;
+		m_nread = 0;
+		m_payloadMaxLength = payloadMaxLength;
 		skipFrame(); // reads the first frame
 	}
 
@@ -1020,7 +1064,9 @@ final class IncomingWebSocketMessage : InputStream {
 		if (m_currentFrame.fin)
 			return false;
 
-		m_currentFrame = Frame.readFrame(m_conn);
+		m_currentFrame = Frame.readFrame(m_conn,m_payloadMaxLength);
+		enforce!WebSocketException((m_nread += m_currentFrame.payload.length) <= m_payloadMaxLength,"websocketPayloadMaxLength exceeded");
+		
 		return true;
 	}
 
@@ -1148,7 +1194,7 @@ private struct Frame {
 		}
 	}
 
-	static Frame readFrame(InputStream stream)
+	static Frame readFrame(InputStream stream,size_t payloadMaxLength)
 	{
 		Frame frame;
 		ubyte[8] data;
@@ -1186,9 +1232,7 @@ private struct Frame {
 			stream.read(data[0 .. 4]);
 
 		// Read payload
-		// TODO: Provide a way to limit the size read, easy
-		// DOS for server code here (rejectedsoftware/vibe.d#1496).
-		enforce!WebSocketException(length <= size_t.max);
+		enforce!WebSocketException(length <= payloadMaxLength,"websocketPayloadMaxLength exceeded");
 		frame.payload = new ubyte[](cast(size_t)length);
 		stream.read(frame.payload);
 

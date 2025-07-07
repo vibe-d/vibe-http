@@ -931,7 +931,7 @@ unittest {
 	// empty handler, just to test if protocol switching works
 	void handleReq(scope HTTPServerRequest req, scope HTTPServerResponse res)
 	@safe {
-		if (req.path == "/")
+		if (req.requestPath.toString == "/")
 			res.writeBody("Hello, World! This response is sent through HTTP/2");
 	}
 
@@ -948,7 +948,7 @@ unittest {
 
 	void handleRequest(scope HTTPServerRequest req, scope HTTPServerResponse res)
 	@safe {
-		if (req.path == "/")
+		if (req.requestPath.toString == "/")
 			res.writeBody("Hello, World! This response is sent through HTTP/2\n");
 	}
 
