@@ -350,29 +350,26 @@ HTTPServerRequestDelegateS handleWebSockets(void function(scope WebSocket) @syst
 	});
 }
 
-/**
- * Provides the reason that a websocket connection has closed.
- *
- * Further documentation for the WebSocket and it's codes can be found from:
- * https://developer.mozilla.org/en-US/docs/Web/API/CloseEvent
- *
- * ---
- *
- * void echoSocket(scope WebSocket sock)
- * {
- *   import std.datetime : seconds;
- *
- *   while(sock.waitForData(3.seconds))
- *   {
- *     string msg = sock.receiveText;
- *     logInfo("Got a message: %s", msg);
- *     sock.send(msg);
- *   }
- *
- *   if(sock.connected)
- *     sock.close(WebSocketCloseReason.policyViolation, "timeout");
- * }
- * ---
+/**	Provides the reason that a websocket connection has closed.
+
+	Further documentation for the WebSocket and it's codes can be found from:
+	$(LINK https://developer.mozilla.org/en-US/docs/Web/API/CloseEvent)
+
+	---
+	void echoSocket(scope WebSocket sock)
+	{
+		import std.datetime : seconds;
+
+		while (sock.waitForData(3.seconds)) {
+			string msg = sock.receiveText;
+			logInfo("Got a message: %s", msg);
+			sock.send(msg);
+		}
+
+		if (sock.connected)
+			sock.close(WebSocketCloseReason.policyViolation, "timeout");
+	}
+	---
  */
 enum WebSocketCloseReason : short
 {
