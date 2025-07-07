@@ -350,9 +350,9 @@ HTTPServerRequestDelegateS handleWebSockets(void function(scope WebSocket) @syst
 	});
 }
 
-/**	Provides the reason that a websocket connection has closed.
+/**	Specifies why a WebSocket connection has been closed.
 
-	Further documentation for the WebSocket and it's codes can be found from:
+	Further documentation WebSocket close codes can be found at
 	$(LINK https://developer.mozilla.org/en-US/docs/Web/API/CloseEvent)
 
 	---
