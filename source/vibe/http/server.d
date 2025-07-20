@@ -1972,15 +1972,15 @@ private HTTPListener listenHTTPPlain(HTTPServerSettings settings, HTTPServerRequ
 private void parseCookies(string str, ref CookieValueMap cookies)
 @safe {
 	import std.encoding : sanitize;
-	import std.array : split;
 	import std.string : strip;
+	import std.algorithm.searching : findSplit;
 	import std.algorithm.iteration : map, filter, each;
 	import vibe.http.common : Cookie;
 	() @trusted { return str.sanitize; } ()
 		.split(";")
-		.map!(kv => kv.strip.split("="))
-		.filter!(kv => kv.length == 2) //ignore illegal cookies
-		.each!(kv => cookies.add(kv[0], kv[1], Cookie.Encoding.raw) );
+		.map!(kv => kv.strip.findSplit("="))
+		.filter!(kv => kv[1].length) //ignore illegal cookies
+		.each!(kv => cookies.add(kv[0], kv[2], Cookie.Encoding.raw) );
 }
 
 unittest
@@ -1990,11 +1990,11 @@ unittest
   assert(cvm["foo"] == "bar");
   assert(cvm["baz"] == "zinga");
   assert(cvm["öö"] == "üü");
-  assert( "møøse" ! in cvm); //illegal cookie gets ignored
+  assert(cvm["møøse"] == "was=sacked");
   assert( "onlyval1" ! in cvm); //illegal cookie gets ignored
   assert(cvm["onlykey"] == "");
   assert(cvm[""] == "onlyval2");
-  assert(cvm.length() == 5);
+  assert(cvm.length() == 6);
   cvm = CookieValueMap();
   parseCookies("", cvm);
   assert(cvm.length() == 0);
