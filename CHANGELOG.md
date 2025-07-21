@@ -1,3 +1,15 @@
+1.3.0 - 2025-07-21
+==================
+
+- Added `webSocketPayloadMaxLength` and `webSocketFragmentSize` fields to `HTTP(Client/Server)Settings` (by Alex Burton aka Alexibu) - [pull #57][issue57]
+- Fixed an issue with querying the peer address of a server request after connection failures - [pull #56][issue56]
+- Fixed parsing cookies with values containing `=` (by IchorDev) - [pull #60][issue60]
+
+[issue56]: https://github.com/vibe-d/vibe-http/issues/56
+[issue57]: https://github.com/vibe-d/vibe-http/issues/57
+[issue60]: https://github.com/vibe-d/vibe-http/issues/60
+
+
 1.2.2 - 2025-03-19
 ==================
 
