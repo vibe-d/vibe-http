@@ -62,7 +62,7 @@ private bool encodeInteger(R)(const HTTP2HeaderTableField header, ref R dst, ref
 		else if (header.neverIndex) dst.put(cast(ubyte)((partialFound + 16) & 31));
 		else dst.put(cast(ubyte)(partialFound & 15));
 		// encode value as literal
-		encodeLiteralField(to!string(header.value), dst, huffman);
+		encodeLiteralField!R(header.valueString, dst, huffman);
 
 		return true;
 	}
@@ -78,8 +78,8 @@ private void encodeLiteral(R)(const HTTP2HeaderTableField header, ref R dst, boo
 	else if(header.neverIndex) dst.put(cast(ubyte)(16));
 	else dst.put(cast(ubyte)(0));
 
-	encodeLiteralField(to!string(header.name), dst, huffman);
-	encodeLiteralField(to!string(header.value), dst, huffman);
+	encodeLiteralField!R(header.name, dst, huffman);
+	encodeLiteralField!R(header.valueString, dst, huffman);
 }
 
 /// encode a field (name / value) using huffman or raw encoding
@@ -88,9 +88,9 @@ private void encodeLiteralField(R)(string src, ref R dst, bool huffman = true) @
 	if(huffman) {
 		encodeHuffman(src, dst);
 	} else {
-		auto blen = (src.length) & 127;
-		dst.put(cast(ubyte)blen);
-		dst.put(cast(ubyte[])(to!string(src).dup));
+		ubyte blen = (src.length) & 127;
+		dst.put(blen);
+		dst.put(cast(const(ubyte)[])src);
 	}
 }
 
