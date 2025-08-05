@@ -22,88 +22,88 @@ import std.algorithm : canFind; // alpn callback
 import std.variant : Algebraic;
 
 /*
- *  6.5.1.  SETTINGS Format
- *
- *   The payload of a SETTINGS frame consists of zero or more parameters,
- *   each consisting of an unsigned 16-bit setting identifier and an
- *   unsigned 32-bit value.
- *
- *   +-------------------------------+
- *   |	   IDentifier (16)		 |
- *   +-------------------------------+-------------------------------+
- *   |						Value (32)							 |
- *   +---------------------------------------------------------------+
- *						Figure 10: Setting Format
- *
- *   6.5.2.  Defined SETTINGS Parameters
- *
- *   The following parameters are defined:
- *
- *   SETTINGS_HEADER_TABLE_SIZE (0x1):  Allows the sender to inform the
- *	 remote endpoint of the maximum size of the header compression
- *	 table used to decode header blocks, in octets.  The encoder can
- *	 select any size equal to or less than this value by using
- *	 signaling specific to the header compression format inside a
- *	 header block (see [COMPRESSION]).  The initial value is 4,096
- *	 octets.
- *
- *   SETTINGS_ENABLE_PUSH (0x2):  This setting can be used to disable
- *	  server push (Section 8.2).  An endpoint MUST NOT send a
- *	  PUSH_PROMISE frame if it receives this parameter set to a value of
- *	  0.  An endpoint that has both set this parameter to 0 and had it
- *	  acknowledged MUST treat the receipt of a PUSH_PROMISE frame as a
- *	  connection error (Section 5.4.1) of type PROTOCOL_ERROR.
- *
- *	  The initial value is 1, which indicates that server push is
- *	  permitted.  Any value other than 0 or 1 MUST be treated as a
- *	  connection error (Section 5.4.1) of type PROTOCOL_ERROR.
- *
- *	SETTINGS_MAX_CONCURRENT_STREAMS (0x3):  Indicates the maximum number
- *	  of concurrent streams that the sender will allow.  This limit is
- *	  directional: it applies to the number of streams that the sender
- *	  permits the receiver to create.  Initially, there is no limit to
- *	  this value.  It is recommended that this value be no smaller than
- *	  100, so as to not unnecessarily limit parallelism.
- *
- *	  A value of 0 for SETTINGS_MAX_CONCURRENT_STREAMS SHOULD NOT be
- *	  treated as special by endpoints.  A zero value does prevent the
- *	  creation of new streams; however, this can also happen for any
- *	  limit that is exhausted with active streams.  Servers SHOULD only
- *	  set a zero value for short durations; if a server does not wish to
- *	  accept requests, closing the connection is more appropriate.
- *
- *	SETTINGS_INITIAL_WINDOW_SIZE (0x4):  Indicates the sender's initial
- *	   window size (in octets) for stream-level flow control.  The
- *	   initial value is 2^16-1 (65,535) octets.
- *
- *	   This setting affects the window size of all streams (see
- *	   Section 6.9.2).
- *
- *	   Values above the maximum flow-control window size of 2^31-1 MUST
- *	   be treated as a connection error (Section 5.4.1) of type
- *	   FLOW_CONTROL_ERROR.
- *
- *	SETTINGS_MAX_FRAME_SIZE (0x5):  Indicates the size of the largest
- *	   frame payload that the sender is willing to receive, in octets.
- *
- *	   The initial value is 2^14 (16,384) octets.  The value advertised
- *	   by an endpoint MUST be between this initial value and the maximum
- *	   allowed frame size (2^24-1 or 16,777,215 octets), inclusive.
- *	   Values outside this range MUST be treated as a connection error
- *	   (Section 5.4.1) of type PROTOCOL_ERROR.
- *
- *	SETTINGS_MAX_HEADER_LIST_SIZE (0x6):  This advisory setting informs a
- *	   peer of the maximum size of header list that the sender is
- *	   prepared to accept, in octets.  The value is based on the
- *	   uncompressed size of header fields, including the length of the
- *	   name and value in octets plus an overhead of 32 octets for each
- *	   header field.
- *
- *	   For any given request, a lower limit than what is advertised MAY
- *	   be enforced.  The initial value of this setting is unlimited.
- *
- *   An endpoint that receives a SETTINGS frame with any unknown or
- *   unsupported identifier MUST ignore that setting.
+	6.5.1.  SETTINGS Format
+
+	 The payload of a SETTINGS frame consists of zero or more parameters,
+	 each consisting of an unsigned 16-bit setting identifier and an
+	 unsigned 32-bit value.
+
+	 +-------------------------------+
+	 |	   IDentifier (16)		 |
+	 +-------------------------------+-------------------------------+
+	 |						Value (32)							 |
+	 +---------------------------------------------------------------+
+						Figure 10: Setting Format
+
+	 6.5.2.  Defined SETTINGS Parameters
+
+	 The following parameters are defined:
+
+	 SETTINGS_HEADER_TABLE_SIZE (0x1):  Allows the sender to inform the
+	 remote endpoint of the maximum size of the header compression
+	 table used to decode header blocks, in octets.  The encoder can
+	 select any size equal to or less than this value by using
+	 signaling specific to the header compression format inside a
+	 header block (see [COMPRESSION]).  The initial value is 4,096
+	 octets.
+
+	 SETTINGS_ENABLE_PUSH (0x2):  This setting can be used to disable
+	  server push (Section 8.2).  An endpoint MUST NOT send a
+	  PUSH_PROMISE frame if it receives this parameter set to a value of
+	  0.  An endpoint that has both set this parameter to 0 and had it
+	  acknowledged MUST treat the receipt of a PUSH_PROMISE frame as a
+	  connection error (Section 5.4.1) of type PROTOCOL_ERROR.
+
+	  The initial value is 1, which indicates that server push is
+	  permitted.  Any value other than 0 or 1 MUST be treated as a
+	  connection error (Section 5.4.1) of type PROTOCOL_ERROR.
+
+	SETTINGS_MAX_CONCURRENT_STREAMS (0x3):  Indicates the maximum number
+	  of concurrent streams that the sender will allow.  This limit is
+	  directional: it applies to the number of streams that the sender
+	  permits the receiver to create.  Initially, there is no limit to
+	  this value.  It is recommended that this value be no smaller than
+	  100, so as to not unnecessarily limit parallelism.
+
+	  A value of 0 for SETTINGS_MAX_CONCURRENT_STREAMS SHOULD NOT be
+	  treated as special by endpoints.  A zero value does prevent the
+	  creation of new streams; however, this can also happen for any
+	  limit that is exhausted with active streams.  Servers SHOULD only
+	  set a zero value for short durations; if a server does not wish to
+	  accept requests, closing the connection is more appropriate.
+
+	SETTINGS_INITIAL_WINDOW_SIZE (0x4):  Indicates the sender's initial
+	   window size (in octets) for stream-level flow control.  The
+	   initial value is 2^16-1 (65,535) octets.
+
+	   This setting affects the window size of all streams (see
+	   Section 6.9.2).
+
+	   Values above the maximum flow-control window size of 2^31-1 MUST
+	   be treated as a connection error (Section 5.4.1) of type
+	   FLOW_CONTROL_ERROR.
+
+	SETTINGS_MAX_FRAME_SIZE (0x5):  Indicates the size of the largest
+	   frame payload that the sender is willing to receive, in octets.
+
+	   The initial value is 2^14 (16,384) octets.  The value advertised
+	   by an endpoint MUST be between this initial value and the maximum
+	   allowed frame size (2^24-1 or 16,777,215 octets), inclusive.
+	   Values outside this range MUST be treated as a connection error
+	   (Section 5.4.1) of type PROTOCOL_ERROR.
+
+	SETTINGS_MAX_HEADER_LIST_SIZE (0x6):  This advisory setting informs a
+	   peer of the maximum size of header list that the sender is
+	   prepared to accept, in octets.  The value is based on the
+	   uncompressed size of header fields, including the length of the
+	   name and value in octets plus an overhead of 32 octets for each
+	   header field.
+
+	   For any given request, a lower limit than what is advertised MAY
+	   be enforced.  The initial value of this setting is unlimited.
+
+	 An endpoint that receives a SETTINGS frame with any unknown or
+	 unsupported identifier MUST ignore that setting.
 */
 //version = VibeForceALPN;
 
@@ -114,13 +114,13 @@ alias HTTP2SettingValue = uint;
 const HTTP2SettingID minID = 0x1;
 const HTTP2SettingID maxID = 0x6;
 
-enum  HTTP2SettingsParameter {
-	headerTableSize				 = 0x1,
-	enablePush					  = 0x2,
-	maxConcurrentStreams			= 0x3,
-	initialWindowSize			   = 0x4,
-	maxFrameSize					= 0x5,
-	maxHeaderListSize			   = 0x6
+enum HTTP2SettingsParameter {
+	headerTableSize = 0x1,
+	enablePush = 0x2,
+	maxConcurrentStreams = 0x3,
+	initialWindowSize = 0x4,
+	maxFrameSize = 0x5,
+	maxHeaderListSize = 0x6
 }
 
 // UDAs
@@ -130,8 +130,10 @@ struct HTTP2Setting {
 }
 
 // UDAs
-HTTP2Setting http2Setting(HTTP2SettingID id, string name) {
-	if (!__ctfe) assert(false, "May only be used as a UDA");
+HTTP2Setting http2Setting(HTTP2SettingID id, string name)
+{
+	if (!__ctfe)
+		assert(false, "May only be used as a UDA");
 	return HTTP2Setting(id, name);
 }
 
@@ -150,7 +152,7 @@ struct HTTP2Settings {
 	 * might be closed as soon as possible
 	 */
 	@http2Setting(0x3, "SETTINGS_MAX_CONCURRENT_STREAMS")
-	//HTTP2SettingValue maxConcurrentStreams = HTTP2SettingValue.max; // lowered
+	 //HTTP2SettingValue maxConcurrentStreams = HTTP2SettingValue.max; // lowered
 	//to 2^16
 	HTTP2SettingValue maxConcurrentStreams = 65536;
 
@@ -186,7 +188,8 @@ struct HTTP2Settings {
 		}
 
 		// set values
-		while(!uset.empty) m_set(uset.read!HTTP2SettingID, uset.read!HTTP2SettingValue);
+		while (!uset.empty)
+			m_set(uset.read!HTTP2SettingID, uset.read!HTTP2SettingValue);
 		return true;
 	}
 
@@ -195,21 +198,24 @@ struct HTTP2Settings {
 	 * private overload for decoded parameters assignment
 	 */
 	void set(HTTP2SettingID id)(HTTP2SettingValue value) @safe
-		if(id <= maxID && id >= minID)
+		if (id <= maxID && id >= minID)
 	{
-		m_set(id,value);
+		m_set(id, value);
 	}
 
 	private void m_set(HTTP2SettingID id, HTTP2SettingValue value) @safe
 	{
 		// must use labeled break w. static foreach
-		assign: switch(id) {
-			default: logWarn("Unsupported SETTINGS code:" ~ to!string(id)); return;
-			static foreach(c; __traits(allMembers, HTTP2SettingsParameter)) {
-				case __traits(getMember, HTTP2SettingsParameter, c):
-					__traits(getMember, this, c) = value;
-					break assign;
-			}
+	assign:
+		switch (id) {
+			default:
+				logWarn("Unsupported SETTINGS code:" ~ to!string(id));
+				return;
+				static foreach (c; __traits(allMembers, HTTP2SettingsParameter)) {
+					case __traits(getMember, HTTP2SettingsParameter, c):
+						__traits(getMember, this, c) = value;
+						break assign;
+				}
 		}
 
 	}
@@ -218,30 +224,31 @@ struct HTTP2Settings {
 
 void serializeSettings(R)(ref R dst, HTTP2Settings settings) @safe @nogc
 {
-	static foreach(s; __traits(allMembers, HTTP2Settings)) {
-		static if(is(typeof(__traits(getMember, HTTP2Settings, s)) == HTTP2SettingValue)) {
-			mixin("dst.putBytes!2((getUDAs!(settings."~s~",HTTP2Setting)[0]).id);");
-			mixin("dst.putBytes!4(settings."~s~");");
+	static foreach (s; __traits(allMembers, HTTP2Settings)) {
+		static if (is(typeof(__traits(getMember, HTTP2Settings, s)) == HTTP2SettingValue)) {
+			mixin("dst.putBytes!2((getUDAs!(settings." ~ s ~ ",HTTP2Setting)[0]).id);");
+			mixin("dst.putBytes!4(settings." ~ s ~ ");");
 		}
 	}
 }
 
 void unpackSettings(R)(ref HTTP2Settings settings, R src) @safe
 {
-	while(!src.empty) {
+	while (!src.empty) {
 		auto id = src.takeExactly(2).fromBytes(2);
 		src.popFrontN(2);
 
 		// invalid IDs: ignore setting
-		if(!(id >= minID && id <= maxID)) {
+		if (!(id >= minID && id <= maxID)) {
 			src.popFrontN(4);
 			continue;
 		}
 
-		static foreach(s; __traits(allMembers, HTTP2Settings)) {
-			static if(is(typeof(__traits(getMember, HTTP2Settings, s)) == HTTP2SettingValue)) {
-				mixin("if(id == ((getUDAs!(settings."~s~",HTTP2Setting)[0]).id)) {
-							settings."~s~" = src.takeExactly(4).fromBytes(4);
+		static foreach (s; __traits(allMembers, HTTP2Settings)) {
+			static if (is(typeof(__traits(getMember, HTTP2Settings, s)) == HTTP2SettingValue)) {
+				mixin("if(id == ((getUDAs!(settings." ~ s ~ ",HTTP2Setting)[0]).id)) {
+							settings."
+						~ s ~ " = src.takeExactly(4).fromBytes(4);
 							src.popFrontN(4);
 						}");
 
@@ -250,13 +257,13 @@ void unpackSettings(R)(ref HTTP2Settings settings, R src) @safe
 	}
 
 	enforceHTTP2(settings.enablePush == 0 || settings.enablePush == 1,
-			"Invalid value for ENABLE_PUSH setting.", HTTP2Error.PROTOCOL_ERROR);
+		"Invalid value for ENABLE_PUSH setting.", HTTP2Error.PROTOCOL_ERROR);
 
 	enforceHTTP2(settings.initialWindowSize < (1 << 31),
-			"Invalid value for INITIAL_WINDOW_SIZE setting.", HTTP2Error.FLOW_CONTROL_ERROR);
+		"Invalid value for INITIAL_WINDOW_SIZE setting.", HTTP2Error.FLOW_CONTROL_ERROR);
 
 	enforceHTTP2(settings.maxFrameSize >= (1 << 14) && settings.maxFrameSize < (1 << 24),
-			"Invalid value for MAX_FRAME_SIZE setting.", HTTP2Error.FLOW_CONTROL_ERROR);
+		"Invalid value for MAX_FRAME_SIZE setting.", HTTP2Error.FLOW_CONTROL_ERROR);
 }
 
 unittest {
@@ -279,8 +286,9 @@ unittest {
 
 	// get a HTTP2Setting struct containing the code and the parameter name
 	import std.traits : getUDAs;
+
 	assert(getUDAs!(settings.headerTableSize, HTTP2Setting)[0] == HTTP2Setting(0x1,
-				"SETTINGS_HEADER_TABLE_SIZE"));
+			"SETTINGS_HEADER_TABLE_SIZE"));
 
 	// test decoding from base64url
 	// h2settings contains:
@@ -299,12 +307,12 @@ unittest {
 }
 
 /** Context is initialized on each new connection
-  * it MUST remain consistent between streams of the same connection
-  * Contains HTTP2Settings negotiated during handshake
-  * TODO set of USED streams for proper HTTP2ConnectionStream initialization
+
+	it MUST remain consistent between streams of the same connection
+	Contains HTTP2Settings negotiated during handshake
+	TODO set of USED streams for proper HTTP2ConnectionStream initialization
 */
-final class HTTP2ServerContext
-{
+final class HTTP2ServerContext {
 	private {
 		HTTPServerContext m_context;
 		Nullable!HTTP2Settings m_settings;
@@ -322,7 +330,8 @@ final class HTTP2ServerContext
 	ubyte[] resFrame = void;
 
 	this(HTTPServerContext ctx, HTTP2Settings settings, ref NetworkAddress remote_address)
-	@safe {
+	@safe
+	{
 		m_context = ctx;
 		m_settings = settings;
 		m_remoteAddress = remote_address;
@@ -333,37 +342,60 @@ final class HTTP2ServerContext
 		m_context = ctx;
 	}
 
-	@property ref const(NetworkAddress) remoteAddress() const @safe { return m_remoteAddress; }
+	@property ref const(NetworkAddress) remoteAddress() const @safe
+	{
+		return m_remoteAddress;
+	}
 
-	@property auto ref table() @safe { return m_table.get; }
+	@property auto ref table() @safe
+	{
+		return m_table.get;
+	}
 
-	@property bool hasTable() @safe { return m_initializedT; }
+	@property bool hasTable() @safe
+	{
+		return m_initializedT;
+	}
 
-	@property void table(T)(T table) @safe
-		if(is(T == typeof(m_table)))
+	@property void table(T)(T table) @safe if (is(T == typeof(m_table)))
 	{
 		assert(!m_initializedT);
 		m_table = table;
 		m_initializedT = true;
 	}
 
-	@property auto ref multiplexer() @safe { return m_multiplexer.get; }
+	@property auto ref multiplexer() @safe
+	{
+		return m_multiplexer.get;
+	}
 
-	@property bool hasMultiplexer() @safe { return m_initializedM; }
+	@property bool hasMultiplexer() @safe
+	{
+		return m_initializedM;
+	}
 
 	@property void multiplexer(T)(T multiplexer) @safe
-		if(is(T == typeof(m_multiplexer)))
+		if (is(T == typeof(m_multiplexer)))
 	{
 		assert(!m_initializedM);
 		m_multiplexer = multiplexer;
 		m_initializedM = true;
 	}
 
-	@property HTTPServerContext h1context() @safe @nogc { return m_context; }
+	@property HTTPServerContext h1context() @safe @nogc
+	{
+		return m_context;
+	}
 
-	@property uint next_sid() @safe @nogc { return m_sid; }
+	@property uint next_sid() @safe @nogc
+	{
+		return m_sid;
+	}
 
-	@property void next_sid(uint sid) @safe @nogc { m_sid = sid; }
+	@property void next_sid(uint sid) @safe @nogc
+	{
+		m_sid = sid;
+	}
 
 	@property ref HTTP2Settings settings() @safe @nogc
 	{
@@ -379,7 +411,6 @@ final class HTTP2ServerContext
 			if (settings.headerTableSize != 4096) {
 				table.updateSize(settings.headerTableSize);
 			}
-		} ();
+		}();
 	}
 }
-
