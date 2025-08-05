@@ -682,14 +682,14 @@ void parseHTTP2RequestHeader(R)(ref R headers, HTTPServerRequest req) @safe
 	import std.algorithm.iteration : filter;
 
 	//Method
-	req.method = cast(HTTPMethod)headers.find!((h,m) => h.name == m)(":method")[0].value;
+	req.method = headers.find!((h,m) => h.name == m)(":method")[0].value.methodValue;
 
 	//Host
 	auto host = headers.find!((h,m) => h.name == m)(":authority");
-	if(!host.empty) req.host = cast(string)host[0].value;
+	if(!host.empty) req.host = host[0].valueString;
 
 	//Path
-	auto pathstr = cast(string)headers.find!((h,m) => h.name == m)(":path")[0].value;
+	auto pathstr = headers.find!((h,m) => h.name == m)(":path")[0].valueString;
 	if(req.tls) req.requestURI = "https://" ~ req.host ~ pathstr;
 	else req.requestURI = "http://" ~ req.host ~ pathstr;
 
@@ -704,6 +704,6 @@ void parseHTTP2RequestHeader(R)(ref R headers, HTTPServerRequest req) @safe
 
 	//headers
 	foreach(h; headers.filter!(f => !f.name.startsWith(":"))) {
-		req.headers[h.name] = cast(string)h.value;
+		req.headers[h.name] = h.valueString;
 	}
 }

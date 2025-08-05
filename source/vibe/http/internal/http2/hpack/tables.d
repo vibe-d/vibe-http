@@ -57,30 +57,41 @@ enum DEFAULT_DYNAMIC_TABLE_SIZE = 4096;
 
 // wraps a header field = name:value
 struct HTTP2HeaderTableField {
-	private union HeaderValue {
+	private union HeaderValueFields {
 		string str;
 		string[] strarr;
 		HTTPStatus status;
 		HTTPMethod method;
 	}
+	alias HeaderValue = TaggedUnion!HeaderValueFields;
 
 	string name;
-	TaggedAlgebraic!HeaderValue value;
+	HeaderValue value;
 	bool index = true;
 	bool neverIndex = false;
 
 	// initializers
-	static foreach(t; __traits(allMembers, HeaderValue)) {
-		mixin("this(string n, " ~
-				typeof(__traits(getMember, HeaderValue, t)).stringof ~
-				" v) @safe { name = n; value = v; }");
-	}
+	this(T)(string n, T v) @safe { name = n; value = v; }
 
 	this(R)(R t) @safe
 		if(is(ElementType!R : string))
 	{
 		assert(t.length == 2, "Invalid range for HTTP2HeaderTableField initializer");
 		this(t[0], t[1]);
+	}
+
+	@property string valueString()
+	const @safe nothrow {
+		import std.conv : to;
+
+		// FIME: This conversion needs to be verified for correctness. The previous
+		//        implementation just used value.to!string, which is definitely wrong.
+		final switch (value.kind) with (HTTP2HeaderTableField.HeaderValue.Kind) {
+			case str: return value.strValue;
+			case strarr: return join(value.strarrValue, " ");
+			case status: return (cast(int)value.statusValue).to!string;
+			case method: return httpMethodString(value.methodValue);
+		}
 	}
 }
 
@@ -173,10 +184,10 @@ HTTP2SettingValue computeEntrySize(HTTP2HeaderTableField f) @safe
 	HTTP2SettingValue ret = cast(HTTP2SettingValue)f.name.length + 32;
 
 	final switch (f.value.kind) {
-		case k.str: ret += f.value.get!string.length; break;
-		case k.strarr: ret += f.value.get!(string[]).map!(s => s.length).sum(); break;
-		case k.status: ret += cast(size_t)log10(cast(double)f.value.get!HTTPStatus) + 1; break;
-		case k.method: ret += httpMethodString(f.value.get!HTTPMethod).length; break;
+		case k.str: ret += f.value.value!string.length; break;
+		case k.strarr: ret += f.value.value!(string[]).map!(s => s.length).sum(); break;
+		case k.status: ret += cast(size_t)log10(cast(double)f.value.value!HTTPStatus) + 1; break;
+		case k.method: ret += httpMethodString(f.value.value!HTTPMethod).length; break;
 	}
 	return ret;
 }
@@ -282,7 +293,7 @@ unittest {
 	auto a = getStaticTableEntry(1);
 	static assert(is(typeof(a) == immutable(HTTP2HeaderTableField)));
 	assert(a.name == ":authority");
-	assert(getStaticTableEntry(2).name == ":method" && getStaticTableEntry(2).value == HTTPMethod.GET);
+	assert(getStaticTableEntry(2).name == ":method" && getStaticTableEntry(2).value.methodValue == HTTPMethod.GET);
 
 	DynamicTable dt = DynamicTable(DEFAULT_DYNAMIC_TABLE_SIZE+2048);
 	assert(dt.size == 0);
@@ -374,7 +385,7 @@ struct IndexingTable {
 unittest {
 	// indexing table
 	IndexingTable table = IndexingTable(DEFAULT_DYNAMIC_TABLE_SIZE);
-	assert(table[2].name == ":method" && table[2].value == HTTPMethod.GET);
+	assert(table[2].name == ":method" && table[2].value.methodValue == HTTPMethod.GET);
 
 	// assignment
 	auto h = HTTP2HeaderTableField("test", "testval");

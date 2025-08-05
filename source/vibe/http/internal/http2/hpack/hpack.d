@@ -155,7 +155,7 @@ unittest {
 	//auto decoder = HeaderDecoder!(ubyte[])(block, table);
 	auto dec1 = appender!(HTTP2HeaderTableField[]);
 	block.decodeHPACK(dec1, table, alloc);
-	assert(dec1.data.front.name == "custom-key" && dec1.data.front.value == "custom-header");
+	assert(dec1.data.front.name == "custom-key" && dec1.data.front.value.strValue == "custom-header");
 	// check entries to be inserted in the indexing table (dynamic)
 	assert(dec1.data.front.index);
 
@@ -165,7 +165,7 @@ unittest {
 	block = [0x41, 0x8c, 0xf1, 0xe3, 0xc2, 0xe5, 0xf2, 0x3a, 0x6b, 0xa0, 0xab, 0x90, 0xf4, 0xff];
 	auto dec1b = appender!(HTTP2HeaderTableField[]);
 	block.decodeHPACK(dec1b, table, alloc);
-	assert(dec1b.data.front.name == ":authority" && dec1b.data.front.value == "www.example.com");
+	assert(dec1b.data.front.name == ":authority" && dec1b.data.front.value.strValue == "www.example.com");
 	assert(dec1b.data.front.index);
 
 	/** 2. Literal header field without indexing (raw)
@@ -174,7 +174,7 @@ unittest {
 	block = [0x04, 0x0c, 0x2f, 0x73, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2f, 0x70, 0x61, 0x74, 0x68];
 	auto dec2 = appender!(HTTP2HeaderTableField[]);
 	block.decodeHPACK(dec2, table, alloc);
-	assert(dec2.data.front.name == ":path" && dec2.data.front.value == "/sample/path");
+	assert(dec2.data.front.name == ":path" && dec2.data.front.value.strValue == "/sample/path");
 
 
 	/** 3. Literal header field never indexed (raw)
@@ -184,7 +184,7 @@ unittest {
 		  0x63, 0x72, 0x65, 0x74];
 	auto dec3 = appender!(HTTP2HeaderTableField[]);
 	block.decodeHPACK(dec3, table, alloc);
-	assert(dec3.data.front.name == "password" && dec3.data.front.value == "secret");
+	assert(dec3.data.front.name == "password" && dec3.data.front.value.strValue == "secret");
 	assert(dec3.data.front.neverIndex);
 
 
@@ -195,7 +195,7 @@ unittest {
 	block = [0x82];
 	auto dec4 = appender!(HTTP2HeaderTableField[]);
 	block.decodeHPACK(dec4, table, alloc);
-	assert(dec4.data.front.name == ":method" && dec4.data.front.value == HTTPMethod.GET);
+	assert(dec4.data.front.name == ":method" && dec4.data.front.value.methodValue == HTTPMethod.GET);
 
 	/** 5. Full request without huffman encoding
 	  * :method: GET
@@ -259,6 +259,6 @@ unittest {
 
 	auto dec1b = appender!(HTTP2HeaderTableField[]);
 	block.decodeHPACK(dec1b, table, alloc);
-	assert(dec1b.data.front.name == ":authority" && dec1b.data.front.value == "www.example.com");
+	assert(dec1b.data.front.name == ":authority" && dec1b.data.front.value.strValue == "www.example.com");
 	assert(dec1b.data.front.index);
 }
