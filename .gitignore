@@ -18,9 +18,6 @@ __dummy.html
 .dub
 dub.selections.json
 
-# Auto-generated
-tls/openssl_version.d
-
 # Auto-downloaded 3rd-party (Meson)
 lib/subprojects/allocator
 lib/subprojects/diet/
@@ -33,13 +30,11 @@ lib/subprojects/openssl/
 vibe-d
 tests/*/tests
 __test__*__
-vibe-d-test*
-vibe-d-*-test*
+vibe-http-test*
+vibe-http-*-test*
 
 # Examples
 examples/*/*-example
-examples/app_skeleton/app-skeleton
-examples/app_skeleton/__test__library__
 examples/bench-http-request/bench-http-request
 examples/bench-http-server/bench-http-server
 examples/bench-mongodb/bench-mongodb
