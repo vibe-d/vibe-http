@@ -1,3 +1,11 @@
+1.3.1 - 2025-08-06
+==================
+
+- Improved compile time - [pull #61][issue61]
+
+[issue61]: https://github.com/vibe-d/vibe-http/issues/61
+
+
 1.3.0 - 2025-07-21
 ==================
 
