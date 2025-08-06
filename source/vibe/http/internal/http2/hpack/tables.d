@@ -17,7 +17,6 @@ import std.algorithm.iteration;
 import std.math : log10;
 import taggedalgebraic;
 
-
 alias HTTP2SettingValue = uint;
 
 // 4096 octets
@@ -32,10 +31,12 @@ enum DEFAULT_DYNAMIC_TABLE_SIZE = 4096;
 	index header fields repeated in the encoded header lists.
 	These two tables are combined into a single address space for
 	defining index values (see Section 2.3.3).
- 2.3.1.  Static Table
+
+	2.3.1.  Static Table
 	The static table consists of a predefined static list of header
 	fields.  Its entries are defined in Appendix A.
- 2.3.2.  Dynamic Table
+
+	2.3.2.  Dynamic Table
 	The dynamic table consists of a list of header fields maintained in
 	first-in, first-out order.  The first and newest entry in a dynamic
 	table is at the lowest index, and the oldest entry of a dynamic tabl
@@ -63,6 +64,7 @@ struct HTTP2HeaderTableField {
 		HTTPStatus status;
 		HTTPMethod method;
 	}
+
 	alias HeaderValue = TaggedUnion!HeaderValueFields;
 
 	string name;
@@ -71,26 +73,34 @@ struct HTTP2HeaderTableField {
 	bool neverIndex = false;
 
 	// initializers
-	this(T)(string n, T v) @safe { name = n; value = v; }
+	this(T)(string n, T v) @safe
+	{
+		name = n;
+		value = v;
+	}
 
-	this(R)(R t) @safe
-		if(is(ElementType!R : string))
+	this(R)(R t) @safe if (is(ElementType!R : string))
 	{
 		assert(t.length == 2, "Invalid range for HTTP2HeaderTableField initializer");
 		this(t[0], t[1]);
 	}
 
 	@property string valueString()
-	const @safe nothrow {
+	const @safe nothrow
+	{
 		import std.conv : to;
 
 		// FIME: This conversion needs to be verified for correctness. The previous
 		//        implementation just used value.to!string, which is definitely wrong.
 		final switch (value.kind) with (HTTP2HeaderTableField.HeaderValue.Kind) {
-			case str: return value.strValue;
-			case strarr: return join(value.strarrValue, " ");
-			case status: return (cast(int)value.statusValue).to!string;
-			case method: return httpMethodString(value.methodValue);
+			case str:
+				return value.strValue;
+			case strarr:
+				return join(value.strarrValue, " ");
+			case status:
+				return (cast(int)value.statusValue).to!string;
+			case method:
+				return httpMethodString(value.methodValue);
 		}
 	}
 }
@@ -99,14 +109,16 @@ struct HTTP2HeaderTableField {
 immutable size_t STATIC_TABLE_SIZE = 61;
 
 /** static table to index most common headers
-  * fixed size, fixed order of entries (read only)
-  * cannot be updated while decoding a header block
-  */
-static immutable HTTP2HeaderTableField[STATIC_TABLE_SIZE+1] StaticTable;
 
-shared static this() {
+	fixed size, fixed order of entries (read only)
+	cannot be updated while decoding a header block
+*/
+static immutable HTTP2HeaderTableField[STATIC_TABLE_SIZE + 1] StaticTable;
+
+shared static this()
+{
 	StaticTable = [
-		HTTP2HeaderTableField("",""), // 0 index is not allowed
+		HTTP2HeaderTableField("", ""), // 0 index is not allowed
 		HTTP2HeaderTableField(":authority", ""),
 		HTTP2HeaderTableField(":method", HTTPMethod.GET),
 		HTTP2HeaderTableField(":method", HTTPMethod.POST),
@@ -114,13 +126,13 @@ shared static this() {
 		HTTP2HeaderTableField(":path", "/index.html"),
 		HTTP2HeaderTableField(":scheme", "http"),
 		HTTP2HeaderTableField(":scheme", "https"),
-		HTTP2HeaderTableField(":status", HTTPStatus.ok), 					// 200
-		HTTP2HeaderTableField(":status", HTTPStatus.noContent), 				// 204
-		HTTP2HeaderTableField(":status", HTTPStatus.partialContent), 		// 206
-		HTTP2HeaderTableField(":status", HTTPStatus.notModified), 			// 304
-		HTTP2HeaderTableField(":status", HTTPStatus.badRequest), 			// 400
-		HTTP2HeaderTableField(":status", HTTPStatus.notFound), 				// 404
-		HTTP2HeaderTableField(":status", HTTPStatus.internalServerError), 	// 500
+		HTTP2HeaderTableField(":status", HTTPStatus.ok), // 200
+		HTTP2HeaderTableField(":status", HTTPStatus.noContent), // 204
+		HTTP2HeaderTableField(":status", HTTPStatus.partialContent), // 206
+		HTTP2HeaderTableField(":status", HTTPStatus.notModified), // 304
+		HTTP2HeaderTableField(":status", HTTPStatus.badRequest), // 400
+		HTTP2HeaderTableField(":status", HTTPStatus.notFound), // 404
+		HTTP2HeaderTableField(":status", HTTPStatus.internalServerError), // 500
 		HTTP2HeaderTableField("accept-charset", ""),
 		HTTP2HeaderTableField("accept-encoding", ["gzip", "deflate"]),
 		HTTP2HeaderTableField("accept-language", ""),
@@ -173,8 +185,8 @@ shared static this() {
 
 private ref immutable(HTTP2HeaderTableField) getStaticTableEntry(size_t key) @safe @nogc
 {
-    assert(key > 0 && key < StaticTable.length, "Invalid static table index");
-    return StaticTable[key];
+	assert(key > 0 && key < StaticTable.length, "Invalid static table index");
+	return StaticTable[key];
 }
 
 // compute size of an entry as per RFC
@@ -184,10 +196,21 @@ HTTP2SettingValue computeEntrySize(HTTP2HeaderTableField f) @safe
 	HTTP2SettingValue ret = cast(HTTP2SettingValue)f.name.length + 32;
 
 	final switch (f.value.kind) {
-		case k.str: ret += f.value.value!string.length; break;
-		case k.strarr: ret += f.value.value!(string[]).map!(s => s.length).sum(); break;
-		case k.status: ret += cast(size_t)log10(cast(double)f.value.value!HTTPStatus) + 1; break;
-		case k.method: ret += httpMethodString(f.value.value!HTTPMethod).length; break;
+		case k.str:
+			ret += f.value.value!string.length;
+			break;
+		case k.strarr:
+			ret += f.value
+				.value!(string[])
+				.map!(s => s.length)
+				.sum();
+			break;
+		case k.status:
+			ret += cast(size_t)log10(cast(double)f.value.value!HTTPStatus) + 1;
+			break;
+		case k.method:
+			ret += httpMethodString(f.value.value!HTTPMethod).length;
+			break;
 	}
 	return ret;
 }
@@ -195,7 +218,7 @@ HTTP2SettingValue computeEntrySize(HTTP2HeaderTableField f) @safe
 private struct DynamicTable {
 	private {
 		// default table is 4096 octs. / n. octets of an empty HTTP2HeaderTableField struct (32)
-		RingBuffer!(HTTP2HeaderTableField, DEFAULT_DYNAMIC_TABLE_SIZE/HTTP2HeaderTableField.sizeof, false) m_table;
+		RingBuffer!(HTTP2HeaderTableField, DEFAULT_DYNAMIC_TABLE_SIZE / HTTP2HeaderTableField.sizeof, false) m_table;
 
 		// extra table is a circular buffer, initially empty, used when
 		// maxsize > DEFAULT_DYNAMIC_TABLE_SIZE
@@ -218,24 +241,36 @@ private struct DynamicTable {
 	{
 		m_maxsize = ms;
 
-		if(ms > DEFAULT_DYNAMIC_TABLE_SIZE) {
-			m_extraTable.capacity = (ms - DEFAULT_DYNAMIC_TABLE_SIZE)/HTTP2HeaderTableField.sizeof;
+		if (ms > DEFAULT_DYNAMIC_TABLE_SIZE) {
+			m_extraTable.capacity = (ms - DEFAULT_DYNAMIC_TABLE_SIZE) / HTTP2HeaderTableField
+				.sizeof;
 		}
 	}
 
-	@property void dispose() nothrow { m_extraTable.dispose(); }
+	@property void dispose() nothrow
+	{
+		m_extraTable.dispose();
+	}
 
 	// number of elements inside dynamic table
-	@property size_t size() @safe @nogc { return m_size; }
+	@property size_t size() @safe @nogc
+	{
+		return m_size;
+	}
 
-	@property size_t index() @safe @nogc { return m_index; }
+	@property size_t index() @safe @nogc
+	{
+		return m_index;
+	}
 
 	HTTP2HeaderTableField opIndex(size_t idx) @safe @nogc
 	{
 		size_t totIndex = m_index + m_extraIndex;
 		assert(idx > 0 && idx <= totIndex, "Invalid table index");
-		if(idx > m_index && idx < totIndex) return m_extraTable[idx-m_index];
-		else return m_table[idx-1];
+		if (idx > m_index && idx < totIndex)
+			return m_extraTable[idx - m_index];
+		else
+			return m_table[idx - 1];
 	}
 
 	// insert at the head
@@ -243,13 +278,13 @@ private struct DynamicTable {
 	{
 		auto nsize = computeEntrySize(header);
 		// ensure that the new entry does not exceed table capacity
-		while(m_size + nsize > m_maxsize) {
+		while (m_size + nsize > m_maxsize) {
 			//logDebug("Maximum header table size exceeded"); // requires gc
 			remove();
 		}
 
 		// insert
-		if(m_size + nsize > DEFAULT_DYNAMIC_TABLE_SIZE) {
+		if (m_size + nsize > DEFAULT_DYNAMIC_TABLE_SIZE) {
 			m_extraTable.put(header);
 			m_extraIndex++;
 		} else {
@@ -265,7 +300,7 @@ private struct DynamicTable {
 	{
 		enforceHPACK(!m_table.empty, "Cannot remove element from empty table");
 
-		if(m_extraIndex > 0) {
+		if (m_extraIndex > 0) {
 			m_size -= computeEntrySize(m_extraTable.back);
 			m_extraTable.removeFront();
 			m_extraIndex--;
@@ -276,11 +311,12 @@ private struct DynamicTable {
 		}
 	}
 
-	/** new size should be lower than the max set one
-	  * after size is successfully changed, an ACK has to be sent
-	  * multiple changes between two header fields are possible
-	  * if multiple changes occour, only the smallest maximum size
-	  * requested has to be acknowledged
+	/*
+		new size should be lower than the max set one
+		after size is successfully changed, an ACK has to be sent
+		multiple changes between two header fields are possible
+		if multiple changes occour, only the smallest maximum size
+		requested has to be acknowledged
 	*/
 	void updateSize(HTTP2SettingValue sz) @safe @nogc
 	{
@@ -293,9 +329,10 @@ unittest {
 	auto a = getStaticTableEntry(1);
 	static assert(is(typeof(a) == immutable(HTTP2HeaderTableField)));
 	assert(a.name == ":authority");
-	assert(getStaticTableEntry(2).name == ":method" && getStaticTableEntry(2).value.methodValue == HTTPMethod.GET);
+	assert(getStaticTableEntry(2).name == ":method" && getStaticTableEntry(2)
+			.value.methodValue == HTTPMethod.GET);
 
-	DynamicTable dt = DynamicTable(DEFAULT_DYNAMIC_TABLE_SIZE+2048);
+	DynamicTable dt = DynamicTable(DEFAULT_DYNAMIC_TABLE_SIZE + 2048);
 	assert(dt.size == 0);
 	assert(dt.index == 0);
 
@@ -314,8 +351,9 @@ unittest {
 }
 
 /** provides an unified address space through operator overloading
-  * this is the only interface that will be used for the two tables
-  */
+
+	this is the only interface that will be used for the two tables
+*/
 struct IndexingTable {
 	private {
 		DynamicTable m_dynamic;
@@ -326,27 +364,37 @@ struct IndexingTable {
 	this(HTTP2SettingValue ms) @trusted nothrow
 	{
 		m_dynamic = DynamicTable(ms);
-		try m_lock = new RecursiveTaskMutex;
-		catch (Exception e) assert(false, e.msg);
+		try
+			m_lock = new RecursiveTaskMutex;
+		catch (Exception e)
+			assert(false, e.msg);
 	}
 
 	~this()
-	nothrow {
+	nothrow
+	{
 		m_dynamic.dispose();
 	}
 
-	@property size_t size() @safe @nogc { return STATIC_TABLE_SIZE + m_dynamic.index + 1; }
+	@property size_t size() @safe @nogc
+	{
+		return STATIC_TABLE_SIZE + m_dynamic.index + 1;
+	}
 
-	@property bool empty() @safe @nogc { return m_dynamic.size == 0; }
+	@property bool empty() @safe @nogc
+	{
+		return m_dynamic.size == 0;
+	}
 
-	@property HTTP2HeaderTableField front() @safe { return this[0]; }
+	@property HTTP2HeaderTableField front() @safe
+	{
+		return this[0];
+	}
 
 	@property void popFront() @safe
 	{
 		assert(!empty, "Cannot call popFront on an empty dynamic table");
-		m_lock.performLocked!({
-			m_dynamic.remove();
-		});
+		m_lock.performLocked!({ m_dynamic.remove(); });
 	}
 
 	// element retrieval
@@ -354,8 +402,10 @@ struct IndexingTable {
 	{
 		enforceHPACK(idx > 0 && idx < size(), "Invalid HPACK table index");
 
-		if (idx < STATIC_TABLE_SIZE+1) return getStaticTableEntry(idx);
-		else return m_dynamic[m_dynamic.index - (idx - STATIC_TABLE_SIZE) + 1];
+		if (idx < STATIC_TABLE_SIZE + 1)
+			return getStaticTableEntry(idx);
+		else
+			return m_dynamic[m_dynamic.index - (idx - STATIC_TABLE_SIZE) + 1];
 	}
 
 	// dollar == size
@@ -368,17 +418,13 @@ struct IndexingTable {
 	// assignment can only be done on the dynamic table
 	void insert(HTTP2HeaderTableField hf) @safe
 	{
-		m_lock.performLocked!({
-			m_dynamic.insert(hf);
-		});
+		m_lock.performLocked!({ m_dynamic.insert(hf); });
 	}
 
 	// update max dynamic table size
 	void updateSize(HTTP2SettingValue sz) @safe
 	{
-		m_lock.performLocked!({
-			m_dynamic.updateSize(sz);
-		});
+		m_lock.performLocked!({ m_dynamic.updateSize(sz); });
 	}
 }
 
@@ -391,20 +437,20 @@ unittest {
 	auto h = HTTP2HeaderTableField("test", "testval");
 	table.insert(h);
 	assert(table.size == STATIC_TABLE_SIZE + 2);
-	assert(table[STATIC_TABLE_SIZE+1].name == "test");
+	assert(table[STATIC_TABLE_SIZE + 1].name == "test");
 
 	auto h2 = HTTP2HeaderTableField("test2", "testval2");
 	table.insert(h2);
 	assert(table.size == STATIC_TABLE_SIZE + 3);
-	assert(table[STATIC_TABLE_SIZE+1].name == "test2");
+	assert(table[STATIC_TABLE_SIZE + 1].name == "test2");
 
 	// dollar
 	auto h3 = HTTP2HeaderTableField("test3", "testval3");
 	table.insert(h3);
 	assert(table.size == STATIC_TABLE_SIZE + 4);
-	assert(table[$-1].name == "test");
-	assert(table[$-2].name == "test2");
-	assert(table[STATIC_TABLE_SIZE+1].name == "test3");
+	assert(table[$ - 1].name == "test");
+	assert(table[$ - 2].name == "test2");
+	assert(table[STATIC_TABLE_SIZE + 1].name == "test3");
 
 	// test removal on full table
 
@@ -416,7 +462,7 @@ unittest {
 	assert(t2[STATIC_TABLE_SIZE + 1].name == "test");
 	assert(t2[$ - 1].name == "test");
 
-	auto h4 = HTTP2HeaderTableField("","");
+	auto h4 = HTTP2HeaderTableField("", "");
 	hts = computeEntrySize(h4); // entry size of an empty field is 32 octets
 	assert(hts == 32);
 }

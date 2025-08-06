@@ -15,7 +15,8 @@ void encode(R)(HTTP2HeaderTableField header, ref R dst, ref IndexingTable table,
 	// try to encode as integer
 	bool indexed = encodeInteger(header, dst, table, huffman);
 	// if fail, encode as literal
-	if(!indexed) encodeLiteral(header, dst, huffman);
+	if (!indexed)
+		encodeLiteral(header, dst, huffman);
 }
 
 /// encode a pure integer (present in table) or integer name + literal value
@@ -27,25 +28,25 @@ private bool encodeInteger(R)(const HTTP2HeaderTableField header, ref R dst, ref
 	bool found = false;
 	size_t partialFound = false;
 
-	while(idx < table.size) {
+	while (idx < table.size) {
 		// encode both name / value as index
 		auto h = table[idx];
-		if(h.name == header.name && h.value == header.value) {
+		if (h.name == header.name && h.value == header.value) {
 			found = true;
 			partialFound = false;
 			break;
 			// encode name as index, value as literal
-		} else if(h.name == header.name && h.value != header.value) {
+		} else if (h.name == header.name && h.value != header.value) {
 			found = false;
 			partialFound = idx;
 		}
 		idx++;
 	}
 
-	if(found) {
-		if(idx < 127) { // can be fit in one octet
+	if (found) {
+		if (idx < 127) { // can be fit in one octet
 			dst.put(cast(ubyte)(idx ^ 128));
-		} else { 		// must be split in multiple octets
+		} else { // must be split in multiple octets
 			dst.put(cast(ubyte)255);
 			idx -= 127;
 			while (idx > 127) {
@@ -56,11 +57,14 @@ private bool encodeInteger(R)(const HTTP2HeaderTableField header, ref R dst, ref
 		}
 		return true;
 
-	} else if(partialFound) {
+	} else if (partialFound) {
 		// encode name as index ( always smaller than 64 )
-		if(header.index) dst.put(cast(ubyte)((partialFound + 64) & 127));
-		else if (header.neverIndex) dst.put(cast(ubyte)((partialFound + 16) & 31));
-		else dst.put(cast(ubyte)(partialFound & 15));
+		if (header.index)
+			dst.put(cast(ubyte)((partialFound + 64) & 127));
+		else if (header.neverIndex)
+			dst.put(cast(ubyte)((partialFound + 16) & 31));
+		else
+			dst.put(cast(ubyte)(partialFound & 15));
 		// encode value as literal
 		encodeLiteralField!R(header.valueString, dst, huffman);
 
@@ -74,9 +78,12 @@ private bool encodeInteger(R)(const HTTP2HeaderTableField header, ref R dst, ref
 private void encodeLiteral(R)(const HTTP2HeaderTableField header, ref R dst, bool huffman = true)
 @safe
 {
-	if(header.index) dst.put(cast(ubyte)(64));
-	else if(header.neverIndex) dst.put(cast(ubyte)(16));
-	else dst.put(cast(ubyte)(0));
+	if (header.index)
+		dst.put(cast(ubyte)(64));
+	else if (header.neverIndex)
+		dst.put(cast(ubyte)(16));
+	else
+		dst.put(cast(ubyte)(0));
 
 	encodeLiteralField!R(header.name, dst, huffman);
 	encodeLiteralField!R(header.valueString, dst, huffman);
@@ -85,7 +92,7 @@ private void encodeLiteral(R)(const HTTP2HeaderTableField header, ref R dst, boo
 /// encode a field (name / value) using huffman or raw encoding
 private void encodeLiteralField(R)(string src, ref R dst, bool huffman = true) @safe
 {
-	if(huffman) {
+	if (huffman) {
 		encodeHuffman(src, dst);
 	} else {
 		ubyte blen = (src.length) & 127;
@@ -98,6 +105,7 @@ unittest {
 	// encode integer
 	import vibe.internal.array : BatchBuffer;
 	import vibe.http.common;
+
 	auto table = IndexingTable(4096);
 
 	BatchBuffer!(ubyte, 1) bres;
@@ -113,9 +121,13 @@ unittest {
 	// encode literal
 	// custom-key: custom-header
 	import vibe.internal.array : BatchBuffer;
-	ubyte[26] lexpected = [0x40, 0x0a, 0x63, 0x75,  0x73, 0x74,  0x6f, 0x6d,  0x2d, 0x6b,
-		0x65, 0x79, 0x0d, 0x63, 0x75, 0x73, 0x74, 0x6f, 0x6d, 0x2d, 0x68, 0x65, 0x61, 0x64,
-		0x65, 0x72];
+
+	ubyte[26] lexpected = [
+		0x40, 0x0a, 0x63, 0x75, 0x73, 0x74, 0x6f, 0x6d, 0x2d, 0x6b,
+		0x65, 0x79, 0x0d, 0x63, 0x75, 0x73, 0x74, 0x6f, 0x6d, 0x2d, 0x68, 0x65,
+		0x61, 0x64,
+		0x65, 0x72
+	];
 
 	BatchBuffer!(ubyte, 26) lres;
 	lres.putN(26);

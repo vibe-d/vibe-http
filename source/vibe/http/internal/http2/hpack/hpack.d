@@ -1,4 +1,3 @@
-//module vibe.http.internal.hpack.hpack;
 module vibe.http.internal.http2.hpack.hpack;
 
 import vibe.http.internal.http2.hpack.encoder;
@@ -9,24 +8,25 @@ import std.range;
 import std.typecons;
 import std.array; // appender
 import std.algorithm.iteration;
-import vibe.container.internal.utilallocator: RegionListAllocator;
-
+import vibe.container.internal.utilallocator : RegionListAllocator;
 
 /// interface for the HPACK encoder
-void encodeHPACK(I,R)(I src, ref R dst, ref IndexingTable table, bool huffman = true) @safe
-	if(is(I == HTTP2HeaderTableField) || is(ElementType!I : HTTP2HeaderTableField))
+void encodeHPACK(I, R)(I src, ref R dst, ref IndexingTable table, bool huffman = true) @safe
+	if (is(I == HTTP2HeaderTableField) || is(ElementType!I : HTTP2HeaderTableField))
 {
-	static if(is(I == HTTP2HeaderTableField)) {
+	static if (is(I == HTTP2HeaderTableField)) {
 		src.encode(dst, table, huffman);
-	} else if(is(ElementType!I : HTTP2HeaderTableField)){
+	} else if (is(ElementType!I : HTTP2HeaderTableField)) {
 		src.each!(h => h.encode(dst, table, huffman));
 	}
 }
 
-void decodeHPACK(I,R,T)(I src, ref R dst, ref IndexingTable table, ref T alloc, uint maxTableSize = 4096) @safe
-	if(isInputRange!I && (is(ElementType!I : immutable(ubyte)) || is(ElementType!I : immutable(char))))
+void decodeHPACK(I, R, T)(I src, ref R dst, ref IndexingTable table, ref T alloc, uint maxTableSize = 4096) @safe
+	if (isInputRange!I && (is(ElementType!I : immutable(ubyte)) || is(ElementType!I
+		: immutable(char))))
 {
-	while(!src.empty) src.decode(dst, table, alloc, maxTableSize);
+	while (!src.empty)
+		src.decode(dst, table, alloc, maxTableSize);
 }
 
 /// ENCODER
@@ -118,7 +118,10 @@ unittest {
 		HTTP2HeaderTableField("cache-control", "no-cache")
 	];
 
-	ubyte[14] expected = [0x82, 0x86, 0x84, 0xbe, 0x58, 0x08, 0x6e, 0x6f, 0x2d, 0x63, 0x61, 0x63, 0x68, 0x65];
+	ubyte[14] expected = [
+		0x82, 0x86, 0x84, 0xbe, 0x58, 0x08, 0x6e, 0x6f, 0x2d, 0x63, 0x61, 0x63,
+		0x68, 0x65
+	];
 	auto bres = appender!(ubyte[]);
 	block.encodeHPACK(bres, table, false);
 	assert(bres.data == expected);
@@ -130,7 +133,9 @@ unittest {
       * :authority: www.example.com
       * cache-control: no-cache
 	  */
-	ubyte[12] eexpected = [0x82, 0x86, 0x84, 0xbe, 0x58, 0x86, 0xa8, 0xeb, 0x10, 0x64, 0x9c, 0xbf];
+	ubyte[12] eexpected = [
+		0x82, 0x86, 0x84, 0xbe, 0x58, 0x86, 0xa8, 0xeb, 0x10, 0x64, 0x9c, 0xbf
+	];
 	auto bbres = appender!(ubyte[]);
 	block.encodeHPACK(bbres, table, true);
 	assert(bbres.data == eexpected);
@@ -149,8 +154,11 @@ unittest {
 	/** 1. Literal header field w. indexing (raw)
 	  * custom-key: custom-header
 	  */
-	immutable(ubyte)[] block = [0x40, 0x0a, 0x63, 0x75, 0x73, 0x74, 0x6f, 0x6d, 0x2d, 0x6b, 0x65, 0x79,
-		0x0d, 0x63, 0x75, 0x73, 0x74, 0x6f, 0x6d, 0x2d, 0x68, 0x65, 0x61, 0x64, 0x65, 0x72];
+	immutable(ubyte)[] block = [
+		0x40, 0x0a, 0x63, 0x75, 0x73, 0x74, 0x6f, 0x6d, 0x2d, 0x6b, 0x65, 0x79,
+		0x0d, 0x63, 0x75, 0x73, 0x74, 0x6f, 0x6d, 0x2d, 0x68, 0x65, 0x61, 0x64,
+		0x65, 0x72
+	];
 
 	//auto decoder = HeaderDecoder!(ubyte[])(block, table);
 	auto dec1 = appender!(HTTP2HeaderTableField[]);
@@ -162,7 +170,10 @@ unittest {
 	/** 1bis. Literal header field w. indexing (huffman encoded)
 	  * :authority: www.example.com
 	  */
-	block = [0x41, 0x8c, 0xf1, 0xe3, 0xc2, 0xe5, 0xf2, 0x3a, 0x6b, 0xa0, 0xab, 0x90, 0xf4, 0xff];
+	block = [
+		0x41, 0x8c, 0xf1, 0xe3, 0xc2, 0xe5, 0xf2, 0x3a, 0x6b, 0xa0, 0xab, 0x90,
+		0xf4, 0xff
+	];
 	auto dec1b = appender!(HTTP2HeaderTableField[]);
 	block.decodeHPACK(dec1b, table, alloc);
 	assert(dec1b.data.front.name == ":authority" && dec1b.data.front.value.strValue == "www.example.com");
@@ -171,27 +182,32 @@ unittest {
 	/** 2. Literal header field without indexing (raw)
 	  * :path: /sample/path
 	  */
-	block = [0x04, 0x0c, 0x2f, 0x73, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2f, 0x70, 0x61, 0x74, 0x68];
+	block = [
+		0x04, 0x0c, 0x2f, 0x73, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2f, 0x70, 0x61,
+		0x74, 0x68
+	];
 	auto dec2 = appender!(HTTP2HeaderTableField[]);
 	block.decodeHPACK(dec2, table, alloc);
 	assert(dec2.data.front.name == ":path" && dec2.data.front.value.strValue == "/sample/path");
 
-
 	/** 3. Literal header field never indexed (raw)
 	  * password: secret
 	  */
-	block = [0x10, 0x08, 0x70, 0x61, 0x73, 0x73, 0x77, 0x6f, 0x72, 0x64, 0x06, 0x73, 0x65,
-		  0x63, 0x72, 0x65, 0x74];
+	block = [
+		0x10, 0x08, 0x70, 0x61, 0x73, 0x73, 0x77, 0x6f, 0x72, 0x64, 0x06, 0x73,
+		0x65,
+		0x63, 0x72, 0x65, 0x74
+	];
 	auto dec3 = appender!(HTTP2HeaderTableField[]);
 	block.decodeHPACK(dec3, table, alloc);
 	assert(dec3.data.front.name == "password" && dec3.data.front.value.strValue == "secret");
 	assert(dec3.data.front.neverIndex);
 
-
 	/** 4. Indexed header field (integer)
 	  * :method: GET
 	  */
 	import vibe.http.common;
+
 	block = [0x82];
 	auto dec4 = appender!(HTTP2HeaderTableField[]);
 	block.decodeHPACK(dec4, table, alloc);
@@ -204,7 +220,10 @@ unittest {
       * :authority: www.example.com
       * cache-control: no-cache
 	  */
-	block = [0x82, 0x86, 0x84, 0xbe, 0x58, 0x08, 0x6e, 0x6f, 0x2d, 0x63, 0x61, 0x63, 0x68, 0x65];
+	block = [
+		0x82, 0x86, 0x84, 0xbe, 0x58, 0x08, 0x6e, 0x6f, 0x2d, 0x63, 0x61, 0x63,
+		0x68, 0x65
+	];
 	table.insert(HTTP2HeaderTableField(":authority", "www.example.com"));
 	auto decR1 = appender!(HTTP2HeaderTableField[]);
 	block.decodeHPACK(decR1, table, alloc);
@@ -213,9 +232,10 @@ unittest {
 		HTTP2HeaderTableField(":scheme", "http"),
 		HTTP2HeaderTableField(":path", "/"),
 		HTTP2HeaderTableField(":authority", "www.example.com"),
-		HTTP2HeaderTableField("cache-control", "no-cache")];
+		HTTP2HeaderTableField("cache-control", "no-cache")
+	];
 
-	foreach(i,h; decR1.data.enumerate(0)) {
+	foreach (i, h; decR1.data.enumerate(0)) {
 		assert(h == expected[i]);
 	}
 
@@ -226,11 +246,13 @@ unittest {
 	  * :authority: www.example.com
 	  * cache-control: no-cache
 	  */
-	block = [0x82, 0x86, 0x84, 0xbe, 0x58, 0x86, 0xa8, 0xeb, 0x10, 0x64, 0x9c,0xbf];
+	block = [
+		0x82, 0x86, 0x84, 0xbe, 0x58, 0x86, 0xa8, 0xeb, 0x10, 0x64, 0x9c, 0xbf
+	];
 	auto decR2 = appender!(HTTP2HeaderTableField[]);
 	block.decodeHPACK(decR2, table, alloc);
 
-	foreach(i,h; decR2.data.enumerate(0)) {
+	foreach (i, h; decR2.data.enumerate(0)) {
 		assert(h == expected[i]);
 	}
 
@@ -244,17 +266,20 @@ unittest {
 	assert(ckdec.data.front == ckexp);
 }
 
-
 /// Mallocator
 unittest {
 	import std.experimental.allocator;
 	import std.experimental.allocator.mallocator;
 	import std.experimental.allocator.gc_allocator;
+
 	auto table = IndexingTable(4096);
 	/** 1bis. Literal header field w. indexing (huffman encoded)
 	  * :authority: www.example.com
 	  */
-	immutable(ubyte)[] block = [0x41, 0x8c, 0xf1, 0xe3, 0xc2, 0xe5, 0xf2, 0x3a, 0x6b, 0xa0, 0xab, 0x90, 0xf4, 0xff];
+	immutable(ubyte)[] block = [
+		0x41, 0x8c, 0xf1, 0xe3, 0xc2, 0xe5, 0xf2, 0x3a, 0x6b, 0xa0, 0xab, 0x90,
+		0xf4, 0xff
+	];
 	scope alloc = new RegionListAllocator!(shared(Mallocator), false)(1024, Mallocator.instance);
 
 	auto dec1b = appender!(HTTP2HeaderTableField[]);

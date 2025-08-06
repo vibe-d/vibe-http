@@ -57,22 +57,23 @@ void buildGOAWAYFrame(R)(ref R buf, const uint streamId, HTTP2Error error)
 }
 /// ditto
 void buildGOAWAYFrame(ref ubyte[GOAWAYFrameLength] dst, uint sid, HTTP2Error code)
-@safe @nogc {
+@safe @nogc
+{
 	dst[].buildGOAWAYFrame(sid, code);
 }
 
-
 /// exceptions
-T enforceHTTP2(T)(T condition, string message = null, HTTP2Error h2e = HTTP2Error.NO_ERROR, string file = __FILE__, typeof(__LINE__) line = __LINE__) @trusted
+T enforceHTTP2(T)(T condition, string message = null, HTTP2Error h2e = HTTP2Error.NO_ERROR, string file = __FILE__, typeof(
+		__LINE__) line = __LINE__) @trusted
 {
 	return enforce(condition, new HTTP2Exception(message, h2e, file, line));
 }
 
-class HTTP2Exception : Exception
-{
+class HTTP2Exception : Exception {
 	HTTP2Error code;
 
-	this(string msg, HTTP2Error h2e = HTTP2Error.NO_ERROR, string file = __FILE__, size_t line = __LINE__) {
+	this(string msg, HTTP2Error h2e = HTTP2Error.NO_ERROR, string file = __FILE__, size_t line = __LINE__)
+	{
 		code = h2e;
 		super(msg, file, line);
 	}
