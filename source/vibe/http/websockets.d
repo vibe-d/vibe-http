@@ -724,7 +724,7 @@ scope:
 	void send(scope void delegate(scope OutgoingWebSocketMessage) @safe sender, FrameOpcode frameOpcode)
 	{
 		m_writeMutex.performLocked!({
-			enforce!WebSocketException(!m_sentCloseFrame, "WebSocket connection already actively closed.");
+			enforce!WebSocketException(connected, "WebSocket not connected.");
 			/*scope*/auto message = new OutgoingWebSocketMessage(m_conn, frameOpcode, m_rng);
 			scope(exit) message.finalize();
 			sender(message);
