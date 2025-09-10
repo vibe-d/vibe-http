@@ -730,6 +730,18 @@ final class HTTPClient {
 			req.headers["Host"] = m_server;
 			requester(req);
 
+			if(!req.m_cookies.isNull)
+			{
+				string[] r;
+				foreach(ref c; req.m_cookies.get)
+				{
+					r.length++;
+					r[$-1] ~= c.name~"="~c.value;
+				}
+
+				req.headers["Cookie"] = r.join(";");
+			}
+
 			if (req.httpVersion == HTTPVersion.HTTP_1_0)
 				close_conn = true;
 			else  if (m_settings.proxyURL.host !is null)
@@ -767,6 +779,7 @@ final class HTTPClientRequest : HTTPRequest {
 		FixedAppender!(string, 22) m_contentLengthBuffer;
 		TCPConnection m_rawConn;
 		TLSCertificateInformation m_peerCertificate;
+		Nullable!CookieValueMap m_cookies;
 	}
 
 
@@ -793,6 +806,32 @@ final class HTTPClientRequest : HTTPRequest {
 	{
 		if (value >= 0) headers["Content-Length"] = clengthString(value);
 		else if ("Content-Length" in headers) headers.remove("Content-Length");
+	}
+
+	/** Contains the list of cookies.
+	*/
+	@property ref CookieValueMap cookies()
+	@safe return {
+		if (m_cookies.isNull) {
+			m_cookies = CookieValueMap.init;
+			if (auto pv = "Cookie" in headers)
+				parseCookies(*pv, m_cookies.get);
+		}
+		return m_cookies.get;
+	}
+
+	/** Sets the specified cookie value.
+
+		Params:
+			name = Name of the cookie
+			value = New cookie value - pass null to clear the cookie
+			encoding = Optional encoding (url, raw), default to URL encoding
+	*/
+	auto setCookie(string name, string value, Cookie.Encoding encoding = Cookie.Encoding.url)
+	@safe {
+	   auto cookie = cookies.Cookie(name, value, encoding);
+	   cookies.add(cookie);
+	   return cookie;
 	}
 
 	/**

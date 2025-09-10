@@ -976,7 +976,11 @@ struct CookieValueMap {
 	}
 
 	void add(string name, string value, .Cookie.Encoding encoding = .Cookie.Encoding.url){
-		m_entries ~= Cookie(name, value, encoding);
+		add(Cookie(name, value, encoding));
+	}
+
+	void add(Cookie cookie){
+		m_entries ~= cookie;
 	}
 
 	void opIndexAssign(string value, string name)
