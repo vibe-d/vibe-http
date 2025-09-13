@@ -976,7 +976,11 @@ struct CookieValueMap {
 	}
 
 	void add(string name, string value, .Cookie.Encoding encoding = .Cookie.Encoding.url){
-		m_entries ~= Cookie(name, value, encoding);
+		add(Cookie(name, value, encoding));
+	}
+
+	void add(Cookie cookie){
+		m_entries ~= cookie;
 	}
 
 	void opIndexAssign(string value, string name)
@@ -1104,4 +1108,39 @@ package auto createRequestAllocator()
 package void freeRequestAllocator(Allocator)(ref Allocator alloc)
 {
 	destroy(alloc);
+}
+
+package void parseCookies(string str, ref CookieValueMap cookies)
+@safe {
+	import std.encoding : sanitize;
+	import std.string : strip;
+	import std.algorithm.searching : findSplit;
+	import std.algorithm.iteration : map, filter, each;
+	import vibe.http.common : Cookie;
+	() @trusted { return str.sanitize; } ()
+		.split(";")
+		.map!(kv => kv.strip.findSplit("="))
+		.filter!(kv => kv[1].length) //ignore illegal cookies
+		.each!(kv => cookies.add(kv[0], kv[2], Cookie.Encoding.raw) );
+}
+
+unittest
+{
+  auto cvm = CookieValueMap();
+  parseCookies("foo=bar;; baz=zinga; öö=üü   ;   møøse=was=sacked;    onlyval1; =onlyval2; onlykey=", cvm);
+  assert(cvm["foo"] == "bar");
+  assert(cvm["baz"] == "zinga");
+  assert(cvm["öö"] == "üü");
+  assert(cvm["møøse"] == "was=sacked");
+  assert( "onlyval1" ! in cvm); //illegal cookie gets ignored
+  assert(cvm["onlykey"] == "");
+  assert(cvm[""] == "onlyval2");
+  assert(cvm.length() == 6);
+  cvm = CookieValueMap();
+  parseCookies("", cvm);
+  assert(cvm.length() == 0);
+  cvm = CookieValueMap();
+  parseCookies(";;=", cvm);
+  assert(cvm.length() == 1);
+  assert(cvm[""] == "");
 }
