@@ -216,17 +216,21 @@ private bool handleRequest(TLSStreamType, Allocator)(StreamProxy http_stream, TC
 		}
 
 		// limit request size
-		if (auto pcl = "Content-Length" in req.headers) {
+		if (auto pt = "Transfer-Encoding" in req.headers) {
+			enforceBadRequest(icmp2(*pt, "chunked") == 0);
+
+			// see RFC 9112 6.3.3 and GitHub security advisonry GHSA-hm69-r6ch-92wx
+			enforceBadRequest("Content-Length" !in req.headers);
+
+			chunked_input_stream = createChunkedInputStreamFL(reqReader);
+			InputStreamProxy ciproxy = chunked_input_stream;
+			limited_http_input_stream = FreeListRef!LimitedHTTPInputStream(ciproxy, settings.maxRequestSize, true);
+		} else if (auto pcl = "Content-Length" in req.headers) {
 			string v = *pcl;
 			auto contentLength = parse!ulong(v); // DMDBUG: to! thinks there is a H in the string
 			enforceBadRequest(v.length == 0, "Invalid content-length");
 			enforceBadRequest(settings.maxRequestSize <= 0 || contentLength <= settings.maxRequestSize, "Request size too big");
 			limited_http_input_stream = FreeListRef!LimitedHTTPInputStream(reqReader, contentLength);
-		} else if (auto pt = "Transfer-Encoding" in req.headers) {
-			enforceBadRequest(icmp2(*pt, "chunked") == 0);
-			chunked_input_stream = createChunkedInputStreamFL(reqReader);
-			InputStreamProxy ciproxy = chunked_input_stream;
-			limited_http_input_stream = FreeListRef!LimitedHTTPInputStream(ciproxy, settings.maxRequestSize, true);
 		} else {
 			limited_http_input_stream = FreeListRef!LimitedHTTPInputStream(reqReader, 0);
 		}
