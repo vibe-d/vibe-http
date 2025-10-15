@@ -1,3 +1,15 @@
+1.3.2 - 2025-10-15
+==================
+
+- Added `HTTPClientRequest.setCookie` (by Denis Feklushkin aka denizzzka) - [pull #64][issue64]
+- Fixed a HTTP/1 request parsing logic issue that could enable request smuggling or response splitting attacks - [pull #66][issue66]
+- Fixed a possible null pointer dereference when attempting to send on a closed WebSocket (by Alex Burton aka Alexibu) - [pull #63][issue63]
+
+[issue63]: https://github.com/vibe-d/vibe-http/issues/63
+[issue64]: https://github.com/vibe-d/vibe-http/issues/64
+[issue66]: https://github.com/vibe-d/vibe-http/issues/66
+
+
 1.3.1 - 2025-08-06
 ==================
 
