@@ -1090,18 +1090,18 @@ unittest {
 
 package auto createRequestAllocator()
 {
-	import vibe.container.internal.utilallocator: RegionListAllocator;
+	import vibe.http.internal.region_allocator: RegionListAllocator;
 
 	static if (is(RegionListAllocator!(shared(GCAllocator), true) == struct)) {
 		version (VibeManualMemoryManagement)
-			return allocatorObject(RegionListAllocator!(shared(Mallocator), false)(1024, Mallocator.instance));
+			return allocatorObject(RegionListAllocator!(shared(Mallocator))(1024, Mallocator.instance));
 		else
-			return allocatorObject(RegionListAllocator!(shared(GCAllocator), true)(1024, GCAllocator.instance));
+			return allocatorObject(RegionListAllocator!(shared(GCAllocator))(1024, GCAllocator.instance));
 	} else {
 		version (VibeManualMemoryManagement)
-			return new RegionListAllocator!(shared(Mallocator), false)(1024, Mallocator.instance);
+			return new RegionListAllocator!(shared(Mallocator))(1024, Mallocator.instance);
 		else
-			return new RegionListAllocator!(shared(GCAllocator), true)(1024, GCAllocator.instance);
+			return new RegionListAllocator!(shared(GCAllocator))(1024, GCAllocator.instance);
 	}
 }
 
