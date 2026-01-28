@@ -493,7 +493,9 @@ HTTPServerResponse createTestHTTPServerResponse(OutputStream data_sink = null,
 		this(StreamProxy conn, OutputStream body_writer)
 		{
 			super(conn, ConnectionStreamProxy.init);
-			m_bodyWriter = body_writer;
+			if (body_writer) {
+				m_bodyWriter = body_writer;
+			}
 		}
 	}
 
@@ -507,6 +509,14 @@ HTTPServerResponse createTestHTTPServerResponse(OutputStream data_sink = null,
 	return ret;
 }
 
+unittest {
+	import vibe.stream.memory : createMemoryOutputStream;
+
+	auto output = createMemoryOutputStream;
+	auto response = createTestHTTPServerResponse(output);
+
+	response.writeBody("Hello World");
+}
 
 /**************************************************************************************************/
 /* Public types                                                                                   */
