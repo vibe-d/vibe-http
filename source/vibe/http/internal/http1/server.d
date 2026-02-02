@@ -38,7 +38,8 @@ import std.format : format, formattedWrite;
 */
 void handleHTTP1Connection(TLSStreamType)(TCPConnection connection, TLSStreamType tls_stream, StreamProxy http_stream, HTTPServerContext context, ref NetworkAddress remote_address)
 @safe {
-
+	scope request_allocator = createRequestAllocator();
+	scope (exit) () @trusted { freeRequestAllocator(request_allocator); }();
 	while (!connection.empty) {
 		HTTPServerSettings settings;
 		bool keep_alive;
@@ -49,10 +50,8 @@ void handleHTTP1Connection(TLSStreamType)(TCPConnection connection, TLSStreamTyp
 		}
 
 		() @trusted {
-			scope request_allocator = createRequestAllocator();
-			scope (exit) freeRequestAllocator(request_allocator);
-
 			handleRequest!TLSStreamType(http_stream, connection, context, settings, keep_alive, request_allocator, remote_address);
+			request_allocator.deallocateAll();
 		} ();
 		if (!keep_alive) { logTrace("No keep-alive - disconnecting client."); break; }
 
