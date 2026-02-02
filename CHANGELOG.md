@@ -1,3 +1,13 @@
+1.3.3 - 2026-02-02
+==================
+
+- Fixed an issue that caused proxied WebSocket requests to fail (by Alex Burton aka Alexibu) - [pull #67][issue67]
+- Fixed a crash when calling `createTestHTTPServerResponse` with a null output stream and an earlier version of vibe-core (by Mathis Beer aka FeepingCreature) - [pull #68][issue68]
+
+[issue67]: https://github.com/vibe-d/vibe-http/issues/67
+[issue68]: https://github.com/vibe-d/vibe-http/issues/68
+
+
 1.3.2 - 2025-10-15
 ==================
 
