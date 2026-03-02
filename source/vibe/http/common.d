@@ -389,6 +389,7 @@ final class ChunkedInputStream : InputStream
 	private {
 		InterfaceProxy!InputStream m_in;
 		ulong m_bytesInCurrentChunk = 0;
+		bool m_chunkHeaderRead = false;
 	}
 
 	/// private
@@ -396,12 +397,14 @@ final class ChunkedInputStream : InputStream
 	{
 		assert(!!stream);
 		m_in = stream;
-		readChunk();
 	}
 
-	@property bool empty() const { return m_bytesInCurrentChunk == 0; }
+	@property bool empty() { return leastSize == 0; }
 
-	@property ulong leastSize() const { return m_bytesInCurrentChunk; }
+	@property ulong leastSize() {
+		if (!m_chunkHeaderRead) readChunk();
+		return m_bytesInCurrentChunk;
+	}
 
 	@property bool dataAvailableForRead() { return m_bytesInCurrentChunk > 0 && m_in.dataAvailableForRead; }
 
@@ -417,7 +420,7 @@ final class ChunkedInputStream : InputStream
 		size_t nbytes = 0;
 
 		while (dst.length > 0) {
-			enforceBadRequest(m_bytesInCurrentChunk > 0, "Reading past end of chunked HTTP stream.");
+			enforceBadRequest(leastSize > 0, "Reading past end of chunked HTTP stream.");
 
 			auto sz = cast(size_t)min(m_bytesInCurrentChunk, dst.length);
 			m_in.read(dst[0 .. sz]);
@@ -425,13 +428,12 @@ final class ChunkedInputStream : InputStream
 			m_bytesInCurrentChunk -= sz;
 			nbytes += sz;
 
-			// FIXME: this blocks, but shouldn't for IOMode.once/immediat
 			if( m_bytesInCurrentChunk == 0 ){
 				// skip current chunk footer and read next chunk
 				ubyte[2] crlf;
 				m_in.read(crlf);
 				enforceBadRequest(crlf[0] == '\r' && crlf[1] == '\n');
-				readChunk();
+				m_chunkHeaderRead = false;
 			}
 
 			if (mode != IOMode.all) break;
@@ -444,12 +446,13 @@ final class ChunkedInputStream : InputStream
 
 	private void readChunk()
 	{
-		assert(m_bytesInCurrentChunk == 0);
+		assert(m_bytesInCurrentChunk == 0 && !m_chunkHeaderRead);
 		// read chunk header
 		logTrace("read next chunk header");
 		auto ln = () @trusted { return cast(string)m_in.readLine(); } ();
 		logTrace("got chunk header: %s", ln);
 		m_bytesInCurrentChunk = parse!ulong(ln, 16u);
+		m_chunkHeaderRead = true;
 
 		if( m_bytesInCurrentChunk == 0 ){
 			// empty chunk denotes the end
@@ -632,6 +635,34 @@ FreeListRef!ChunkedOutputStream createChunkedOutputStreamFL(OS, Allocator)(OS de
 {
 	return FreeListRef!ChunkedOutputStream(interfaceProxy!OutputStream(destination_stream), allocator, true);
 }
+
+unittest {
+	import vibe.stream.memory : createMemoryStream;
+
+	ubyte[] bytes = new ubyte[](100*100);
+	foreach (i, ref bt; bytes) bt = (i + i / 100) % 256;
+	ubyte[] buf = new ubyte[](bytes.length);
+
+	auto dst = createMemoryStream(new ubyte[4*1024*1024], true, 0);
+
+	// write data with varying buffer and chunk sizes
+	auto outp = createChunkedOutputStreamFL(dst);
+	foreach (i; 0 .. 100) {
+		outp.write(bytes[0 .. i * 100]);
+		if (i % 5 == 0)
+			outp.flush();
+	}
+	outp.finalize();
+
+	// ensure decoding yields the same byte sequence
+	dst.seek(0);
+	auto inp = createChunkedInputStreamFL(dst);
+	foreach (i; 0 .. 100) {
+		inp.read(buf[0 .. i * 100]);
+		assert(buf[0 .. i * 100] == bytes[0 .. i * 100]);
+	}
+}
+
 
 /// Parses the cookie from a header field, returning the name of the cookie.
 /// Implements an algorithm equivalent to https://tools.ietf.org/html/rfc6265#section-5.2

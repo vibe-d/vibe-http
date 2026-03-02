@@ -906,6 +906,7 @@ scope:
 
 		try m_conn.close();
 		catch (Exception e) logException(e, "Failed to close WebSocket connection");
+		m_conn = ConnectionStream.init;
 		try m_readCondition.notifyAll();
 		catch (Exception e) assert(false, e.msg);
 	}
@@ -924,7 +925,7 @@ scope:
 			send((scope msg) { msg.write(nativeToLittleEndian(++m_lastPingIndex)); }, FrameOpcode.ping);
 			logDebugV("Ping sent");
 		} catch (Exception e) {
-			logError("Failed to acquire write mutex for sending a WebSocket ping frame: %s", e.msg);
+			logError("Failed to send WebSocket ping frame: %s", e.msg);
 		}
 	}
 }
