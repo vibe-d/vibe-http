@@ -1942,7 +1942,8 @@ private HTTPListener listenHTTPPlain(HTTPServerSettings settings, HTTPServerRequ
 
 					bind_address.family = AddressFamily.UNIX;
 					sockaddr_un* s = bind_address.sockAddrUnix();
-					enforce(s.sun_path.length > listen_info.bindAddress.length, "Unix sockets cannot have that long a name.");
+					enforce(s.sun_path.length > listen_info.bindAddress.length,
+						"Unix socket path exceeds maximum length.");
 					s.sun_family = AddressFamily.UNIX;
 					() @trusted { strcpy(cast(char*)s.sun_path.ptr, listen_info.bindAddress.toStringz()); } ();
 					proto ~= "+unix";
