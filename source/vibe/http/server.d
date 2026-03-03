@@ -52,6 +52,12 @@ else version (Have_botan) enum HaveNoTLS = false;
 else version (Have_openssl) enum HaveNoTLS = false;
 else enum HaveNoTLS = true;
 
+version(Posix)
+{
+	version = UnixSocket;
+}
+
+
 /**************************************************************************************************/
 /* Public functions                                                                               */
 /**************************************************************************************************/
@@ -1923,7 +1929,31 @@ private HTTPListener listenHTTPPlain(HTTPServerSettings settings, HTTPServerRequ
 			TCPListenOptions options = TCPListenOptions.defaults;
 			if(reuseAddress) options |= TCPListenOptions.reuseAddress; else options &= ~TCPListenOptions.reuseAddress;
 			if(reusePort) options |= TCPListenOptions.reusePort; else options &= ~TCPListenOptions.reusePort;
-			auto ret = listenTCP(listen_info.bindPort, (TCPConnection conn) nothrow @safe {
+
+			NetworkAddress bind_address;
+
+			auto proto = is_tls ? "https" : "http";
+
+			if (listen_info.bindAddress.startsWith("/")) {
+				version (UnixSocket) {
+					import std.socket : AddressFamily;
+					import core.sys.posix.sys.un : sockaddr_un;
+					import core.stdc.string : strcpy;
+
+					bind_address.family = AddressFamily.UNIX;
+					sockaddr_un* s = bind_address.sockAddrUnix();
+					enforce(s.sun_path.length > listen_info.bindAddress.length,
+						"Unix socket path exceeds maximum length.");
+					s.sun_family = AddressFamily.UNIX;
+					() @trusted { strcpy(cast(char*)s.sun_path.ptr, listen_info.bindAddress.toStringz()); } ();
+					proto ~= "+unix";
+				} else throw new Exception("Unix domain sockets are not supported on this platform.");
+			} else {
+				bind_address = resolveHost(listen_info.bindAddress);
+				bind_address.port = listen_info.bindPort;
+			}
+
+			auto ret = listenTCP((TCPConnection conn) nothrow @safe {
 					auto raddr = conn.remoteAddress;
 					try handleHTTPConnection(conn, listen_info, raddr);
 					catch (Exception e) {
@@ -1932,16 +1962,18 @@ private HTTPListener listenHTTPPlain(HTTPServerSettings settings, HTTPServerRequ
 						try conn.close();
 						catch (Exception e) logError("Failed to close connection: %s", e.msg);
 					}
-				}, listen_info.bindAddress, options);
+				}, bind_address, options);
 
 			// support port 0 meaning any available port
-			if (listen_info.bindPort == 0)
+			if (listen_info.bindPort == 0) {
 				listen_info.m_bindPort = ret.bindAddress.port;
+				bind_address.port = ret.bindAddress.port;
+			}
 
-			auto proto = is_tls ? "https" : "http";
 			auto urladdr = listen_info.bindAddress;
 			if (urladdr.canFind(':')) urladdr = "["~urladdr~"]";
-			logInfo("Listening for requests on %s://%s:%s/", proto, urladdr, listen_info.bindPort);
+			logInfo("Listening for requests on %s://%s/", proto,
+				bind_address.toString().replace("/", "%2f"));
 			return ret;
 		} catch( Exception e ) {
 			logWarn("Failed to listen on %s:%s", listen_info.bindAddress, listen_info.bindPort);
