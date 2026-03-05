@@ -23,6 +23,14 @@ import std.algorithm.mutation;
 
 enum uint HTTP2HeaderLength = 9;
 
+enum HTTP2FrameFlag : ubyte {
+	END_STREAM = 0x1,
+	END_HEADERS = 0x4,
+	PADDED = 0x8,
+	PRIORITY = 0x20,
+	ACK = 0x1,
+}
+
 enum HTTP2FrameType {
 	DATA = 0x0,
 	HEADERS = 0x1,

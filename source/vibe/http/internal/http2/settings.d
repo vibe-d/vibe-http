@@ -143,7 +143,6 @@ struct HTTP2Settings {
 	@http2Setting(0x1, "SETTINGS_HEADER_TABLE_SIZE")
 	HTTP2SettingValue headerTableSize = DEFAULT_DYNAMIC_TABLE_SIZE;
 
-	// TODO {0,1} otherwise CONNECTION_ERROR
 	@http2Setting(0x2, "SETTINGS_ENABLE_PUSH")
 	HTTP2SettingValue enablePush = 1;
 
@@ -156,11 +155,9 @@ struct HTTP2Settings {
 	//to 2^16
 	HTTP2SettingValue maxConcurrentStreams = 65536;
 
-	// TODO FLOW_CONTROL_ERRROR on values > 2^31-1
 	@http2Setting(0x4, "SETTINGS_INITIAL_WINDOW_SIZE")
 	HTTP2SettingValue initialWindowSize = 65535;
 
-	// TODO PROTOCOL_ERROR on values > 2^24-1
 	@http2Setting(0x5, "SETTINGS_MAX_FRAME_SIZE")
 	HTTP2SettingValue maxFrameSize = 16384;
 
@@ -263,7 +260,7 @@ void unpackSettings(R)(ref HTTP2Settings settings, R src) @safe
 		"Invalid value for INITIAL_WINDOW_SIZE setting.", HTTP2Error.FLOW_CONTROL_ERROR);
 
 	enforceHTTP2(settings.maxFrameSize >= (1 << 14) && settings.maxFrameSize < (1 << 24),
-		"Invalid value for MAX_FRAME_SIZE setting.", HTTP2Error.FLOW_CONTROL_ERROR);
+		"Invalid value for MAX_FRAME_SIZE setting.", HTTP2Error.PROTOCOL_ERROR);
 }
 
 unittest {

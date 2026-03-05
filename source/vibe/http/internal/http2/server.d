@@ -246,38 +246,43 @@ private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TC
 	}
 
 	while (true) {
-		try {
-			CB cb = {stream, connection, context};
-			auto st = connection.waitForDataAsync(cb);
+		bool done = () @trusted nothrow {
+			try {
+				CB cb = {stream, connection, context};
+				auto st = connection.waitForDataAsync(cb);
 
-			final switch (st) {
-				case WaitForDataAsyncStatus.waiting:
-					logTrace("need to wait for more data asynchronously");
-					return;
+				final switch (st) {
+					case WaitForDataAsyncStatus.waiting:
+						logTrace("need to wait for more data asynchronously");
+						return true;
 
-				case WaitForDataAsyncStatus.noMoreData:
-					logTrace("connection closed by remote side");
-					stream.finalize();
-					connection.close();
-					return;
-
-				case WaitForDataAsyncStatus.dataAvailable:
-					// start the frame handler
-					bool close = handleHTTP2Frame(stream, connection, context);
-
-					// determine if this connection needs to be closed
-					if (close) {
-						logTrace("Closing connection.");
+					case WaitForDataAsyncStatus.noMoreData:
+						logTrace("connection closed by remote side");
 						stream.finalize();
 						connection.close();
-						return;
-					}
+						return true;
+
+					case WaitForDataAsyncStatus.dataAvailable:
+						bool close = handleHTTP2Frame(stream, connection, context);
+						if (close) {
+							logTrace("Closing connection.");
+							stream.finalize();
+							connection.close();
+							return true;
+						}
+						return false;
+				}
+			} catch (Exception e) {
+				logException(e, "Failed to handle HTTP/2 frame chain");
+				try { connection.close(); } catch (Exception) {}
+				return true;
+			} catch (Throwable t) {
+				logWarn("HTTP/2 frame handler error: %s", t.msg);
+				try { connection.close(); } catch (Exception) {}
+				return true;
 			}
-		} catch (Exception e) {
-			logException(e, "Failed to handle HTTP/2 frame chain");
-			connection.close();
-			return;
-		}
+		}();
+		if (done) return;
 	}
 }
 
@@ -621,22 +626,16 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 		static if (!is(ConnectionStream : TLSStream)) {
 
 			if (context.resFrame) {
-				auto l = context.resFrame.takeExactly(3).fromBytes(3) + 9;
+				auto l = context.resFrame.takeExactly(3).fromBytes(3) + HTTP2HeaderLength;
+				auto hpackPayload = context.resFrame[HTTP2HeaderLength .. l];
+				ubyte isEndStream = (context.resFrame.length > l)
+					? cast(ubyte) 0x0 : HTTP2FrameFlag.END_STREAM;
 
-				if (l < context.settings.maxFrameSize) {
-					auto isEndStream = (context.resFrame.length > l) ? 0x0 : 0x1;
-
-					context.resFrame[4] += 0x4 + isEndStream;
-
-					try {
-						stream.write(context.resFrame[0 .. l]);
-					} catch (Exception e) {
-						logWarn("Unable to write HEADERS Frame to stream");
-					}
-
-				} else {
-					// TODO CONTINUATION frames
-					assert(false);
+				try {
+					stream.write(buildSplitHeaderFrames(hpackPayload,
+						context.settings.maxFrameSize, 1, isEndStream, alloc));
+				} catch (Exception e) {
+					logWarn("Unable to write HEADERS Frame to stream");
 				}
 
 				auto resBody = context.resFrame[l .. $];
@@ -977,8 +976,8 @@ unittest {
 	}
 
 	auto settings = new HTTPServerSettings();
-	settings.port = 8090;
-	settings.bindAddresses = ["localhost"];
+	settings.port = 0;
+	settings.bindAddresses = ["127.0.0.1"];
 
 	listenHTTP(settings, &handleReq);
 	//runApplication();
@@ -995,8 +994,8 @@ unittest {
 	}
 
 	auto settings = new HTTPServerSettings;
-	settings.port = 8091;
-	settings.bindAddresses = ["127.0.0.1", "192.168.1.131"];
+	settings.port = 0;
+	settings.bindAddresses = ["127.0.0.1"];
 	settings.tlsContext = createTLSContext(TLSContextKind.server);
 	settings.tlsContext.useCertificateChainFile("tests/server.crt");
 	settings.tlsContext.usePrivateKeyFile("tests/server.key");
@@ -1005,7 +1004,6 @@ unittest {
 	// should accept the 'h2' protocol request
 	settings.tlsContext.alpnCallback(http2Callback);
 
-	// dummy, just for testing
 	listenHTTP(settings, &handleRequest);
 	//runApplication();
 }
