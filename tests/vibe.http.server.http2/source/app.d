@@ -43,6 +43,7 @@ void runAllTests(ushort port)
 	run("404 response", { test404(port); });
 	run("201 status", { testStatus201(port); });
 	run("204 no content", { testStatus204(port); });
+	run("200 empty body", { testEmptyBody(port); });
 	// HEAD test disabled: known HPACK single-table bug causes connection failures
 	// run("HEAD returns 200 with no body", { testHeadRequest(port); });
 
@@ -87,6 +88,11 @@ void handleRequest(scope HTTPServerRequest req, scope HTTPServerResponse res)
 	if (path == "/status/204") {
 		res.statusCode = HTTPStatus.noContent;
 		res.writeVoidBody();
+		return;
+	}
+
+	if (path == "/empty") {
+		res.writeBody("");
 		return;
 	}
 
@@ -140,8 +146,14 @@ void testStatus204(ushort port)
 	assert(r == "204", "Expected 204, got: " ~ r);
 }
 
-/// Sends raw bytes over TCP and reads any response. Returns true if connection was accepted.
-bool sendRaw(ushort port, const(ubyte)[] data)
+/// Verifies that a 200 response with an empty body sends HEADERS with END_STREAM and no DATA.
+void testEmptyBody(ushort port)
+{
+	auto status = curlH2Status(port, "/empty");
+	assert(status == "200", "Expected 200, got: " ~ status);
+}
+
+void sendRaw(ushort port, const(ubyte)[] data)
 {
 	import std.socket : TcpSocket, InternetAddress;
 	import core.time : msecs;
@@ -156,7 +168,6 @@ bool sendRaw(ushort port, const(ubyte)[] data)
 	try {
 		sock.receive(buf);
 	} catch (Exception) {}
-	return true;
 }
 
 /// Sends an invalid connection preface — server should reject and close.

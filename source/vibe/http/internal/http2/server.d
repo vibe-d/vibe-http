@@ -968,7 +968,7 @@ unittest {
 	import vibe.core.core : runApplication;
 
 	// empty handler, just to test if protocol switching works
-	void handleReq(scope HTTPServerRequest req, scope HTTPServerResponse res)
+	void handleRequest(scope HTTPServerRequest req, scope HTTPServerResponse res)
 	@safe
 	{
 		if (req.requestPath.toString == "/")
@@ -979,7 +979,7 @@ unittest {
 	settings.port = 0;
 	settings.bindAddresses = ["127.0.0.1"];
 
-	listenHTTP(settings, &handleReq);
+	listenHTTP(settings, &handleRequest);
 	//runApplication();
 }
 

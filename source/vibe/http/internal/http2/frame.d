@@ -28,8 +28,9 @@ enum HTTP2FrameFlag : ubyte {
 	END_HEADERS = 0x4,
 	PADDED = 0x8,
 	PRIORITY = 0x20,
-	ACK = 0x1,
 }
+// ACK is the same bit as END_STREAM, used on SETTINGS/PING frames (RFC 7540 §6.2, §6.7)
+alias HTTP2FrameFlagACK = HTTP2FrameFlag.END_STREAM;
 
 enum HTTP2FrameType {
 	DATA = 0x0,
