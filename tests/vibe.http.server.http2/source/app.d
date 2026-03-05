@@ -1,7 +1,7 @@
 import vibe.core.core : runWorkerTask;
 import vibe.core.log;
 import vibe.http.server;
-import curl : curlH2, curlH2Status;
+import curl : curlH2, curlH2Status, curlSupportsH2c;
 import std.algorithm.searching : find;
 import std.conv : to;
 import std.range.primitives : front;
@@ -28,6 +28,12 @@ __gshared int g_failures;
 
 void runAllTests(ushort port)
 {
+	if (!curlSupportsH2c()) {
+		logInfo("curl does not support --http2-prior-knowledge, skipping HTTP/2 integration tests.");
+		import core.stdc.stdlib : exit;
+		exit(0);
+	}
+
 	void run(string name, scope void delegate() test) {
 		try {
 			test();

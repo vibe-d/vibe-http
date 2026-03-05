@@ -9,6 +9,16 @@ string urlFor(ushort port, string path)
 	return format("http://127.0.0.1:%d%s", port, path);
 }
 
+/// Returns true if the installed curl supports --http2-prior-knowledge (h2c).
+bool curlSupportsH2c()
+{
+	import std.process : execute;
+	import std.algorithm.searching : canFind;
+
+	auto r = execute(["curl", "--help", "all"]);
+	return r.status == 0 && r.output.canFind("--http2-prior-knowledge");
+}
+
 /// Run curl with --http2-prior-knowledge and return the response body.
 /// Retries on connection failure or empty response to handle server startup.
 string curlH2(ushort port, string path, string[] extraArgs = [])
