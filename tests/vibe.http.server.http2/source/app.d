@@ -53,8 +53,11 @@ shared static this()
 	auto testName = fromStringz(envVal).idup;
 
 	if (testName == "list") {
-		static foreach (e; allTests.entries)
-			printf("%.*s\n", cast(int) e.name.length, e.name.ptr);
+		// Only list tests if curl supports h2c; otherwise output nothing
+		if (curlSupportsH2c()) {
+			static foreach (e; allTests.entries)
+				printf("%.*s\n", cast(int) e.name.length, e.name.ptr);
+		}
 		exit(0);
 	}
 
@@ -67,11 +70,6 @@ shared static this()
 	if (testFunc is null) {
 		logError("Unknown test: %s", testName);
 		exit(1);
-	}
-
-	if (!curlSupportsH2c()) {
-		logInfo("curl does not support --http2-prior-knowledge, skipping.");
-		exit(0);
 	}
 
 	auto settings = new HTTPServerSettings;

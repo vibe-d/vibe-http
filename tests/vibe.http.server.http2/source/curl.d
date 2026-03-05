@@ -19,17 +19,13 @@ bool curlSupportsH2c()
 	import std.algorithm.searching : canFind;
 
 	auto r = execute(["curl", "--help", "all"]);
-	if (r.status != 0 || !r.output.canFind("--http2-prior-knowledge")) {
-		logInfo("[curl] h2c support check: not listed in --help");
+	if (r.status != 0 || !r.output.canFind("--http2-prior-knowledge"))
 		return false;
-	}
 
 	// Verify libcurl actually supports it (Windows curl may lack nghttp2)
 	auto test = execute(["curl", "-s", "--http2-prior-knowledge", "--max-time", "1", "http://127.0.0.1:1"]);
 	// Exit code 2 = "option not supported by libcurl", 7 = connection refused (expected)
-	bool supported = test.status != 2;
-	logInfo("[curl] h2c support check: test status=%d, supported=%s", test.status, supported ? "yes" : "no");
-	return supported;
+	return test.status != 2;
 }
 
 /// Run curl with --http2-prior-knowledge and return the response body.

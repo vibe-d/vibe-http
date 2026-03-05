@@ -3,7 +3,13 @@ set -e -o pipefail
 
 dub build --compiler=${DC:-dmd} 2>&1
 
-TESTS=$(H2_TEST=list ./tests 2>/dev/null)
+TESTS=$(H2_TEST=list ./tests 2>/dev/null | tr -d '\r')
+
+if [ -z "$TESTS" ]; then
+    echo "No HTTP/2 tests to run (curl may lack h2c support)."
+    exit 0
+fi
+
 FAILED=0
 
 for test in $TESTS; do
