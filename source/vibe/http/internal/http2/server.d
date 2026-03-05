@@ -203,7 +203,7 @@ void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream,
 	TCPConnection connection, HTTP2ServerContext context, bool priorKnowledge = false) @safe
 	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStreamType))
 {
-	logTrace("HTTP/2 Connection Handler");
+	logDebug("HTTP/2 Connection Handler (priorKnowledge=%s)", priorKnowledge);
 
 	// read the connection preface
 	if (!priorKnowledge) {
@@ -214,10 +214,11 @@ void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream,
 			logDebug("Ignoring invalid HTTP/2 client connection preface");
 			return;
 		}
-		logTrace("Received client http2 connection preface");
+		logDebug("Received client http2 connection preface");
 	}
 
 	// initialize Frame handler
+	logDebug("Starting HTTP/2 frame chain handler");
 	handleHTTP2FrameChain(stream, connection, context);
 }
 
@@ -253,11 +254,11 @@ private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TC
 
 				final switch (st) {
 					case WaitForDataAsyncStatus.waiting:
-						logTrace("need to wait for more data asynchronously");
+						logDebug("need to wait for more data asynchronously");
 						return true;
 
 					case WaitForDataAsyncStatus.noMoreData:
-						logTrace("connection closed by remote side");
+						logDebug("connection closed by remote side");
 						stream.finalize();
 						connection.close();
 						return true;
@@ -265,7 +266,7 @@ private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TC
 					case WaitForDataAsyncStatus.dataAvailable:
 						bool close = handleHTTP2Frame(stream, connection, context);
 						if (close) {
-							logTrace("Closing connection.");
+							logDebug("Closing connection after frame handling.");
 							stream.finalize();
 							connection.close();
 							return true;
@@ -341,7 +342,7 @@ private const string checkvalid = "enforceHTTP2(valid, \"Invalid stream ID\", HT
 private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCPConnection connection,
 	HTTP2ServerContext context, IAllocator alloc) @trusted
 {
-	logTrace("HTTP/2 Frame Handler (Alloc)");
+	logDebug("HTTP/2 Frame Handler (Alloc)");
 
 	uint len = 0;
 
@@ -664,7 +665,7 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 						logWarn("Unable to write DATA Frame to stream.");
 					}
 
-					logTrace("Sent DATA frame on streamID %s", stream.streamId);
+					logDebug("Sent DATA frame on streamID %s", stream.streamId);
 
 				}
 

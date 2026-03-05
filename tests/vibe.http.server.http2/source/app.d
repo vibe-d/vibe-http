@@ -7,8 +7,73 @@ import std.conv : to;
 import std.range.primitives : front;
 import std.socket : AddressFamily, SocketOption, SocketOptionLevel;
 
+struct H2Test {
+	string name;
+}
+
+alias TestFunc = void function(ushort);
+
+// Compile-time introspection: collect all @H2Test-annotated functions
+template collectTests(alias mod)
+{
+	import std.traits : getUDAs, hasUDA;
+
+	struct Entry {
+		string name;
+		TestFunc func;
+	}
+
+	enum Entry[] entries = () {
+		Entry[] result;
+		static foreach (member; __traits(allMembers, mod)) {{
+			alias sym = __traits(getMember, mod, member);
+			static if (is(typeof(sym) == function) && hasUDA!(sym, H2Test))
+				result ~= Entry(getUDAs!(sym, H2Test)[0].name, &sym);
+		}}
+		return result;
+	}();
+}
+
+alias allTests = collectTests!(mixin(__MODULE__));
+
 shared static this()
 {
+	import core.stdc.stdlib : exit, getenv;
+	import core.stdc.stdio : printf;
+	import std.string : fromStringz;
+
+	// Enable debug-level logging so server-side HTTP/2 logs are visible
+	setLogLevel(LogLevel.debug_);
+
+	auto envVal = getenv("H2_TEST");
+	if (envVal is null) {
+		logError("Set H2_TEST=<test-name> or H2_TEST=list");
+		exit(1);
+	}
+	auto testName = fromStringz(envVal).idup;
+
+	if (testName == "list") {
+		static foreach (e; allTests.entries)
+			printf("%.*s\n", cast(int) e.name.length, e.name.ptr);
+		exit(0);
+	}
+
+	TestFunc testFunc;
+	static foreach (e; allTests.entries) {
+		if (testName == e.name)
+			testFunc = e.func;
+	}
+
+	if (testFunc is null) {
+		logError("Unknown test: %s", testName);
+		exit(1);
+	}
+
+	if (!curlSupportsH2c()) {
+		logInfo("curl does not support --http2-prior-knowledge, skipping.");
+		exit(0);
+	}
+
 	auto settings = new HTTPServerSettings;
 	settings.port = 0;
 	settings.bindAddresses = ["127.0.0.1"];
@@ -19,54 +84,19 @@ shared static this()
 		.find!(addr => addr.family == AddressFamily.INET)
 		.front.port;
 
-	runWorkerTask((ushort port) nothrow {
-		try { runAllTests(port); } catch (Exception) {}
-	}, serverPort);
-}
-
-__gshared int g_failures;
-
-void runAllTests(ushort port)
-{
-	if (!curlSupportsH2c()) {
-		logInfo("curl does not support --http2-prior-knowledge, skipping HTTP/2 integration tests.");
+	runWorkerTask((ushort port, TestFunc fn, string name) nothrow {
 		import core.stdc.stdlib : exit;
-		exit(0);
-	}
-
-	void run(string name, scope void delegate() test) {
+		logInfo("[TEST] running '%s' on port %d", name, port);
 		try {
-			test();
+			fn(port);
 			logInfo("[PASS] %s", name);
+			exit(0);
 		} catch (Throwable e) {
 			logError("[FAIL] %s: %s", name, e.msg);
-			g_failures++;
+			logError("[FAIL] %s: %s(%d)", name, e.file, e.line);
+			exit(1);
 		}
-	}
-
-	run("h2c GET request/response", { testGetBody(port); });
-	run("response body in single DATA frame (10KB)", { testLargeResponse(port); });
-	run("404 response", { test404(port); });
-	run("201 status", { testStatus201(port); });
-	run("204 no content", { testStatus204(port); });
-	run("200 empty body", { testEmptyBody(port); });
-	// HEAD test disabled: known HPACK single-table bug causes connection failures
-	// run("HEAD returns 200 with no body", { testHeadRequest(port); });
-
-	// Malformed request tests — verify the server survives bad input
-	run("invalid connection preface", { testInvalidPreface(port); });
-	run("truncated connection preface", { testTruncatedPreface(port); });
-	run("garbage data", { testGarbageData(port); });
-	run("valid preface then oversized frame", { testOversizedFrame(port); });
-	run("valid GET after malformed connection", { testGetAfterMalformed(port); });
-
-	import core.stdc.stdlib : exit;
-	if (g_failures > 0) {
-		logError("%d HTTP/2 integration test(s) FAILED.", g_failures);
-		exit(1);
-	}
-	logInfo("All HTTP/2 integration tests passed.");
-	exit(0);
+	}, serverPort, testFunc, testName);
 }
 
 void handleRequest(scope HTTPServerRequest req, scope HTTPServerResponse res)
@@ -106,22 +136,14 @@ void handleRequest(scope HTTPServerRequest req, scope HTTPServerResponse res)
 	res.writeBody("not found");
 }
 
-
-/// Verifies basic h2c GET returns the expected response body.
+@H2Test("get")
 void testGetBody(ushort port)
 {
 	auto r = curlH2(port, "/");
 	assert(r == "Hello, HTTP/2!", "Expected 'Hello, HTTP/2!', got: '" ~ r ~ "'");
 }
 
-/// Verifies that a HEAD request returns HTTP 200 with no body.
-void testHeadRequest(ushort port)
-{
-	auto status = curlH2Status(port, "/", ["-X", "HEAD"]);
-	assert(status == "200", "Expected 200, got: " ~ status);
-}
-
-/// Verifies a 10KB response body is delivered intact in a single DATA frame.
+@H2Test("10kb")
 void testLargeResponse(ushort port)
 {
 	auto r = curlH2(port, "/large");
@@ -131,28 +153,28 @@ void testLargeResponse(ushort port)
 		"Unexpected content in large response");
 }
 
-/// Verifies that an unknown path returns HTTP 404.
+@H2Test("404")
 void test404(ushort port)
 {
 	auto r = curlH2Status(port, "/nonexistent");
 	assert(r == "404", "Expected 404, got: " ~ r);
 }
 
-/// Verifies that the handler can set a custom 201 Created status.
+@H2Test("201")
 void testStatus201(ushort port)
 {
 	auto r = curlH2Status(port, "/status/201");
 	assert(r == "201", "Expected 201, got: " ~ r);
 }
 
-/// Verifies that writeVoidBody sends a 204 No Content with no body.
+@H2Test("204")
 void testStatus204(ushort port)
 {
 	auto r = curlH2Status(port, "/status/204");
 	assert(r == "204", "Expected 204, got: " ~ r);
 }
 
-/// Verifies that a 200 response with an empty body sends HEADERS with END_STREAM and no DATA.
+@H2Test("empty-body")
 void testEmptyBody(ushort port)
 {
 	auto status = curlH2Status(port, "/empty");
@@ -164,6 +186,7 @@ void sendRaw(ushort port, const(ubyte)[] data)
 	import std.socket : TcpSocket, InternetAddress;
 	import core.time : msecs;
 
+	logInfo("[sendRaw] sending %d bytes to port %d", data.length, port);
 	auto sock = new TcpSocket();
 	scope(exit) sock.close();
 	sock.setOption(SocketOptionLevel.SOCKET, SocketOption.RCVTIMEO, 500.msecs);
@@ -172,30 +195,30 @@ void sendRaw(ushort port, const(ubyte)[] data)
 
 	ubyte[1024] buf;
 	try {
-		sock.receive(buf);
-	} catch (Exception) {}
+		auto received = sock.receive(buf);
+		logInfo("[sendRaw] received %d bytes back", received);
+	} catch (Exception e) {
+		logInfo("[sendRaw] receive error: %s", e.msg);
+	}
 }
 
-/// Sends an invalid connection preface — server should reject and close.
+@H2Test("bad-preface")
 void testInvalidPreface(ushort port)
 {
-	// Send HTTP/1.1 garbage instead of the HTTP/2 connection preface
 	sendRaw(port, cast(const(ubyte)[]) "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
-	// Server should survive — verify with a normal request
 	auto r = curlH2(port, "/");
 	assert(r == "Hello, HTTP/2!", "Server broken after invalid preface, got: '" ~ r ~ "'");
 }
 
-/// Sends a truncated (partial) connection preface — server should handle gracefully.
+@H2Test("truncated")
 void testTruncatedPreface(ushort port)
 {
-	// Send only part of "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 	sendRaw(port, cast(const(ubyte)[]) "PRI * HTTP/2.0");
 	auto r = curlH2(port, "/");
 	assert(r == "Hello, HTTP/2!", "Server broken after truncated preface, got: '" ~ r ~ "'");
 }
 
-/// Sends completely random garbage bytes.
+@H2Test("garbage")
 void testGarbageData(ushort port)
 {
 	ubyte[64] garbage;
@@ -206,16 +229,15 @@ void testGarbageData(ushort port)
 	assert(r == "Hello, HTTP/2!", "Server broken after garbage data, got: '" ~ r ~ "'");
 }
 
-/// Sends a valid preface followed by a frame exceeding the default max size.
+@H2Test("oversized")
 void testOversizedFrame(ushort port)
 {
 	import std.socket : TcpSocket, InternetAddress;
 	import core.time : msecs;
 
-	// HTTP/2 connection preface
+	logInfo("[oversized] sending valid preface + oversized frame header to port %d", port);
+
 	auto preface = cast(const(ubyte)[]) "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
-	// A HEADERS frame (type 0x01) claiming 100KB payload on stream 1
-	// Frame header: length(3) + type(1) + flags(1) + stream_id(4) = 9 bytes
 	ubyte[9] frameHeader = [
 		0x01, 0x86, 0xA0, // length = 100000 (exceeds default 16384)
 		0x01,             // type = HEADERS
@@ -229,20 +251,15 @@ void testOversizedFrame(ushort port)
 	sock.connect(new InternetAddress("127.0.0.1", port));
 	sock.send(preface);
 	sock.send(frameHeader);
-	// Don't send the actual payload — just close
+	logInfo("[oversized] sent preface (%d bytes) + frame header (%d bytes), draining response",
+		preface.length, frameHeader.length);
 	ubyte[1024] buf;
-	try { sock.receive(buf); } catch (Exception) {}
+	try { while (sock.receive(buf) > 0) {} } catch (Exception e) {
+		logInfo("[oversized] drain error: %s", e.msg);
+	}
 	sock.close();
+	logInfo("[oversized] socket closed, verifying server with normal request");
 
 	auto r = curlH2(port, "/");
 	assert(r == "Hello, HTTP/2!", "Server broken after oversized frame, got: '" ~ r ~ "'");
-}
-
-/// After all malformed tests, verify normal requests still work.
-void testGetAfterMalformed(ushort port)
-{
-	auto r = curlH2(port, "/");
-	assert(r == "Hello, HTTP/2!", "Server broken after malformed tests, got: '" ~ r ~ "'");
-	auto s = curlH2Status(port, "/status/201");
-	assert(s == "201", "Expected 201 after malformed tests, got: " ~ s);
 }
