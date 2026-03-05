@@ -303,6 +303,61 @@ unittest {
 	assert(!settings.decode!Base64URL("a|b+*-c"));
 }
 
+// unpackSettings rejects enablePush values other than 0 or 1
+unittest {
+	import std.bitmanip : nativeToBigEndian;
+
+	// SETTINGS_ENABLE_PUSH (0x2) = 2 (invalid per RFC 7540 §6.5.2)
+	ubyte[] src = nativeToBigEndian(cast(ushort) 0x2) ~ nativeToBigEndian(cast(uint) 2);
+	HTTP2Settings settings;
+	try {
+		unpackSettings(settings, src);
+		assert(false, "Expected PROTOCOL_ERROR for enablePush=2");
+	} catch (HTTP2Exception e) {
+		assert(e.code == HTTP2Error.PROTOCOL_ERROR);
+	}
+}
+
+// unpackSettings rejects initialWindowSize >= 2^31
+unittest {
+	import std.bitmanip : nativeToBigEndian;
+
+	// SETTINGS_INITIAL_WINDOW_SIZE (0x4) = 2^31 (invalid per RFC 7540 §6.5.2)
+	ubyte[] src = nativeToBigEndian(cast(ushort) 0x4) ~ nativeToBigEndian(cast(uint)(1u << 31));
+	HTTP2Settings settings;
+	try {
+		unpackSettings(settings, src);
+		assert(false, "Expected FLOW_CONTROL_ERROR for initialWindowSize=2^31");
+	} catch (HTTP2Exception e) {
+		assert(e.code == HTTP2Error.FLOW_CONTROL_ERROR);
+	}
+}
+
+// unpackSettings rejects maxFrameSize outside [2^14, 2^24)
+unittest {
+	import std.bitmanip : nativeToBigEndian;
+
+	// SETTINGS_MAX_FRAME_SIZE (0x5) = 100 (below 2^14, invalid)
+	ubyte[] src = nativeToBigEndian(cast(ushort) 0x5) ~ nativeToBigEndian(cast(uint) 100);
+	HTTP2Settings settings;
+	try {
+		unpackSettings(settings, src);
+		assert(false, "Expected PROTOCOL_ERROR for maxFrameSize=100");
+	} catch (HTTP2Exception e) {
+		assert(e.code == HTTP2Error.PROTOCOL_ERROR);
+	}
+
+	// SETTINGS_MAX_FRAME_SIZE (0x5) = 2^24 (at upper bound, invalid)
+	src = nativeToBigEndian(cast(ushort) 0x5) ~ nativeToBigEndian(cast(uint)(1u << 24));
+	settings = HTTP2Settings.init;
+	try {
+		unpackSettings(settings, src);
+		assert(false, "Expected PROTOCOL_ERROR for maxFrameSize=2^24");
+	} catch (HTTP2Exception e) {
+		assert(e.code == HTTP2Error.PROTOCOL_ERROR);
+	}
+}
+
 /** Context is initialized on each new connection
 
 	it MUST remain consistent between streams of the same connection

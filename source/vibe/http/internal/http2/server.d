@@ -274,10 +274,7 @@ private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TC
 				}
 			} catch (Exception e) {
 				logException(e, "Failed to handle HTTP/2 frame chain");
-				try { connection.close(); } catch (Exception) {}
-				return true;
-			} catch (Throwable t) {
-				logWarn("HTTP/2 frame handler error: %s", t.msg);
+				try { stream.finalize(); } catch (Exception) {}
 				try { connection.close(); } catch (Exception) {}
 				return true;
 			}
@@ -626,6 +623,8 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 		static if (!is(ConnectionStream : TLSStream)) {
 
 			if (context.resFrame) {
+				// h2c upgrade response is always on stream 1 (RFC 7540 §3.2)
+				enum h2cUpgradeStreamId = 1;
 				auto l = context.resFrame.takeExactly(3).fromBytes(3) + HTTP2HeaderLength;
 				auto hpackPayload = context.resFrame[HTTP2HeaderLength .. l];
 				ubyte isEndStream = (context.resFrame.length > l)
@@ -633,7 +632,7 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 
 				try {
 					stream.write(buildSplitHeaderFrames(hpackPayload,
-						context.settings.maxFrameSize, 1, isEndStream, alloc));
+						context.settings.maxFrameSize, h2cUpgradeStreamId, isEndStream, alloc));
 				} catch (Exception e) {
 					logWarn("Unable to write HEADERS Frame to stream");
 				}
@@ -653,7 +652,7 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 						assert(false, "TODO");
 
 					// create DATA frame header
-					dataFrame.createHTTP2FrameHeader(cast(uint)resBody.length, HTTP2FrameType.DATA, 0x1, 1);
+					dataFrame.createHTTP2FrameHeader(cast(uint)resBody.length, HTTP2FrameType.DATA, 0x1, h2cUpgradeStreamId);
 
 					// append the DATA body
 					dataFrame.put(resBody);
