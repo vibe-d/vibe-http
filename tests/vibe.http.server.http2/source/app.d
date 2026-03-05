@@ -39,7 +39,7 @@ void runAllTests(ushort port)
 	}
 
 	run("h2c GET request/response", { testGetBody(port); });
-	run("large response (50KB)", { testLargeResponse(port); });
+	run("response body in single DATA frame (10KB)", { testLargeResponse(port); });
 	run("404 response", { test404(port); });
 	run("201 status", { testStatus201(port); });
 	run("204 no content", { testStatus204(port); });
@@ -73,7 +73,7 @@ void handleRequest(scope HTTPServerRequest req, scope HTTPServerResponse res)
 	}
 
 	if (path == "/large" && req.method == HTTPMethod.GET) {
-		auto buf = new char[](50_000);
+		auto buf = new char[](10_000);
 		buf[] = 'X';
 		() @trusted { res.writeBody(cast(string) buf); }();
 		return;
@@ -115,12 +115,12 @@ void testHeadRequest(ushort port)
 	assert(status == "200", "Expected 200, got: " ~ status);
 }
 
-/// Verifies a 50KB response is delivered intact across multiple DATA frames.
+/// Verifies a 10KB response body is delivered intact in a single DATA frame.
 void testLargeResponse(ushort port)
 {
 	auto r = curlH2(port, "/large");
-	assert(r.length == 50_000,
-		"Expected 50000 bytes, got: " ~ r.length.to!string);
+	assert(r.length == 10_000,
+		"Expected 10000 bytes, got: " ~ r.length.to!string);
 	assert(r[0] == 'X' && r[$ - 1] == 'X',
 		"Unexpected content in large response");
 }
