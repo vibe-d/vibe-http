@@ -143,7 +143,6 @@ struct HTTP2Settings {
 	@http2Setting(0x1, "SETTINGS_HEADER_TABLE_SIZE")
 	HTTP2SettingValue headerTableSize = DEFAULT_DYNAMIC_TABLE_SIZE;
 
-	// TODO {0,1} otherwise CONNECTION_ERROR
 	@http2Setting(0x2, "SETTINGS_ENABLE_PUSH")
 	HTTP2SettingValue enablePush = 1;
 
@@ -156,11 +155,9 @@ struct HTTP2Settings {
 	//to 2^16
 	HTTP2SettingValue maxConcurrentStreams = 65536;
 
-	// TODO FLOW_CONTROL_ERRROR on values > 2^31-1
 	@http2Setting(0x4, "SETTINGS_INITIAL_WINDOW_SIZE")
 	HTTP2SettingValue initialWindowSize = 65535;
 
-	// TODO PROTOCOL_ERROR on values > 2^24-1
 	@http2Setting(0x5, "SETTINGS_MAX_FRAME_SIZE")
 	HTTP2SettingValue maxFrameSize = 16384;
 
@@ -263,7 +260,7 @@ void unpackSettings(R)(ref HTTP2Settings settings, R src) @safe
 		"Invalid value for INITIAL_WINDOW_SIZE setting.", HTTP2Error.FLOW_CONTROL_ERROR);
 
 	enforceHTTP2(settings.maxFrameSize >= (1 << 14) && settings.maxFrameSize < (1 << 24),
-		"Invalid value for MAX_FRAME_SIZE setting.", HTTP2Error.FLOW_CONTROL_ERROR);
+		"Invalid value for MAX_FRAME_SIZE setting.", HTTP2Error.PROTOCOL_ERROR);
 }
 
 unittest {
@@ -304,6 +301,61 @@ unittest {
 
 	// should throw a Base64Exception error (caught) and a logWarn
 	assert(!settings.decode!Base64URL("a|b+*-c"));
+}
+
+// unpackSettings rejects enablePush values other than 0 or 1
+unittest {
+	import std.bitmanip : nativeToBigEndian;
+
+	// SETTINGS_ENABLE_PUSH (0x2) = 2 (invalid per RFC 7540 §6.5.2)
+	ubyte[] src = nativeToBigEndian(cast(ushort) 0x2) ~ nativeToBigEndian(cast(uint) 2);
+	HTTP2Settings settings;
+	try {
+		unpackSettings(settings, src);
+		assert(false, "Expected PROTOCOL_ERROR for enablePush=2");
+	} catch (HTTP2Exception e) {
+		assert(e.code == HTTP2Error.PROTOCOL_ERROR);
+	}
+}
+
+// unpackSettings rejects initialWindowSize >= 2^31
+unittest {
+	import std.bitmanip : nativeToBigEndian;
+
+	// SETTINGS_INITIAL_WINDOW_SIZE (0x4) = 2^31 (invalid per RFC 7540 §6.5.2)
+	ubyte[] src = nativeToBigEndian(cast(ushort) 0x4) ~ nativeToBigEndian(cast(uint)(1u << 31));
+	HTTP2Settings settings;
+	try {
+		unpackSettings(settings, src);
+		assert(false, "Expected FLOW_CONTROL_ERROR for initialWindowSize=2^31");
+	} catch (HTTP2Exception e) {
+		assert(e.code == HTTP2Error.FLOW_CONTROL_ERROR);
+	}
+}
+
+// unpackSettings rejects maxFrameSize outside [2^14, 2^24)
+unittest {
+	import std.bitmanip : nativeToBigEndian;
+
+	// SETTINGS_MAX_FRAME_SIZE (0x5) = 100 (below 2^14, invalid)
+	ubyte[] src = nativeToBigEndian(cast(ushort) 0x5) ~ nativeToBigEndian(cast(uint) 100);
+	HTTP2Settings settings;
+	try {
+		unpackSettings(settings, src);
+		assert(false, "Expected PROTOCOL_ERROR for maxFrameSize=100");
+	} catch (HTTP2Exception e) {
+		assert(e.code == HTTP2Error.PROTOCOL_ERROR);
+	}
+
+	// SETTINGS_MAX_FRAME_SIZE (0x5) = 2^24 (at upper bound, invalid)
+	src = nativeToBigEndian(cast(ushort) 0x5) ~ nativeToBigEndian(cast(uint)(1u << 24));
+	settings = HTTP2Settings.init;
+	try {
+		unpackSettings(settings, src);
+		assert(false, "Expected PROTOCOL_ERROR for maxFrameSize=2^24");
+	} catch (HTTP2Exception e) {
+		assert(e.code == HTTP2Error.PROTOCOL_ERROR);
+	}
 }
 
 /** Context is initialized on each new connection

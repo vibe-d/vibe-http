@@ -1,0 +1,4 @@
+name "tests"
+description "HTTP/2 integration tests"
+dependency "vibe-http" path="../../"
+versions "VibeDefaultMain"
