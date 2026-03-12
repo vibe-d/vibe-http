@@ -20,6 +20,7 @@ import vibe.core.log;
 import vibe.data.json;
 import vibe.inet.message;
 import vibe.inet.url;
+import vibe.inet.webform : MultipartEntity, MultipartEntityPart;
 import vibe.stream.counting;
 import vibe.stream.tls;
 import vibe.stream.operations;
@@ -911,10 +912,67 @@ final class HTTPClientRequest : HTTPRequest {
 		}
 	}
 
-	void writePart(MultiPart part)
+	/**
+		Writes to an HTTP request a 'multipart/*' entity, essentially a request
+		broken into multiple parts, each with their own headers and bodies.
+
+		See_Also: https://datatracker.ietf.org/doc/html/rfc2046
+
+		The most common use-case is 'multipart/form-data', demonstrated in the test below.
+
+		See_Also: https://datatracker.ietf.org/doc/html/rfc2388
+	*/
+	void writeMultipartEntity(MultipartEntity entity)
 	{
-		assert(false, "TODO");
+		import std.sumtype : match;
+		import vibe.core.stream : pipe;
+
+		// Add the headers from the entity.
+		foreach (k, v; entity.headers.byKeyValue) {
+			headers[k] = v;
+		}
+
+		auto dst = bodyWriter();	// This method finalizes headers when called.
+
+		// Write the individual multipart parts.
+		foreach (MultipartEntityPart part; entity.parts) {
+			dst.write("--" ~ entity.boundaryStr ~ "\r\n");
+			// Each part is like an HTTP entity, it has a header and body section.
+			foreach (k, v; part.headers.byKeyValue) {
+				dst.write(k ~ ": " ~ v ~ "\r\n");
+			}
+			dst.write("\r\n");
+			// Write the part's body, depending on how the data is stored.
+			part.entityBody.match!(
+					(string b) => dst.write(b),
+					(InterfaceProxy!InputStream fs) {
+						// TODO: Perform any requested encoding.
+						// https://datatracker.ietf.org/doc/html/rfc2046#section-5.1
+						// Encoding is set in the "Content-Transfer-Encoding" header.
+						// Supported values include: "7bit", "8bit", or "binary".
+
+						// Include the file contents as the part's body.
+						pipe(fs, dst);
+					});
+		}
+		// After the last part, the bounndary close has an additional "--" at the end.
+		dst.write("--" ~ entity.boundaryStr ~ "--\r\n");
 	}
+
+	///
+	unittest {
+		// TODO: This is a demonstration of usage before making proper testing.
+		import vibe.stream.memory;
+		void test(HTTPClientRequest req) {
+			req.writeMultipartEntity(MultipartEntity.ofFormData([
+				MultipartEntityPart.ofFormInput("name", "Bob Jones"),
+				MultipartEntityPart.ofFormFile("resume", "Resume-Bob.pdf"),
+				MultipartEntityPart.ofFormFile(
+						"cover", "howdy.txt", "text/plain", createMemoryStream("hi there.")),
+			]));
+		}
+	}
+
 
 	/**
 		An output stream suitable for writing the request body.
