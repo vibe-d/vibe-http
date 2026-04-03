@@ -761,7 +761,7 @@ final class HTTPServerSettings {
 		The default value is 60 seconds; set to Duration.zero to disable pings.
 	*/
 	Duration webSocketPingInterval = 60.seconds;
-	
+
 	/** Maximum payload size to accept in websocket messages
 	 */
 	size_t webSocketPayloadMaxLength = 10_000_000;

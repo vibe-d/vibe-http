@@ -1064,7 +1064,7 @@ final class IncomingWebSocketMessage : InputStream {
 
 		m_currentFrame = Frame.readFrame(m_conn,m_payloadMaxLength);
 		enforce!WebSocketException((m_nread += m_currentFrame.payload.length) <= m_payloadMaxLength,"websocketPayloadMaxLength exceeded");
-		
+
 		return true;
 	}
 

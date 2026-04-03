@@ -21,7 +21,7 @@ void main()
 		res.headers.addField("X","Z");
 		res.writeBody("Hello world.");
 	}).bindAddresses.find!(addr => addr.family == AddressFamily.INET).front;
-	
+
 	auto router = new URLRouter;
 	router.get("/", reverseProxyRequest(serverAddr.toAddressString,serverAddr.port));
 	immutable proxyAddr = listenHTTP(settings, router).bindAddresses.find!(addr => addr.family == AddressFamily.INET).front;
