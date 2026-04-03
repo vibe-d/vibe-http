@@ -1317,18 +1317,23 @@ scope:
 
 		See_Also: `HTTPStatusCode`
 	*/
-	void writeBody(in ubyte[] data, string content_type = null)
+	void writeBody(in ubyte[] data, int status, string content_type = null)
 	@safe {
-		if (content_type.length) headers["Content-Type"] = content_type;
-		else if ("Content-Type" !in headers) headers["Content-Type"] = "application/octet-stream";
-		headers["Content-Length"] = formatAlloc(m_requestAlloc, "%d", data.length);
+        this.statusCode = status;
+        if (content_type.length) headers["Content-Type"] = content_type;
+        else if ("Content-Type" !in headers) headers["Content-Type"] = "application/octet-stream";
+		// It is forbidden by spec to set `Content-Length` on a 204 / No Content response
+		// https://datatracker.ietf.org/doc/html/rfc2616#section-4.4
+		if (status != HTTPStatus.noContent)
+			headers["Content-Length"] = formatAlloc(m_requestAlloc, "%d", data.length);
+		else
+			enforce(!data.length, "Cannot call HTTPServerResponse.writeBody with non-empty 'data' and 'status' = 'No Content'");
 		bodyWriter.write(data);
 	}
 	/// ditto
-	void writeBody(in ubyte[] data, int status, string content_type = null)
+	void writeBody(in ubyte[] data, string content_type = null)
 	@safe {
-		statusCode = status;
-		writeBody(data, content_type);
+		writeBody(data, this.statusCode, content_type);
 	}
 	/// ditto
 	void writeBody(scope InputStream data, string content_type = null)
