@@ -1,0 +1,3 @@
+name "tests"
+description "HTTP 204 writeBody should not emit Content-Length"
+dependency "vibe-http" path="../../"
