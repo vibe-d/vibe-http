@@ -1319,9 +1319,9 @@ scope:
 	*/
 	void writeBody(in ubyte[] data, int status, string content_type = null)
 	@safe {
-        this.statusCode = status;
-        if (content_type.length) headers["Content-Type"] = content_type;
-        else if ("Content-Type" !in headers) headers["Content-Type"] = "application/octet-stream";
+		this.statusCode = status;
+		if (content_type.length) headers["Content-Type"] = content_type;
+		else if ("Content-Type" !in headers) headers["Content-Type"] = "application/octet-stream";
 		// It is forbidden by spec to set `Content-Length` on a 204 / No Content response
 		// https://datatracker.ietf.org/doc/html/rfc2616#section-4.4
 		if (status != HTTPStatus.noContent)
@@ -1344,19 +1344,20 @@ scope:
 	}
 	/// ditto
 	void writeBody(scope InputStream data, int status, string content_type = null)
-	{
+	@safe {
 		statusCode = status;
 		writeBody(data, content_type);
 	}
-    /// Ditto
+	/// Ditto
 	void writeBody(in typeof(null) data, string content_type = null)
 	@safe {
-        return this.writeBody((ubyte[]).init, content_type);
+		return this.writeBody((ubyte[]).init, content_type);
 	}
 	/// ditto
-	void writeBody(in typeof(null) data, int status, string content_type = null) {
-        return this.writeBody((ubyte[]).init, status, content_type);
-    }
+	void writeBody(in typeof(null) data, int status, string content_type = null)
+	@safe {
+		return this.writeBody((ubyte[]).init, status, content_type);
+	}
 
 	/** Writes the entire response body as a single string.
 
