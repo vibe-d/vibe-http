@@ -1343,6 +1343,15 @@ scope:
 		statusCode = status;
 		writeBody(data, content_type);
 	}
+    /// Ditto
+	void writeBody(in typeof(null) data, string content_type = null)
+	@safe {
+        return this.writeBody((ubyte[]).init, content_type);
+	}
+	/// ditto
+	void writeBody(in typeof(null) data, int status, string content_type = null) {
+        return this.writeBody((ubyte[]).init, status, content_type);
+    }
 
 	/** Writes the entire response body as a single string.
 
@@ -2026,3 +2035,13 @@ shared static this()
 
 version (VibeDebugCatchAll) package alias UncaughtException = Throwable;
 else package alias UncaughtException = Exception;
+
+// Because we define a `in ubyte[]` and a `string` version,
+// calling `writeBody(null)` was ambiguous.
+unittest {
+    void noCall (scope HTTPServerResponse res) {
+        res.writeBody(null);
+        res.writeBody(null, 200);
+        res.writeBody(null, 200, null);
+    }
+}
