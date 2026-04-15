@@ -38,5 +38,5 @@ void main()
 
 void handler(scope HTTPServerRequest req, scope HTTPServerResponse res)
 {
-	res.writeBody("", HTTPStatus.noContent);
+	res.writeVoidBody(HTTPStatus.noContent);
 }

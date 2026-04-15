@@ -1309,7 +1309,8 @@ scope:
 
 		Params:
 			data = The data to write as the body contents
-			status = Optional response status code to set
+			status = Optional response status code to set - must not be
+				`HTTPStatus.noContent`
 			content_type = Optional content type to apply to the response.
 				If no content type is given and no "Content-Type" header is
 				set in the response, this will default to
@@ -1319,15 +1320,14 @@ scope:
 	*/
 	void writeBody(in ubyte[] data, int status, string content_type = null)
 	@safe {
+		assert(status != HTTPStatus.noContent);
+
 		this.statusCode = status;
 		if (content_type.length) headers["Content-Type"] = content_type;
 		else if ("Content-Type" !in headers) headers["Content-Type"] = "application/octet-stream";
 		// It is forbidden by spec to set `Content-Length` on a 204 / No Content response
 		// https://datatracker.ietf.org/doc/html/rfc2616#section-4.4
-		if (status != HTTPStatus.noContent)
-			headers["Content-Length"] = formatAlloc(m_requestAlloc, "%d", data.length);
-		else
-			enforce(!data.length, "Cannot call HTTPServerResponse.writeBody with non-empty 'data' and 'status' = 'No Content'");
+		headers["Content-Length"] = formatAlloc(m_requestAlloc, "%d", data.length);
 		bodyWriter.write(data);
 	}
 	/// ditto
@@ -1479,16 +1479,22 @@ scope:
 		else serializeToJson(() @trusted { return &rng; } (), data);
 	}
 
-	/**
-	 * Writes the response with no body.
-	 *
-	 * This method should be used in situations where no body is
-	 * requested, such as a HEAD request. For an empty body, just use writeBody,
-	 * as this method causes problems with some keep-alive connections.
-	 */
+	/** Writes the response with no body.
+
+		This method should be used in situations where no body is
+		requested, such as for a HEAD request or when responding with
+		`HTTPStatus.noContent`. For an empty body, use `writeBody` instead,
+		as this method does not set a "Content-Length" header.
+	*/
 	void writeVoidBody()
 	@safe {
 		m_exchange.writeVoidBody(this);
+	}
+	/// ditto
+	void writeVoidBody(int status)
+	{
+		statusCode = status;
+		writeVoidBody();
 	}
 
 	/** A stream for writing the body of the HTTP response.
