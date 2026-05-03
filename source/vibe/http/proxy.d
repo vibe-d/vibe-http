@@ -18,7 +18,6 @@ import vibe.internal.interfaceproxy : InterfaceProxy;
 import std.conv;
 import std.exception;
 
-
 /*
 	TODO:
 		- use a client pool
@@ -108,17 +107,7 @@ HTTPServerRequestDelegateS proxyRequest(HTTPProxySettings settings)
 			auto scon = res.connectProxy();
 			assert (scon);
 
-			runTask(() nothrow {
-				try scon.pipe(ccon);
-				catch (Exception e) {
-					logException(e, "Failed to forward proxy data from server to client");
-					try scon.close();
-					catch (Exception e) logException(e, "Failed to close server connection after error");
-					try ccon.close();
-					catch (Exception e) logException(e, "Failed to close client connection after error");
-				}
-			});
-			ccon.pipe(scon);
+			bidirectionalTunnel(scon, ccon);
 			return;
 		}
 
@@ -163,18 +152,7 @@ HTTPServerRequestDelegateS proxyRequest(HTTPProxySettings settings)
 				auto scon = res.switchProtocol("");
 				auto ccon = cres.switchProtocol("");
 
-				runTask(() nothrow {
-					try ccon.pipe(scon);
-					catch (Exception e) {
-						logException(e, "Failed to forward proxy data from client to server");
-						try scon.close();
-						catch (Exception e) logException(e, "Failed to close server connection after error");
-						try ccon.close();
-						catch (Exception e) logException(e, "Failed to close client connection after error");
-					}
-				});
-
-				scon.pipe(ccon);
+				bidirectionalTunnel(ccon, scon);
 				return;
 			}
 
@@ -232,6 +210,30 @@ HTTPServerRequestDelegateS proxyRequest(HTTPProxySettings settings)
 	}
 
 	return &handleRequest;
+}
+
+private void bidirectionalTunnel(A, B)(A a, B b) @safe nothrow
+{
+	//Sometimes A,B are structs passed by value. It is important to always pass them by value to allow reference counted resources to be managed.
+	//A static is necessary to avoid a delegate which takes arguments by reference, as this can cause multiple fibers to access a TCPConnection tripping an exception in vibe-core net.d
+	static void pumpAtoB(A src, B dst) nothrow {
+		pump(src,dst);
+	}
+
+	runTask(&pumpAtoB, a, b);
+
+	pump(b,a);
+}
+
+private void pump(Src, Dst)(Src src, Dst dst)
+{
+	try src.pipe(dst);
+	catch (Exception e) {
+		try src.close();
+		catch (Exception e) logException(e, "Failed to close server connection after error");
+		try dst.close();
+		catch (Exception e) logException(e, "Failed to close client connection after error");
+	}
 }
 
 /**
