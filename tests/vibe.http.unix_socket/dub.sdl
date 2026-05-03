@@ -1,0 +1,3 @@
+name "tests"
+description "Unix Sockets"
+dependency "vibe-http" path="../../"

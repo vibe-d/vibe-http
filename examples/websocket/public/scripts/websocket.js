@@ -7,7 +7,7 @@ function connect()
 	socket.onopen = function() {
 		setText("connected. waiting for timer...");
 	}
-	socket.onmessage = function(message) {	
+	socket.onmessage = function(message) {
 		setText(message.data);
 	}
 	socket.onclose = function() {

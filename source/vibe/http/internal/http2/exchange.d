@@ -91,6 +91,44 @@ ubyte[] buildHeaderFrame(alias type)(string statusLine, InetHeaderMap headers,
 	return buildHeaderFrame!type(statusLine, headers, context, context.table, alloc);
 }
 
+/// Splits an HPACK-encoded header block into a HEADERS frame followed by
+/// zero or more CONTINUATION frames, respecting maxFrameSize.
+/// extraFlags are ORed into the HEADERS frame flags (e.g., END_STREAM).
+/// END_HEADERS is automatically set on the last frame.
+/// Returns the complete serialized frame sequence.
+package ubyte[] buildSplitHeaderFrames(ubyte[] hpackPayload, uint maxFrameSize, uint streamId,
+	ubyte extraFlags, scope IAllocator alloc) @safe
+{
+	auto result = AllocAppender!(ubyte[])(alloc);
+
+	if (hpackPayload.length <= maxFrameSize) {
+		result.createHTTP2FrameHeader(cast(uint) hpackPayload.length, HTTP2FrameType.HEADERS,
+			cast(ubyte)(HTTP2FrameFlag.END_HEADERS | extraFlags), streamId);
+		result.put(hpackPayload);
+	} else {
+		// First HEADERS frame without END_HEADERS
+		result.createHTTP2FrameHeader(cast(uint) maxFrameSize, HTTP2FrameType.HEADERS,
+			extraFlags, streamId);
+		result.put(hpackPayload[0 .. maxFrameSize]);
+
+		auto remaining = hpackPayload[maxFrameSize .. $];
+
+		while (remaining.length > 0) {
+			auto len = remaining.length > maxFrameSize ? maxFrameSize : remaining.length;
+			bool isLast = (len == remaining.length);
+			ubyte flags = isLast ? HTTP2FrameFlag.END_HEADERS : 0x0;
+
+			result.createHTTP2FrameHeader(cast(uint) len, HTTP2FrameType.CONTINUATION,
+				flags, streamId);
+			result.put(remaining[0 .. len]);
+
+			remaining = remaining[len .. $];
+		}
+	}
+
+	return result.data;
+}
+
 /// generates an HTTP/2 pseudo-header representation to encode a HTTP/1.1 start message line
 private void convertStartMessage(T)(string src, ref T dst, ref IndexingTable table, StartLine type, bool isTLS = true) @safe
 {
@@ -153,6 +191,122 @@ unittest {
 		false)[9 .. $];
 
 	assert(res == expected);
+}
+
+// Tests for buildSplitHeaderFrames
+unittest {
+	import std.experimental.allocator.mallocator;
+
+	scope alloc = new RegionListAllocator!(shared(Mallocator), false)(1024, Mallocator.instance);
+
+	// helper: parse a frame header from raw bytes
+	HTTP2FrameHeader parseHeader(ubyte[] data) {
+		return unpackHTTP2FrameHeader(data);
+	}
+
+	// Small payload fits in a single HEADERS frame
+	{
+		ubyte[] payload = [0x88, 0x86, 0x84]; // 3 bytes
+		auto result = buildSplitHeaderFrames(payload, 16384, 1, 0x0, alloc);
+
+		assert(result.length == HTTP2HeaderLength + 3);
+		auto hdr = parseHeader(result);
+		assert(hdr.type == HTTP2FrameType.HEADERS);
+		assert(hdr.payloadLength == 3);
+		assert(hdr.flags == HTTP2FrameFlag.END_HEADERS);
+		assert(hdr.streamId == 1);
+		assert(result[HTTP2HeaderLength .. $] == payload);
+	}
+
+	// Single frame with END_STREAM flag
+	{
+		ubyte[] payload = [0x88];
+		auto result = buildSplitHeaderFrames(payload, 16384, 5, HTTP2FrameFlag.END_STREAM, alloc);
+
+		auto hdr = parseHeader(result);
+		assert(hdr.type == HTTP2FrameType.HEADERS);
+		assert(hdr.flags == (HTTP2FrameFlag.END_HEADERS | HTTP2FrameFlag.END_STREAM));
+		assert(hdr.streamId == 5);
+	}
+
+	// Payload exactly at maxFrameSize boundary: single frame
+	{
+		auto payload = new ubyte[](10);
+		payload[] = 0xAB;
+		auto result = buildSplitHeaderFrames(payload, 10, 3, 0x0, alloc);
+
+		assert(result.length == HTTP2HeaderLength + 10);
+		auto hdr = parseHeader(result);
+		assert(hdr.type == HTTP2FrameType.HEADERS);
+		assert(hdr.flags == HTTP2FrameFlag.END_HEADERS);
+		assert(hdr.payloadLength == 10);
+	}
+
+	// Payload exceeds maxFrameSize: HEADERS + 1 CONTINUATION
+	{
+		auto payload = new ubyte[](15);
+		foreach (i, ref b; payload) b = cast(ubyte)(i & 0xFF);
+		auto result = buildSplitHeaderFrames(payload, 10, 7, 0x0, alloc);
+
+		// First frame: HEADERS, 10 bytes, no END_HEADERS
+		assert(result.length == 2 * HTTP2HeaderLength + 15);
+		auto hdr1 = parseHeader(result);
+		assert(hdr1.type == HTTP2FrameType.HEADERS);
+		assert(hdr1.payloadLength == 10);
+		assert(hdr1.flags == 0x0);
+		assert(hdr1.streamId == 7);
+		assert(result[HTTP2HeaderLength .. HTTP2HeaderLength + 10] == payload[0 .. 10]);
+
+		// Second frame: CONTINUATION, 5 bytes, END_HEADERS
+		auto frame2 = result[HTTP2HeaderLength + 10 .. $];
+		auto hdr2 = parseHeader(frame2);
+		assert(hdr2.type == HTTP2FrameType.CONTINUATION);
+		assert(hdr2.payloadLength == 5);
+		assert(hdr2.flags == HTTP2FrameFlag.END_HEADERS);
+		assert(hdr2.streamId == 7);
+		assert(frame2[HTTP2HeaderLength .. $] == payload[10 .. 15]);
+	}
+
+	// Payload needs 3 frames: HEADERS + 2 CONTINUATION
+	{
+		auto payload = new ubyte[](25);
+		payload[] = 0xCC;
+		auto result = buildSplitHeaderFrames(payload, 10, 1, HTTP2FrameFlag.END_STREAM, alloc);
+
+		assert(result.length == 3 * HTTP2HeaderLength + 25);
+
+		// Frame 1: HEADERS, 10 bytes, END_STREAM only (no END_HEADERS)
+		auto hdr1 = parseHeader(result);
+		assert(hdr1.type == HTTP2FrameType.HEADERS);
+		assert(hdr1.payloadLength == 10);
+		assert(hdr1.flags == HTTP2FrameFlag.END_STREAM);
+
+		// Frame 2: CONTINUATION, 10 bytes, no flags
+		auto f2 = result[HTTP2HeaderLength + 10 .. $];
+		auto hdr2 = parseHeader(f2);
+		assert(hdr2.type == HTTP2FrameType.CONTINUATION);
+		assert(hdr2.payloadLength == 10);
+		assert(hdr2.flags == 0x0);
+
+		// Frame 3: CONTINUATION, 5 bytes, END_HEADERS
+		auto f3 = f2[HTTP2HeaderLength + 10 .. $];
+		auto hdr3 = parseHeader(f3);
+		assert(hdr3.type == HTTP2FrameType.CONTINUATION);
+		assert(hdr3.payloadLength == 5);
+		assert(hdr3.flags == HTTP2FrameFlag.END_HEADERS);
+	}
+
+	// Empty payload: single HEADERS frame with 0 length
+	{
+		ubyte[] payload = [];
+		auto result = buildSplitHeaderFrames(payload, 16384, 1, 0x0, alloc);
+
+		assert(result.length == HTTP2HeaderLength);
+		auto hdr = parseHeader(result);
+		assert(hdr.type == HTTP2FrameType.HEADERS);
+		assert(hdr.payloadLength == 0);
+		assert(hdr.flags == HTTP2FrameFlag.END_HEADERS);
+	}
 }
 
 /* ======================================================= */
@@ -373,15 +527,9 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream,
 				h2context, table, alloc, istls);
 		}();
 
-		// send HEADERS frame
-		if (headerFrame.length < h2context.settings.maxFrameSize) {
-			headerFrame[4] += 0x4; // set END_HEADERS flag (sending complete header)
-			cstream.write(headerFrame);
-
-		} else {
-			// TODO CONTINUATION frames
-			assert(false);
-		}
+		// send HEADERS frame (+ CONTINUATION if needed)
+		cstream.write(buildSplitHeaderFrames(headerFrame[HTTP2HeaderLength .. $],
+			h2context.settings.maxFrameSize, stream.streamId, 0x0, alloc));
 
 		logDebug("Sent HEADERS frame on streamID " ~ stream.streamId.to!string);
 
@@ -485,7 +633,7 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream,
 		// spawn the asynchronous data sender
 		sendDataTask();
 
-	} else if (dataWriter.data.length > 0) { // HEAD response, HEADERS frame, no DATA
+	} else { // HEAD response or no body (e.g. 204): HEADERS frame only, no DATA
 
 		// write the status line
 		writeLine("%s %d %s",
@@ -499,18 +647,11 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream,
 				h2context, table, alloc, istls);
 		}();
 
-		// send HEADERS frame
-		if (headerFrame.length < h2context.settings.maxFrameSize) {
-			headerFrame[4] += 0x5; // set END_HEADERS, END_STREAM flag
-			cstream.write(headerFrame);
-		} else {
-			// TODO CONTINUATION frames
-			assert(false);
-		}
+		// send HEADERS frame with END_STREAM (+ CONTINUATION if needed)
+		cstream.write(buildSplitHeaderFrames(headerFrame[HTTP2HeaderLength .. $],
+			h2context.settings.maxFrameSize, stream.streamId, HTTP2FrameFlag.END_STREAM, alloc));
 
 		logDebug("Sent HEADERS frame on streamID " ~ stream.streamId.to!string);
-
-		logDebug("[Data] No DATA frame to send");
 
 		if (stream.state == HTTP2StreamState.HALF_CLOSED_REMOTE) {
 			stream.state = HTTP2StreamState.CLOSED;
@@ -518,26 +659,6 @@ bool handleHTTP2Request(UStream)(ref HTTP2ConnectionStream!UStream stream,
 			stream.state = HTTP2StreamState.HALF_CLOSED_LOCAL;
 		}
 		closeStream(h2context.multiplexer, stream.streamId);
-
-	} else { // 404: no DATA for the given path
-
-		writeLine("%s %d %s",
-			"HTTP/2",
-			404,
-			"Not Found");
-
-		// build the HEADERS frame
-		() @trusted {
-			headerFrame = buildHeaderFrame!(StartLine.RESPONSE)(statusLine.data, res.headers,
-				h2context, table, alloc, istls);
-		}();
-
-		if (headerFrame.length < h2context.settings.maxFrameSize) {
-			headerFrame[4] += 0x5; // set END_HEADERS, END_STREAM flag
-			cstream.write(headerFrame);
-		}
-
-		logDebug("No response: sent 404 HEADERS frame");
 
 	}
 

@@ -1,3 +1,15 @@
+1.4.0 - 2026-03-03
+==================
+
+- Added HTTP server support for Unix sockets - [pull #70][issue70]
+- `ChunkedInputStream` now operates lazily - [pull #69][issue69], [issue vibe.d#2332][issue2332-vibe-d]
+- Fixed remotely terminated WebSocket connections not being detected due to a regression on vibe-stream - [pull #69][issue69]
+
+[issue69]: https://github.com/vibe-d/vibe-http/issues/69
+[issue70]: https://github.com/vibe-d/vibe-http/issues/70
+[issue2332-vibe-d]: https://github.com/vibe-d/vibe.d/pull/2332
+
+
 1.3.3 - 2026-02-02
 ==================
 

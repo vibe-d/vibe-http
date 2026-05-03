@@ -203,7 +203,7 @@ void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream,
 	TCPConnection connection, HTTP2ServerContext context, bool priorKnowledge = false) @safe
 	if (isConnectionStream!ConnectionStream || is(ConnectionStream : TLSStreamType))
 {
-	logTrace("HTTP/2 Connection Handler");
+	logDebug("HTTP/2 Connection Handler (priorKnowledge=%s)", priorKnowledge);
 
 	// read the connection preface
 	if (!priorKnowledge) {
@@ -214,10 +214,11 @@ void handleHTTP2Connection(ConnectionStream)(ConnectionStream stream,
 			logDebug("Ignoring invalid HTTP/2 client connection preface");
 			return;
 		}
-		logTrace("Received client http2 connection preface");
+		logDebug("Received client http2 connection preface");
 	}
 
 	// initialize Frame handler
+	logDebug("Starting HTTP/2 frame chain handler");
 	handleHTTP2FrameChain(stream, connection, context);
 }
 
@@ -246,38 +247,40 @@ private void handleHTTP2FrameChain(ConnectionStream)(ConnectionStream stream, TC
 	}
 
 	while (true) {
-		try {
-			CB cb = {stream, connection, context};
-			auto st = connection.waitForDataAsync(cb);
+		bool done = () @trusted nothrow {
+			try {
+				CB cb = {stream, connection, context};
+				auto st = connection.waitForDataAsync(cb);
 
-			final switch (st) {
-				case WaitForDataAsyncStatus.waiting:
-					logTrace("need to wait for more data asynchronously");
-					return;
+				final switch (st) {
+					case WaitForDataAsyncStatus.waiting:
+						logDebug("need to wait for more data asynchronously");
+						return true;
 
-				case WaitForDataAsyncStatus.noMoreData:
-					logTrace("connection closed by remote side");
-					stream.finalize();
-					connection.close();
-					return;
-
-				case WaitForDataAsyncStatus.dataAvailable:
-					// start the frame handler
-					bool close = handleHTTP2Frame(stream, connection, context);
-
-					// determine if this connection needs to be closed
-					if (close) {
-						logTrace("Closing connection.");
+					case WaitForDataAsyncStatus.noMoreData:
+						logDebug("connection closed by remote side");
 						stream.finalize();
 						connection.close();
-						return;
-					}
+						return true;
+
+					case WaitForDataAsyncStatus.dataAvailable:
+						bool close = handleHTTP2Frame(stream, connection, context);
+						if (close) {
+							logDebug("Closing connection after frame handling.");
+							stream.finalize();
+							connection.close();
+							return true;
+						}
+						return false;
+				}
+			} catch (Exception e) {
+				logException(e, "Failed to handle HTTP/2 frame chain");
+				try { stream.finalize(); } catch (Exception) {}
+				try { connection.close(); } catch (Exception) {}
+				return true;
 			}
-		} catch (Exception e) {
-			logException(e, "Failed to handle HTTP/2 frame chain");
-			connection.close();
-			return;
-		}
+		}();
+		if (done) return;
 	}
 }
 
@@ -339,7 +342,7 @@ private const string checkvalid = "enforceHTTP2(valid, \"Invalid stream ID\", HT
 private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCPConnection connection,
 	HTTP2ServerContext context, IAllocator alloc) @trusted
 {
-	logTrace("HTTP/2 Frame Handler (Alloc)");
+	logDebug("HTTP/2 Frame Handler (Alloc)");
 
 	uint len = 0;
 
@@ -621,22 +624,18 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 		static if (!is(ConnectionStream : TLSStream)) {
 
 			if (context.resFrame) {
-				auto l = context.resFrame.takeExactly(3).fromBytes(3) + 9;
+				// h2c upgrade response is always on stream 1 (RFC 7540 §3.2)
+				enum h2cUpgradeStreamId = 1;
+				auto l = context.resFrame.takeExactly(3).fromBytes(3) + HTTP2HeaderLength;
+				auto hpackPayload = context.resFrame[HTTP2HeaderLength .. l];
+				ubyte isEndStream = (context.resFrame.length > l)
+					? cast(ubyte) 0x0 : HTTP2FrameFlag.END_STREAM;
 
-				if (l < context.settings.maxFrameSize) {
-					auto isEndStream = (context.resFrame.length > l) ? 0x0 : 0x1;
-
-					context.resFrame[4] += 0x4 + isEndStream;
-
-					try {
-						stream.write(context.resFrame[0 .. l]);
-					} catch (Exception e) {
-						logWarn("Unable to write HEADERS Frame to stream");
-					}
-
-				} else {
-					// TODO CONTINUATION frames
-					assert(false);
+				try {
+					stream.write(buildSplitHeaderFrames(hpackPayload,
+						context.settings.maxFrameSize, h2cUpgradeStreamId, isEndStream, alloc));
+				} catch (Exception e) {
+					logWarn("Unable to write HEADERS Frame to stream");
 				}
 
 				auto resBody = context.resFrame[l .. $];
@@ -654,7 +653,7 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 						assert(false, "TODO");
 
 					// create DATA frame header
-					dataFrame.createHTTP2FrameHeader(cast(uint)resBody.length, HTTP2FrameType.DATA, 0x1, 1);
+					dataFrame.createHTTP2FrameHeader(cast(uint)resBody.length, HTTP2FrameType.DATA, 0x1, h2cUpgradeStreamId);
 
 					// append the DATA body
 					dataFrame.put(resBody);
@@ -666,7 +665,7 @@ private bool handleFrameAlloc(ConnectionStream)(ref ConnectionStream stream, TCP
 						logWarn("Unable to write DATA Frame to stream.");
 					}
 
-					logTrace("Sent DATA frame on streamID %s", stream.streamId);
+					logDebug("Sent DATA frame on streamID %s", stream.streamId);
 
 				}
 
@@ -969,7 +968,7 @@ unittest {
 	import vibe.core.core : runApplication;
 
 	// empty handler, just to test if protocol switching works
-	void handleReq(scope HTTPServerRequest req, scope HTTPServerResponse res)
+	void handleRequest(scope HTTPServerRequest req, scope HTTPServerResponse res)
 	@safe
 	{
 		if (req.requestPath.toString == "/")
@@ -977,10 +976,10 @@ unittest {
 	}
 
 	auto settings = new HTTPServerSettings();
-	settings.port = 8090;
-	settings.bindAddresses = ["localhost"];
+	settings.port = 0;
+	settings.bindAddresses = ["127.0.0.1"];
 
-	listenHTTP(settings, &handleReq);
+	listenHTTP(settings, &handleRequest);
 	//runApplication();
 }
 
@@ -995,8 +994,8 @@ unittest {
 	}
 
 	auto settings = new HTTPServerSettings;
-	settings.port = 8091;
-	settings.bindAddresses = ["127.0.0.1", "192.168.1.131"];
+	settings.port = 0;
+	settings.bindAddresses = ["127.0.0.1"];
 	settings.tlsContext = createTLSContext(TLSContextKind.server);
 	settings.tlsContext.useCertificateChainFile("tests/server.crt");
 	settings.tlsContext.usePrivateKeyFile("tests/server.key");
@@ -1005,7 +1004,6 @@ unittest {
 	// should accept the 'h2' protocol request
 	settings.tlsContext.alpnCallback(http2Callback);
 
-	// dummy, just for testing
 	listenHTTP(settings, &handleRequest);
 	//runApplication();
 }
