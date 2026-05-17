@@ -37,17 +37,17 @@ private void tunnelBidirectional(A, B)(A a, B b) @safe
 	auto finished = new bool;
 
 	static void pumpAToB(A src, B dst, bool *finished) nothrow {
-		try pump(src, dst, finished);
+		try pump("up->cli", src, dst, finished);
 		catch (Exception e) {
-			logDebug("Proxy tunnel: forward ended: %s", e.msg);
+			logDebug("Proxy tunnel: up->cli ended: %s", e.msg);
 		}
 		*finished = true;
 	}
 
 	auto t = runTask(&pumpAToB, a, b, finished);
 
-	try pump(b, a, finished);
-	catch (Exception e) logDebug("Proxy tunnel: forward ended: %s", e.msg);
+	try pump("cli->up", b, a, finished);
+	catch (Exception e) logDebug("Proxy tunnel: cli->up ended: %s", e.msg);
 
 	*finished = true;
 	try t.join();
@@ -61,7 +61,7 @@ private void tunnelBidirectional(A, B)(A a, B b) @safe
 	periodically observe the shared `done` flag.  Uses `waitForDataEx`
 	to distinguish timeout from EOF.
 */
-private void pump(Src, Dst)(Src src, Dst dst, bool *finished)
+private void pump(string dir, Src, Dst)(Src src, Dst dst, bool *finished)
 {
 	import core.time : seconds;
 	import std.algorithm : min;
@@ -94,10 +94,10 @@ private void pump(Src, Dst)(Src src, Dst dst, bool *finished)
 			auto chunk = min(src.leastSize, buf.length);
 			if (chunk == 0) chunk = 1;
 			src.read(buf[0 .. chunk]);
-			if (iteration < 5)
+			if (iteration < 3)
 			{
 				auto hex = iota(min(chunk, 16)).map!(i => format("%02x", buf[i])).join(" ");
-				logInfo("pump chunk=%d bytes: %s", chunk, hex);
+				logInfo("pump %s chunk=%d bytes: %s", dir, chunk, hex);
 				iteration++;
 			}
 			dst.write(buf[0 .. chunk]);
