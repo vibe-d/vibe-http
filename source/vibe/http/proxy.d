@@ -64,9 +64,12 @@ private void pump(Src, Dst)(Src src, Dst dst, bool *finished)
 	import core.time : seconds;
 	import std.algorithm : min;
 	import vibe.stream.wrapper : ConnectionProxyStream;
+	import vibe.core.log : logDebug, logInfo;
+	import std.format : format;
 
 	enum checkInterval = 1.seconds;
 	auto buf = new ubyte[64*1024];
+	int iteration;
 
 	while (!*finished)
 	{
@@ -89,6 +92,12 @@ private void pump(Src, Dst)(Src src, Dst dst, bool *finished)
 			auto chunk = min(src.leastSize, buf.length);
 			if (chunk == 0) chunk = 1;
 			src.read(buf[0 .. chunk]);
+			if (iteration < 5)
+			{
+				auto hex = iota(min(chunk, 16)).map!(i => format("%02x", buf[i])).join(" ");
+				logInfo("pump chunk=%d bytes: %s", chunk, hex);
+				iteration++;
+			}
 			dst.write(buf[0 .. chunk]);
 			break;
 		case WaitForDataStatus.noMoreData:
@@ -188,6 +197,8 @@ HTTPServerRequestDelegateS proxyRequest(HTTPProxySettings settings)
 
 			res.writeVoidBody();
 			auto scon = res.connectProxy();
+			assert(scon);
+
 			tunnelBidirectional(scon, ccon);
 			return;
 		}
