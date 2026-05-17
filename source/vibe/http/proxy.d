@@ -7,16 +7,110 @@
 */
 module vibe.http.proxy;
 
-import vibe.core.core : runTask;
 import vibe.core.log;
 import vibe.http.client;
 import vibe.http.server;
 import vibe.inet.message;
 import vibe.stream.operations;
 import vibe.internal.interfaceproxy : InterfaceProxy;
+import std.range;
+import std.algorithm;
 
 import std.conv;
 import std.exception;
+
+
+/*
+	Bidirectional tunnel between two stream-like endpoints (CONNECT body or
+	protocol upgrade such as WebSocket).
+
+	Two fibers, one per direction.  Each waits for data with a timeout and
+	checks a shared `done` flag.  Uses `waitForDataEx` to distinguish
+	timeout from EOF.
+*/
+private void tunnelBidirectional(A, B)(A a, B b) @safe
+{
+	import vibe.core.core : runTask;
+
+	logInfo("tunnelBidirectional started");
+
+	auto finished = new bool;
+
+	static void pumpAToB(A src, B dst, bool *finished) nothrow {
+		try pump("up->cli", src, dst, finished);
+		catch (Exception e) {
+			logDebug("Proxy tunnel: up->cli ended: %s", e.msg);
+		}
+		*finished = true;
+	}
+
+	auto t = runTask(&pumpAToB, a, b, finished);
+
+	try pump("cli->up", b, a, finished);
+	catch (Exception e) logDebug("Proxy tunnel: cli->up ended: %s", e.msg);
+
+	*finished = true;
+	try t.join();
+	catch (Exception e) logDebug("Proxy tunnel: join failed: %s", e.msg);
+
+	logInfo("tunnelBidirectional finished");
+}
+
+/*
+	Single-direction pump.  Waits for data with a timeout so it can
+	periodically observe the shared `done` flag.  Uses `waitForDataEx`
+	to distinguish timeout from EOF.
+*/
+private void pump(Src, Dst)(string dir,Src src, Dst dst, bool *finished)
+{
+	import core.time : seconds;
+	import std.algorithm : min;
+	import vibe.stream.wrapper : ConnectionProxyStream;
+	import vibe.core.log : logDebug, logInfo;
+	import std.format : format;
+
+	enum checkInterval = 1.seconds;
+	auto buf = new ubyte[64*1024];
+	int iteration;
+
+	while (!*finished)
+	{
+		WaitForDataStatus status;
+
+		static if (__traits(hasMember, Src, "waitForDataEx"))
+			status = src.waitForDataEx(checkInterval);
+		else static if (is(Src : ConnectionStream))
+		{
+			auto cps = cast(ConnectionProxyStream)src;
+			assert(cps, "Tunnel requires a ConnectionProxyStream");
+			status = cps.waitForDataEx(checkInterval);
+		}
+		else
+			static assert(false, "Tunnel source must support waitForDataEx");
+
+		final switch (status)
+		{
+		case WaitForDataStatus.dataAvailable:
+			auto chunk = min(src.leastSize, buf.length);
+			if (chunk == 0) chunk = 1;
+			try src.read(buf[0 .. chunk]);
+			catch (Exception) { *finished = true; return; }
+			if (iteration < 3)
+			{
+				auto hex = iota(min(chunk, 16)).map!(i => format("%02x", buf[i])).join(" ");
+				logInfo("pump %s chunk=%d bytes: %s", dir, chunk, hex);
+				iteration++;
+			}
+			dst.write(buf[0 .. chunk]);
+			break;
+		case WaitForDataStatus.noMoreData:
+			*finished = true;
+			return;
+		case WaitForDataStatus.timeout:
+			break;
+		}
+	}
+}
 
 
 /*
@@ -106,19 +200,9 @@ HTTPServerRequestDelegateS proxyRequest(HTTPProxySettings settings)
 
 			res.writeVoidBody();
 			auto scon = res.connectProxy();
-			assert (scon);
+			assert(scon);
 
-			runTask(() nothrow {
-				try scon.pipe(ccon);
-				catch (Exception e) {
-					logException(e, "Failed to forward proxy data from server to client");
-					try scon.close();
-					catch (Exception e) logException(e, "Failed to close server connection after error");
-					try ccon.close();
-					catch (Exception e) logException(e, "Failed to close client connection after error");
-				}
-			});
-			ccon.pipe(scon);
+			tunnelBidirectional(scon, ccon);
 			return;
 		}
 
@@ -163,18 +247,7 @@ HTTPServerRequestDelegateS proxyRequest(HTTPProxySettings settings)
 				auto scon = res.switchProtocol("");
 				auto ccon = cres.switchProtocol("");
 
-				runTask(() nothrow {
-					try ccon.pipe(scon);
-					catch (Exception e) {
-						logException(e, "Failed to forward proxy data from client to server");
-						try scon.close();
-						catch (Exception e) logException(e, "Failed to close server connection after error");
-						try ccon.close();
-						catch (Exception e) logException(e, "Failed to close client connection after error");
-					}
-				});
-
-				scon.pipe(ccon);
+				tunnelBidirectional(ccon, scon);
 				return;
 			}
 
