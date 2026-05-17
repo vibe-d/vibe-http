@@ -61,7 +61,7 @@ private void tunnelBidirectional(A, B)(A a, B b) @safe
 	periodically observe the shared `done` flag.  Uses `waitForDataEx`
 	to distinguish timeout from EOF.
 */
-private void pump(string dir, Src, Dst)(Src src, Dst dst, bool *finished)
+private void pump(Src, Dst)(string dir,Src src, Dst dst, bool *finished)
 {
 	import core.time : seconds;
 	import std.algorithm : min;
