@@ -13,6 +13,7 @@ import vibe.http.server;
 import vibe.inet.message;
 import vibe.stream.operations;
 import vibe.internal.interfaceproxy : InterfaceProxy;
+import std.range;
 
 import std.conv;
 import std.exception;
