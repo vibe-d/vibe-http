@@ -93,15 +93,15 @@ private void pump(Src, Dst)(string dir,Src src, Dst dst, bool *finished)
 		case WaitForDataStatus.dataAvailable:
 			auto chunk = min(src.leastSize, buf.length);
 			if (chunk == 0) chunk = 1;
-			auto n = src.read(buf[0 .. chunk]);
-			if (n == 0) { *finished = true; return; }
+			try src.read(buf[0 .. chunk]);
+			catch (Exception) { *finished = true; return; }
 			if (iteration < 3)
 			{
-				auto hex = iota(min(n, 16)).map!(i => format("%02x", buf[i])).join(" ");
-				logInfo("pump %s chunk=%d bytes: %s", dir, n, hex);
+				auto hex = iota(min(chunk, 16)).map!(i => format("%02x", buf[i])).join(" ");
+				logInfo("pump %s chunk=%d bytes: %s", dir, chunk, hex);
 				iteration++;
 			}
-			dst.write(buf[0 .. n]);
+			dst.write(buf[0 .. chunk]);
 			break;
 		case WaitForDataStatus.noMoreData:
 			*finished = true;
