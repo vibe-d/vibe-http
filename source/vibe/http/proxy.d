@@ -87,7 +87,7 @@ private void pump(Src, Dst)(Src src, Dst dst, bool *finished)
 		{
 		case WaitForDataStatus.dataAvailable:
 			auto chunk = min(src.leastSize, buf.length);
-			if (chunk == 0) continue;
+			if (chunk == 0) chunk = 1;
 			src.read(buf[0 .. chunk]);
 			dst.write(buf[0 .. chunk]);
 			break;
