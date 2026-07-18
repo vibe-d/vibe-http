@@ -34,17 +34,20 @@ import std.functional;
 		Match patterns are character sequences that can optionally contain
 		placeholders or raw wildcards ("*"). Raw wild cards match any character
 		sequence, while placeholders match only sequences containing no slash
-		("/") characters.
+		("/") characters. Placeholders with a trailing plus sign match one or
+		more path segments.
 
 		Placeholders are started using a colon (":") and are directly followed
-		by their name. The first "/" character (or the end of the match string)
+		by their name. The first "/" or "+" character (or the end of the match string)
 		denotes the end of the placeholder name. The part of the string that
 		matches a placeholder will be stored in the `HTTPServerRequest.params`
-		map using the placeholder name as the key.
+		map using the placeholder name as the key. The raw URL-encoded match
+		will also be stored in `HTTPServerRequest.rawParams`.
 
 		Match strings are subject to the following rules:
 		$(UL
 			$(LI A raw wildcard ("*") may only occur at the end of the match string)
+			$(LI At most one multi-segment placeholder (":name+") may occur in a match string)
 			$(LI At least one character must be placed between any two placeholders or wildcards)
 			$(LI The maximum allowed number of placeholders in a single match string is 64)
 		)
@@ -54,6 +57,7 @@ import std.functional;
 			$(LI `"/foo/bar"` matches only `"/foo/bar"` itself)
 			$(LI `"/foo/*"` matches `"/foo/"`, `"/foo/bar"`, `"/foo/bar/baz"` or _any other string beginning with `"/foo/"`)
 			$(LI `"/:x/"` matches `"/foo/"`, `"/bar/"` and similar strings (and stores `"foo"`/`"bar"` in `req.params["x"]`), but not `"/foo/bar/"`)
+			$(LI `"/:x+"` matches `"/foo"` and `"/foo/bar"`, storing `"foo"` or `"foo/bar"` in `req.params["x"]`)
 			$(LI Matching partial path entries with wildcards is possible: `"/foo:x"` matches `"/foo"`, `"/foobar"`, but not `"/foo/bar"`)
 			$(LI Multiple placeholders and raw wildcards can be combined: `"/:x/:y/*"`)
 		)
@@ -233,7 +237,9 @@ final class URLRouter : HTTPServerRequestHandler {
 
 				logDebugV("route match: %s -> %s %s %s", req.requestPath, r.method, r.pattern, values);
 				foreach (i, v; values) {
-					req.params[m_routes.getTerminalVarNames(ridx)[i]] = urlDecode(v);
+					auto name = m_routes.getTerminalVarNames(ridx)[i];
+					req.rawParams[name] = v;
+					req.params[name] = urlDecode(v);
 				}
 				if (m_computeBasePath) req.params["routerRootDir"] = calcBasePath();
 				r.cb(req, res);
@@ -509,7 +515,8 @@ final class URLRouter : HTTPServerRequestHandler {
 }
 
 @safe unittest {
-	string ensureMatch(string pattern, string local_uri, string[string] expected_params = null)
+	string ensureMatch(string pattern, string local_uri, string[string] expected_params = null,
+		string[string] expected_raw_params = null)
 	{
 		import vibe.inet.url : URL;
 		string ret = local_uri ~ " did not match " ~ pattern;
@@ -519,6 +526,10 @@ final class URLRouter : HTTPServerRequestHandler {
 			foreach (k, v; expected_params) {
 				if (k !in req.params) { ret = "Parameter "~k~" was not matched."; return; }
 				if (req.params[k] != v) { ret = "Parameter "~k~" is '"~req.params[k]~"' instead of '"~v~"'."; return; }
+			}
+			foreach (k, v; expected_raw_params) {
+				if (k !in req.rawParams) { ret = "Raw parameter "~k~" was not matched."; return; }
+				if (req.rawParams[k] != v) { ret = "Raw parameter "~k~" is '"~req.rawParams[k]~"' instead of '"~v~"'."; return; }
 			}
 		});
 		auto req = createTestHTTPServerRequest(URL("http://localhost"~local_uri));
@@ -538,6 +549,11 @@ final class URLRouter : HTTPServerRequestHandler {
 	//assert(ensureMatch("/:foo/", "/foo%2Fbar/", ["foo": "foo/bar"]) is null);
 	assert(ensureMatch("/:foo/", "/foo/bar/") !is null);
 	assert(ensureMatch("/test", "/tes%74") is null);
+	assert(ensureMatch("/:foo+/", "/foo/bar/", ["foo": "foo/bar"], ["foo": "foo/bar"]) is null);
+	assert(ensureMatch("/:foo+/", "/foo%2Fbar/baz/", ["foo": "foo/bar/baz"], ["foo": "foo%2Fbar/baz"]) is null);
+	assert(ensureMatch("/:foo+/bar/:baz", "/foo/baz/bar/qux", ["foo": "foo/baz", "baz": "qux"]) is null);
+	assert(ensureMatch("/:foo+/", "//") !is null);
+	assert(ensureMatch("/:foo+/", "/foo//bar/") !is null);
 }
 
 unittest { // issue #2561
@@ -633,7 +649,7 @@ private struct Route {
 private string skipPathNode(string str, ref size_t idx)
 @safe {
 	size_t start = idx;
-	while( idx < str.length && str[idx] != '/' ) idx++;
+	while (idx < str.length && str[idx] != '/' && str[idx] != '+') idx++;
 	return str[start .. idx];
 }
 
@@ -670,6 +686,7 @@ private struct MatchTree(T) {
 			string pattern;
 			T data;
 			string[] varNames;
+			bool[] varMultiSegment;
 			VarIndex[NodeIndex] varMap;
 		}
 		Node[] m_nodes; // all nodes as a single array
@@ -685,7 +702,7 @@ private struct MatchTree(T) {
 	void addTerminal(string pattern, T data)
 	{
 		assert(m_terminals.length < TerminalIndex.max, "Attempt to register too many routes.");
-		m_terminals ~= Terminal(pattern, data, null, null);
+		m_terminals ~= Terminal(pattern, data, null, null, null);
 		m_upToDate = false;
 	}
 
@@ -698,6 +715,7 @@ private struct MatchTree(T) {
 	}
 
 	const(string)[] getTerminalVarNames(size_t terminal) const { return m_terminals[terminal].varNames; }
+	const(bool)[] getTerminalVarMultiSegment(size_t terminal) const { return m_terminals[terminal].varMultiSegment; }
 	ref inout(T) getTerminalData(size_t terminal) inout { return m_terminals[terminal].data; }
 
 	void print()
@@ -761,9 +779,23 @@ private struct MatchTree(T) {
 			auto vars = vars_buf[0 .. term.varNames.length];
 			matchVars(vars, term, text);
 			if (vars.canFind!(v => v.length == 0)) continue; // all variables must be non-empty to match
+			if (!multiSegmentVarsValid(vars, term.varMultiSegment)) continue;
 			if (del(t.index, vars)) return true;
 		}
 		return false;
+	}
+
+	private static bool multiSegmentVarsValid(scope string[] vars, scope const(bool)[] multi_segment)
+	@safe {
+		import std.algorithm.searching : canFind;
+
+		foreach (i, is_multi; multi_segment) {
+			if (!is_multi) continue;
+			auto v = vars[i];
+			if (v[0] == '/' || v[$ - 1] == '/' || v.canFind("//"))
+				return false;
+		}
+		return true;
 	}
 
 	/// Given a hexadecimal character in [0-9a-fA-F], convert it to an integer value in [0, 15].
@@ -824,6 +856,13 @@ private struct MatchTree(T) {
 
 	private void matchVars(string[] dst, in Terminal* term, string text)
 	const {
+		import std.algorithm.searching : canFind;
+
+		if (term.varMultiSegment.canFind(true)) {
+			matchVarsMultiSegment(dst, term, text);
+			return;
+		}
+
 		NodeIndex nidx = 0;
 		VarIndex activevar = VarIndex.max;
 		size_t activevarstart;
@@ -857,6 +896,72 @@ private struct MatchTree(T) {
 		if (activevar != VarIndex.max) dst[activevar] = text[activevarstart .. (var == activevar ? $ : $-1)];
 	}
 
+	private void matchVarsMultiSegment(string[] dst, in Terminal* term, string text)
+	const {
+		import std.algorithm.searching : canFind, countUntil;
+		import std.array : appender, join, split;
+
+		static bool matchesLiteralSegment(string pattern, string text)
+		{
+			auto p = appender!string;
+			auto t = appender!string;
+			size_t pi, ti;
+			while (pi < pattern.length) p.put(nextMatchChar(pattern, pi));
+			while (ti < text.length) t.put(nextMatchChar(text, ti));
+			return p.data == t.data;
+		}
+
+		bool matchSegment(string pattern, string segment)
+		{
+			if (pattern.length && pattern[0] == ':' && !pattern.canFind('+')) {
+				if (!segment.length) return false;
+				auto name = pattern[1 .. $];
+				auto vi = term.varNames.countUntil(name);
+				if (vi < 0) return false;
+				dst[vi] = segment;
+				return true;
+			}
+			return matchesLiteralSegment(pattern, segment);
+		}
+
+			dst[] = null;
+
+			auto pattern_segments = term.pattern.split("/");
+			auto text_segments = text.split("/");
+
+			ptrdiff_t multi_index = -1;
+			foreach (i, segment; pattern_segments) {
+				if (segment.length > 2 && segment[0] == ':' && segment[$ - 1] == '+') {
+					multi_index = cast(ptrdiff_t)i;
+					break;
+				}
+			}
+			if (multi_index < 0) return;
+
+			auto mpi = cast(size_t)multi_index;
+			if (text_segments.length < pattern_segments.length) return;
+
+			foreach (i; 0 .. mpi)
+				if (!matchSegment(pattern_segments[i], text_segments[i]))
+					return;
+
+			auto suffix_len = pattern_segments.length - mpi - 1;
+			foreach (i; 0 .. suffix_len) {
+				auto psi = pattern_segments.length - 1 - i;
+				auto tsi = text_segments.length - 1 - i;
+				if (!matchSegment(pattern_segments[psi], text_segments[tsi]))
+					return;
+			}
+
+			auto multi_segments = text_segments[mpi .. text_segments.length - suffix_len];
+			if (!multi_segments.length || multi_segments.canFind!(s => s.length == 0))
+				return;
+
+			auto name = pattern_segments[mpi][1 .. $ - 1];
+			auto vi = term.varNames.countUntil(name);
+			if (vi >= 0) dst[vi] = multi_segments.join("/");
+		}
+
 	private void rebuildGraph()
 	@trusted {
 		import std.array : appender;
@@ -872,7 +977,9 @@ private struct MatchTree(T) {
 
 		MatchGraphBuilder builder;
 		foreach (i, ref t; m_terminals) {
-			t.varNames = builder.insert(t.pattern, i.to!TerminalIndex);
+			auto vars = builder.insert(t.pattern, i.to!TerminalIndex);
+			t.varNames = vars.names;
+			t.varMultiSegment = vars.multiSegment;
 			assert(t.varNames.length <= VarIndex.max, "Too many variables in route.");
 		}
 		//builder.print();
@@ -997,6 +1104,22 @@ unittest {
 	testMatch("/ab", [], []);
 	testMatch("a/b", [], []);
 	testMatch("ab//", [], []);
+
+	m = MatchTree!int.init;
+	m.addTerminal(":var1+", 0);
+	m.addTerminal(":var2+/c/:var3", 1);
+	m.rebuildGraph();
+	assert(m.getTerminalVarNames(0) == ["var1"]);
+	assert(m.getTerminalVarMultiSegment(0) == [true]);
+	assert(m.getTerminalVarNames(1) == ["var2", "var3"]);
+	assert(m.getTerminalVarMultiSegment(1) == [true, false]);
+	testMatch("a", [0], ["a"]);
+	testMatch("a/b", [0], ["a/b"]);
+	testMatch("a/b/c/d", [0, 1], ["a/b/c/d", "a/b", "d"]);
+	testMatch("", [], []);
+	testMatch("/a", [], []);
+	testMatch("a/", [], []);
+	testMatch("a//b", [], []);
 }
 
 
@@ -1022,19 +1145,25 @@ private struct MatchGraphBuilder {
 			Array!TerminalTag terminals;
 			NodeSet[ubyte.max+1] edges;
 		}
+		struct Vars {
+			string[] names;
+			bool[] multiSegment;
+		}
 		Array!Node m_nodes;
+		bool[] m_terminalHasMultiSegment;
 		LinkedSetBacking!NodeIndex m_edgeEntries;
 	}
 
 	@disable this(this);
 
-	string[] insert(string pattern, TerminalIndex terminal)
+	Vars insert(string pattern, TerminalIndex terminal)
 	{
 		import std.algorithm : canFind;
 
 		auto full_pattern = pattern;
-		string[] vars;
+		Vars vars;
 		if (!m_nodes.length) addNode();
+		bool has_multi_segment_var = false;
 
 		// create start node and connect to zero node
 		auto nidx = addNode();
@@ -1054,18 +1183,31 @@ private struct MatchGraphBuilder {
 				pattern = pattern[1 .. $];
 				auto name = skipPathNode(pattern);
 				assert(name.length > 0, "Missing placeholder name: "~full_pattern);
-				assert(!vars.canFind(name), "Duplicate placeholder name ':"~name~"': '"~full_pattern~"'");
-				auto varidx = cast(VarIndex)vars.length;
-				vars ~= name;
+				bool multi_segment = false;
+				if (pattern.length && pattern[0] == '+') {
+					multi_segment = true;
+					pattern = pattern[1 .. $];
+					assert(!has_multi_segment_var, "Only one multi-segment placeholder is allowed: "~full_pattern);
+					has_multi_segment_var = true;
+					if (m_terminalHasMultiSegment.length <= terminal)
+						m_terminalHasMultiSegment.length = terminal + 1;
+					m_terminalHasMultiSegment[terminal] = true;
+				}
+				assert(!vars.names.canFind(name), "Duplicate placeholder name ':"~name~"': '"~full_pattern~"'");
+				auto varidx = cast(VarIndex)vars.names.length;
+				vars.names ~= name;
+				vars.multiSegment ~= multi_segment;
 				assert(!pattern.length || (pattern[0] != '*' && pattern[0] != ':'),
 					"Cannot have two placeholders directly follow each other.");
 
 				foreach (v; ubyte.min .. ubyte.max+1) {
-					if (v == TerminalChar || v == '/') continue;
+					if (v == TerminalChar || (!multi_segment && v == '/')) continue;
 					addEdge(nidx, nidx, cast(ubyte)v, terminal, varidx);
 				}
 			} else {
-				nidx = addEdge(nidx, ch, terminal);
+				auto next = addNode();
+				addEdge(nidx, next, ch, terminal);
+				nidx = next;
 				pattern = pattern[1 .. $];
 			}
 		}
@@ -1217,8 +1359,12 @@ private struct MatchGraphBuilder {
 
 	private void addTerminal(NodeIndex node, TerminalIndex terminal, VarIndex var)
 	@trusted {
+		if (terminal < m_terminalHasMultiSegment.length && m_terminalHasMultiSegment[terminal])
+			var = VarIndex.max;
 		foreach (ref t; m_nodes[node].terminals) {
 			if (t.index == terminal) {
+				if (var == VarIndex.max)
+					return;
 				if (t.var != VarIndex.max && t.var != var)
 					assert(false, format("Ambiguous route var match!? %s vs %s", t.var, var));
 				t.var = var;
