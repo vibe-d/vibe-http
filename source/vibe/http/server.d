@@ -938,6 +938,13 @@ final class HTTPServerRequest : HTTPRequest {
 	*/
 	DictionaryList!(string, true, 8) params;
 
+	/** A map of raw URL-encoded route parameters for the request.
+
+		This map is populated by vibe.http.router.URLRouter with the raw values
+		of any named placeholders before URL decoding.
+	*/
+	DictionaryList!(string, true, 8) rawParams;
+
 	/** A map of context items for the request.
 
 		This is especially useful for passing application specific data down
