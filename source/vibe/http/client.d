@@ -127,10 +127,7 @@ private ProxyMode proxyModeFor(in URL url, in URL proxy_url)
 			enforce(false, "The proxy URL scheme must be http, https or socks5.");
 	}
 
-	version (UnixSocket)
-		return url.schema == "https" || url.schema == "https+unix" ? ProxyMode.tunnel : ProxyMode.forward;
-	else
-		return url.schema == "https" ? ProxyMode.tunnel : ProxyMode.forward;
+	return isTLSSchema(url.schema) ? ProxyMode.tunnel : ProxyMode.forward;
 }
 
 private bool isTLSRequired(in URL url, in HTTPClientSettings settings)
@@ -142,10 +139,7 @@ private bool isTLSRequired(in URL url, in HTTPClientSettings settings)
 	}
 	enforce(url.host.length > 0, "URL must contain a host name.");
 
-	version(UnixSocket)
-		return url.schema == "https" || url.schema == "https+unix";
-	else
-		return url.schema == "https";
+	return isTLSSchema(url.schema);
 }
 
 private void httpRequesterDg(scope HTTPClientRequest req, in URL url, in HTTPClientSettings settings, scope void delegate(scope HTTPClientRequest req) requester)
@@ -777,33 +771,8 @@ private void establishConnection()
 {
 	final switch (proxyMode()) {
 		case ProxyMode.none:
-			version(UnixSocket)
-			{
-				import core.sys.posix.sys.un;
-				import core.sys.posix.sys.socket;
-				import std.regex : regex, Captures, Regex, matchFirst, ctRegex;
-				import core.stdc.string : strcpy;
-
-				NetworkAddress addr;
-				if (m_server[0] == '/')
-				{
-					addr.family = AF_UNIX;
-					sockaddr_un* s = addr.sockAddrUnix();
-					enforce(s.sun_path.length > m_server.length, "Unix sockets cannot have that long a name.");
-					s.sun_family = AF_UNIX;
-					() @trusted { strcpy(cast(char*)s.sun_path.ptr,m_server.toStringz()); } ();
-				} else
-				{
-					addr = resolveHost(m_server, m_settings.dnsAddressFamily, true, m_settings.connectTimeout);
-					addr.port = m_port;
-				}
-				m_conn = connectTCPWithTimeout(addr, m_settings.networkInterface, m_settings.connectTimeout);
-			} else
-			{
-				auto addr = resolveHost(m_server, m_settings.dnsAddressFamily, true, m_settings.connectTimeout);
-				addr.port = m_port;
-				m_conn = connectTCPWithTimeout(addr, m_settings.networkInterface, m_settings.connectTimeout);
-			}
+			auto addr = resolveHostOrUnixPath(m_server, m_port, m_settings.dnsAddressFamily, m_settings.connectTimeout);
+			m_conn = connectTCPWithTimeout(addr, m_settings.networkInterface, m_settings.connectTimeout);
 			break;
 
 		case ProxyMode.forward:
@@ -1442,15 +1411,11 @@ final class HTTPClientResponse : HTTPResponse {
 /** Returns clean host string. In case of unix socket it performs urlDecode on host. */
 package auto getFilteredHost(URL url)
 {
-	version(UnixSocket)
-	{
+	if (isUnixSocketSchema(url.schema)) {
 		import vibe.textfilter.urlencode : urlDecode;
-		if (url.schema == "https+unix" || url.schema == "http+unix")
-			return urlDecode(url.host);
-		else
-			return url.host;
-	} else
-		return url.host;
+		return urlDecode(url.host);
+	}
+	return url.host;
 }
 
 // This object is a placeholder and should to never be modified.
