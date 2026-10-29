@@ -122,9 +122,10 @@ private ProxyMode proxyModeFor(in URL url, in URL proxy_url)
 		case "https":
 			break;
 		case "socks5":
+		case "socks5h": // the SOCKS5 stream always delegates name resolution to the proxy
 			return ProxyMode.socks5;
 		default:
-			enforce(false, "The proxy URL scheme must be http, https or socks5.");
+			enforce(false, "The proxy URL scheme must be http, https, socks5 or socks5h.");
 	}
 
 	return isTLSSchema(url.schema) ? ProxyMode.tunnel : ProxyMode.forward;
@@ -272,7 +273,7 @@ private static RingBuffer!(Tuple!(ConnInfo, ConnectionPool!HTTPClient), 16) s_co
 	Defines an HTTP/HTTPS proxy request or a connection timeout for an HTTPClient.
 */
 class HTTPClientSettings {
-	/// Optional URL of a proxy server to use for performing the request
+	/// Optional Proxy URL. Supported schemes are http, https, socks5 and socks5h.
 	URL proxyURL;
 
 	/// Keep-alive timeout that is assumed if the server does not send an explicit timeout
@@ -823,9 +824,9 @@ private ProxyMode proxyMode()
 {
 	auto schema = m_settings.proxyURL.schema;
 	if (schema is null) return ProxyMode.none;
-	enforce(schema == "http" || schema == "https" || schema == "socks5",
-		"The proxy URL scheme must be http, https or socks5.");
-	if (schema == "socks5") return ProxyMode.socks5;
+	enforce(schema == "http" || schema == "https" || schema == "socks5" || schema == "socks5h",
+		"The proxy URL scheme must be http, https, socks5 or socks5h.");
+	if (schema == "socks5" || schema == "socks5h") return ProxyMode.socks5;
 	return m_useTLS ? ProxyMode.tunnel : ProxyMode.forward;
 }
 

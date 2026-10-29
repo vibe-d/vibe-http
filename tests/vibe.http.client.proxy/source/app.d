@@ -64,6 +64,8 @@ void main()
 	static immutable proxies = [
 		tuple("socks5", "PROXY_SOCKS5"),
 		tuple("socks5+auth", "PROXY_SOCKS5_AUTH"),
+		tuple("socks5h", "PROXY_SOCKS5H"),
+		tuple("socks5h+auth", "PROXY_SOCKS5H_AUTH"),
 		tuple("http", "PROXY_HTTP"),
 		tuple("http+auth", "PROXY_HTTP_AUTH"),
 		tuple("https", "PROXY_HTTPS"),
