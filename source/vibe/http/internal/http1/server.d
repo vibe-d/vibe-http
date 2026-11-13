@@ -244,12 +244,16 @@ private bool handleRequest(TLSStreamType, Allocator)(StreamProxy http_stream, TC
 			}
 		}
 
-		// eagerly parse the URL as its lightweight and defacto @nogc
-		auto url = URL.parse(req.requestURI);
-		req.queryString = url.queryString;
-		req.username = url.username;
-		req.password = url.password;
-		req.requestPath = url.path;
+		// CONNECT requests carry an authority (host:port), not a URL
+		// (RFC 9110, 9.3.6), so they cannot be parsed as one
+		if (req.method != HTTPMethod.CONNECT) {
+			// eagerly parse the URL as its lightweight and defacto @nogc
+			auto url = URL.parse(req.requestURI);
+			req.queryString = url.queryString;
+			req.username = url.username;
+			req.password = url.password;
+			req.requestPath = url.path;
+		}
 
 		// lookup the session
 		if (settings.sessionStore) {
