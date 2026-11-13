@@ -242,7 +242,10 @@ private static RingBuffer!(Tuple!(ConnInfo, ConnectionPool!HTTPClient), 16) s_co
 	Defines an HTTP/HTTPS proxy request or a connection timeout for an HTTPClient.
 */
 class HTTPClientSettings {
+	/// Optional URL of a proxy server to use for performing the request
 	URL proxyURL;
+
+	/// Keep-alive timeout that is assumed if the server does not send an explicit timeout
 	Duration defaultKeepAliveTimeout = 10.seconds;
 
 	/// Timeout for establishing a connection to the server
@@ -281,13 +284,7 @@ class HTTPClientSettings {
 	@property HTTPClientSettings dup()
 	const @safe {
 		auto ret = new HTTPClientSettings;
-		ret.proxyURL = this.proxyURL;
-		ret.connectTimeout = this.connectTimeout;
-		ret.readTimeout = this.readTimeout;
-		ret.networkInterface = this.networkInterface;
-		ret.dnsAddressFamily = this.dnsAddressFamily;
-		ret.tlsContextSetup = this.tlsContextSetup;
-		ret.tlsPeerName = this.tlsPeerName;
+		ret.tupleof = this.tupleof;
 		return ret;
 	}
 }
