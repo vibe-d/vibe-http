@@ -10,8 +10,8 @@ authors "Sönke Ludwig" "Mathias 'Geod24' Lang" "Etienne Cimon" "Martin Nowak" \
 
 dependency "vibe-inet:crypto" version="~>1.0"
 dependency "vibe-inet" version="~>1.0"
-dependency "vibe-stream:socks" version="~>1.5.0"
-dependency "vibe-stream:tls" version="~>1.0"
+dependency "vibe-stream:socks" version="~>1.5"
+dependency "vibe-stream:tls" version="~>1.5"
 dependency "vibe-inet:textfilter" version="~>1.0"
 dependency "diet-ng" version="~>1.2"
 targetType "library"
