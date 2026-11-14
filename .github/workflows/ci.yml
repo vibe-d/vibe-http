@@ -13,15 +13,15 @@ jobs:
           - ubuntu-24.04
         dc:
           - dmd-latest
+          - dmd-2.113.1
+          - dmd-2.112.1
           - dmd-2.097.1
           - dmd-2.096.1
-          - dmd-2.093.1
-          - dmd-2.091.1
           - ldc-latest
+          - ldc-1.42.0
+          - ldc-1.41.0
           - ldc-1.27.1
           - ldc-1.26.0
-          - ldc-1.23.0
-          - ldc-1.21.0
         parts:
           - 'builds,unittests,examples,tests'
         extra_dflags:
