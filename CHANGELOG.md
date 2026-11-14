@@ -1,3 +1,35 @@
+1.6.0 - 2026-11-14
+==================
+
+- Fixed handling of `CONNECT` requests in the HTTP/1 server (by Denis Feklushkin aka Denizzzka) - [pull #83][issue83]
+- Fixed HTTP client settings sometimes not being applied when other settings had been used previously - [pull #85][issue85]
+- Added SOCKS5 proxy support for the HTTP client (by Denis Feklushkin aka Denizzzka) - [pull #84][issue84]
+
+[issue83]: https://github.com/vibe-d/vibe-http/issues/83
+[issue85]: https://github.com/vibe-d/vibe-http/issues/85
+[issue84]: https://github.com/vibe-d/vibe-http/issues/84
+
+
+1.5.1 - 2026-04-08
+==================
+
+- Add missing `@safe` annotation for the input stream based `writeBody` overload (by Mathias Lang aka Geod24) - [pull #75][issue75]
+
+[issue75]: https://github.com/vibe-d/vibe-http/issues/75
+
+
+1.5.0 - 2026-04-08
+==================
+
+- The HTTP/2 server now successfully works for CURL requests (by Bogdan Szabo aka gedaiu) - [pull #71][issue71]
+- Adds a `HTTPServerResponse.writeBody(null)` overload (by Mathias Lang aka Geod24) - [pull #72][issue72]
+- Allows using `writeBody` with 204 (no content) status as an alternative to `writeVoidBody` - [pull #74][issue74]
+
+[issue71]: https://github.com/vibe-d/vibe-http/issues/71
+[issue72]: https://github.com/vibe-d/vibe-http/issues/72
+[issue74]: https://github.com/vibe-d/vibe-http/issues/74
+
+
 1.4.0 - 2026-03-03
 ==================
 
