@@ -27,6 +27,7 @@ import std.datetime;
 import std.exception;
 import std.format;
 import std.range : isOutputRange;
+import std.socket : AddressFamily;
 import std.string;
 import std.typecons;
 import std.uni: asLowerCase, sicmp;
@@ -1116,6 +1117,41 @@ unittest {
 	} else assert(false);
 	*("foo" in m) = "baz";
 	assert(m["foo"] == "baz");
+}
+
+package bool isUnixSocketSchema(string schema)
+@safe {
+	return schema == "http+unix" || schema == "https+unix";
+}
+
+package bool isTLSSchema(string schema)
+@safe {
+	return schema == "https" || schema == "https+unix";
+}
+
+/// Resolves a host name, or on POSIX systems a Unix domain socket path.
+package NetworkAddress resolveHostOrUnixPath(string host, ushort port,
+	AddressFamily family = AddressFamily.UNSPEC, Duration timeout = Duration.max)
+@safe {
+	version (Posix) {
+		if (host.startsWith("/")) {
+			import core.sys.posix.sys.un : sockaddr_un;
+			import core.stdc.string : strcpy;
+
+			NetworkAddress addr;
+			addr.family = AddressFamily.UNIX;
+			sockaddr_un* s = addr.sockAddrUnix();
+			enforce(s.sun_path.length > host.length, "Unix socket path exceeds maximum length.");
+			s.sun_family = AddressFamily.UNIX;
+			() @trusted { strcpy(cast(char*)s.sun_path, host.toStringz()); } ();
+			return addr;
+		}
+	} else {
+		enforce(!host.startsWith("/"), "Unix domain sockets are not supported on this platform.");
+	}
+	auto addr = resolveHost(host, family, true, timeout);
+	addr.port = port;
+	return addr;
 }
 
 

@@ -52,11 +52,6 @@ else version (Have_botan) enum HaveNoTLS = false;
 else version (Have_openssl) enum HaveNoTLS = false;
 else enum HaveNoTLS = true;
 
-version(Posix)
-{
-	version = UnixSocket;
-}
-
 
 /**************************************************************************************************/
 /* Public functions                                                                               */
@@ -1949,24 +1944,9 @@ private HTTPListener listenHTTPPlain(HTTPServerSettings settings, HTTPServerRequ
 
 			auto proto = is_tls ? "https" : "http";
 
-			if (listen_info.bindAddress.startsWith("/")) {
-				version (UnixSocket) {
-					import std.socket : AddressFamily;
-					import core.sys.posix.sys.un : sockaddr_un;
-					import core.stdc.string : strcpy;
-
-					bind_address.family = AddressFamily.UNIX;
-					sockaddr_un* s = bind_address.sockAddrUnix();
-					enforce(s.sun_path.length > listen_info.bindAddress.length,
-						"Unix socket path exceeds maximum length.");
-					s.sun_family = AddressFamily.UNIX;
-					() @trusted { strcpy(cast(char*)s.sun_path.ptr, listen_info.bindAddress.toStringz()); } ();
-					proto ~= "+unix";
-				} else throw new Exception("Unix domain sockets are not supported on this platform.");
-			} else {
-				bind_address = resolveHost(listen_info.bindAddress);
-				bind_address.port = listen_info.bindPort;
-			}
+			bind_address = resolveHostOrUnixPath(listen_info.bindAddress, listen_info.bindPort);
+			if (listen_info.bindAddress.startsWith("/"))
+				proto ~= "+unix";
 
 			auto ret = listenTCP((TCPConnection conn) nothrow @safe {
 					auto raddr = conn.remoteAddress;

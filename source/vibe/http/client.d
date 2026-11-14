@@ -17,6 +17,7 @@ import vibe.container.ringbuffer : RingBuffer;
 import vibe.core.connectionpool;
 import vibe.core.core;
 import vibe.core.log;
+import vibe.stream.socks : createSocks5Stream;
 import vibe.data.json;
 import vibe.inet.message;
 import vibe.inet.url;
@@ -105,6 +106,31 @@ void requestHTTP(URL url, scope void delegate(scope HTTPClientRequest req) reque
 	assert(!cli.m_responding, "HTTP client still responding after return!?");
 }
 
+private enum ProxyMode {
+	none,
+	forward,
+	tunnel,
+	socks5,
+}
+
+private ProxyMode proxyModeFor(in URL url, in URL proxy_url)
+{
+	if (proxy_url.schema is null) return ProxyMode.none;
+
+	switch (proxy_url.schema) {
+		case "http":
+		case "https":
+			break;
+		case "socks5":
+		case "socks5h": // the SOCKS5 stream always delegates name resolution to the proxy
+			return ProxyMode.socks5;
+		default:
+			enforce(false, "The proxy URL scheme must be http, https, socks5 or socks5h.");
+	}
+
+	return isTLSSchema(url.schema) ? ProxyMode.tunnel : ProxyMode.forward;
+}
+
 private bool isTLSRequired(in URL url, in HTTPClientSettings settings)
 {
 	version(UnixSocket) {
@@ -113,19 +139,8 @@ private bool isTLSRequired(in URL url, in HTTPClientSettings settings)
 		enforce(url.schema == "http" || url.schema == "https", "URL schema must be http(s).");
 	}
 	enforce(url.host.length > 0, "URL must contain a host name.");
-	bool use_tls;
 
-	if (settings.proxyURL.schema !is null)
-		use_tls = settings.proxyURL.schema == "https";
-	else
-	{
-		version(UnixSocket)
-			use_tls = url.schema == "https" || url.schema == "https+unix";
-		else
-			use_tls = url.schema == "https";
-	}
-
-	return use_tls;
+	return isTLSSchema(url.schema);
 }
 
 private void httpRequesterDg(scope HTTPClientRequest req, in URL url, in HTTPClientSettings settings, scope void delegate(scope HTTPClientRequest req) requester)
@@ -138,7 +153,7 @@ private void httpRequesterDg(scope HTTPClientRequest req, in URL url, in HTTPCli
 		req.requestURL = url.localURI;
 	}
 
-	if (settings.proxyURL.schema !is null)
+	if (proxyModeFor(url, settings.proxyURL) == ProxyMode.forward)
 		req.requestURL = url.toString(); // proxy exception to the URL representation
 
 	// IPv6 addresses need to be put into brackets
@@ -203,7 +218,8 @@ auto connectHTTP(string host, ushort port = 0, bool use_tls = false, const(HTTPC
 	}
 
 	if (!pool) {
-		logDebug("Create HTTP client pool %s(%s):%s %s proxy %s:%d", host, sttngs.tlsPeerName, port, use_tls, sttngs.proxyURL.host, sttngs.proxyURL.port);
+		logDebug("Create HTTP client pool %s(%s):%s %s proxy %s", host, sttngs.tlsPeerName, port,
+			use_tls, sttngs.proxyURL.schema !is null ? sttngs.proxyURL.toString() : "none");
 		pool = new ConnectionPool!HTTPClient({
 				auto ret = new HTTPClient;
 				ret.connect(host, port, use_tls, sttngs);
@@ -257,7 +273,7 @@ private static RingBuffer!(Tuple!(ConnInfo, ConnectionPool!HTTPClient), 16) s_co
 	Defines an HTTP/HTTPS proxy request or a connection timeout for an HTTPClient.
 */
 class HTTPClientSettings {
-	/// Optional URL of a proxy server to use for performing the request
+	/// Optional Proxy URL. Supported schemes are http, https, socks5 and socks5h.
 	URL proxyURL;
 
 	/// Keep-alive timeout that is assumed if the server does not send an explicit timeout
@@ -405,7 +421,9 @@ final class HTTPClient {
 		bool m_useTLS;
 		TCPConnection m_conn;
 		InterfaceProxy!Stream m_stream;
+		InterfaceProxy!Stream m_proxyTLSStream;
 		TLSStream m_tlsStream;
+		TLSContext m_proxyTLS;
 		TLSContext m_tls;
 		static __gshared m_userAgent = "vibe.d/"~vibeVersionString~" (HTTPClient, +http://vibed.org/)";
 		static __gshared void function(TLSContext) ms_tlsSetup;
@@ -459,6 +477,13 @@ final class HTTPClient {
 			if (settings.tlsContextSetup) settings.tlsContextSetup(m_tls);
 			else () @trusted { if (ms_tlsSetup) ms_tlsSetup(m_tls); } ();
 		}
+		if (settings.proxyURL.schema == "https") {
+			m_proxyTLS = createTLSContext(TLSContextKind.client);
+			// this will be changed to trustedCert once a proper root CA store is available by default
+			m_proxyTLS.peerValidationMode = TLSPeerValidationMode.none;
+			if (settings.tlsContextSetup) settings.tlsContextSetup(m_proxyTLS);
+			else () @trusted { if (ms_tlsSetup) ms_tlsSetup(m_proxyTLS); } ();
+		}
 	}
 
 	/**
@@ -479,7 +504,9 @@ final class HTTPClient {
 			}
 
 			if (m_useTLS) () @trusted { return destroy(m_stream); } ();
+			if (m_proxyTLSStream) () @trusted { destroy(m_proxyTLSStream); } ();
 			m_stream = InterfaceProxy!Stream.init;
+			m_proxyTLSStream = InterfaceProxy!Stream.init;
 			() @trusted { return destroy(m_conn); } ();
 			m_conn = TCPConnection.init;
 		}
@@ -520,6 +547,10 @@ final class HTTPClient {
 		{
 			throw new HTTPStatusException(HTTPStatus.notAcceptable, "The Proxy Server didn't allow Basic Authentication");
 		}
+
+		// The proxy is allowed to close the connection after the authentication
+		// challenge, so perform the authenticated request on a fresh connection.
+		disconnect();
 
 		SysTime connected_time;
 		has_body = doRequestWithRetry(requester, true, close_conn, connected_time);
@@ -576,7 +607,7 @@ final class HTTPClient {
 		res.initialize(has_body, request_allocator, connected_time);
 
 		// proxy implementation
-		if (res.headers.get("Proxy-Authenticate", null) !is null) {
+		if (proxyMode() == ProxyMode.forward && res.headers.get("Proxy-Authenticate", null) !is null) {
 			doProxyRequest(res, requester, close_conn, has_body);
 		}
 
@@ -625,7 +656,7 @@ final class HTTPClient {
 		res.initialize(has_body, () @trusted { return vibeThreadAllocator(); } (), connected_time);
 
 		// proxy implementation
-		if (res.headers.get("Proxy-Authenticate", null) !is null) {
+		if (proxyMode() == ProxyMode.forward && res.headers.get("Proxy-Authenticate", null) !is null) {
 			doProxyRequest(res, requester, close_conn, has_body);
 		}
 
@@ -648,7 +679,7 @@ final class HTTPClient {
 		 	connected_time = Clock.currTime(UTC());
 
 			close_conn = false;
-			has_body = doRequest(requester, close_conn, false, connected_time);
+			has_body = doRequest(requester, close_conn, confirmed_proxy_auth, connected_time);
 
 			logTrace("HTTP client waiting for response");
 			if (!m_stream.empty) break;
@@ -668,55 +699,27 @@ final class HTTPClient {
 			if (m_conn)
 				disconnect(); // make sure all resources are freed
 
-			if (m_settings.proxyURL.host !is null){
-				NetworkAddress proxyAddr = resolveHost(m_settings.proxyURL.host, m_settings.dnsAddressFamily, true,
-					m_settings.connectTimeout);
-				proxyAddr.port = m_settings.proxyURL.port;
-				m_conn = connectTCPWithTimeout(proxyAddr, m_settings.networkInterface, m_settings.connectTimeout);
-			}
-			else {
-				version(UnixSocket)
-				{
-					import core.sys.posix.sys.un;
-					import core.sys.posix.sys.socket;
-					import std.regex : regex, Captures, Regex, matchFirst, ctRegex;
-					import core.stdc.string : strcpy;
-
-					NetworkAddress addr;
-					if (m_server[0] == '/')
-					{
-						addr.family = AF_UNIX;
-						sockaddr_un* s = addr.sockAddrUnix();
-						enforce(s.sun_path.length > m_server.length, "Unix sockets cannot have that long a name.");
-						s.sun_family = AF_UNIX;
-						() @trusted { strcpy(cast(char*)s.sun_path.ptr,m_server.toStringz()); } ();
-					} else
-					{
-						addr = resolveHost(m_server, m_settings.dnsAddressFamily, true, m_settings.connectTimeout);
-						addr.port = m_port;
-					}
-					m_conn = connectTCPWithTimeout(addr, m_settings.networkInterface, m_settings.connectTimeout);
-				} else
-				{
-					auto addr = resolveHost(m_server, m_settings.dnsAddressFamily, true, m_settings.connectTimeout);
-					addr.port = m_port;
-					m_conn = connectTCPWithTimeout(addr, m_settings.networkInterface, m_settings.connectTimeout);
-				}
-			}
+			establishConnection();
 
 			if (m_settings.readTimeout != Duration.max)
 				m_conn.readTimeout = m_settings.readTimeout;
 
-			m_stream = m_conn;
 			if (m_useTLS) {
-				try m_tlsStream = createTLSStream(m_conn, m_tls, TLSStreamState.connecting, m_tlsPeerName, m_conn.remoteAddress);
-				catch (Exception e) {
+				try {
+					if (m_proxyTLSStream)
+						m_tlsStream = createTLSStream(m_proxyTLSStream, m_tls, TLSStreamState.connecting, m_tlsPeerName, tlsPeerAddress());
+					else
+						m_tlsStream = createTLSStream(m_conn, m_tls, TLSStreamState.connecting, m_tlsPeerName, tlsPeerAddress());
+				} catch (Exception e) {
 					m_conn.close();
 					m_conn = TCPConnection.init;
 					throw e;
 				}
 				m_stream = m_tlsStream;
-			}
+			} else if (m_proxyTLSStream)
+				m_stream = m_proxyTLSStream;
+			else
+				m_stream = m_conn;
 		}
 
 		return () @trusted { // scoped
@@ -725,7 +728,7 @@ final class HTTPClient {
 				req.m_peerCertificate = m_tlsStream.peerCertificate;
 
 			req.headers["User-Agent"] = m_userAgent;
-			if (m_settings.proxyURL.host !is null){
+			if (proxyMode() == ProxyMode.forward) {
 				req.headers["Proxy-Connection"] = "keep-alive";
 				if (confirmed_proxy_auth)
 				{
@@ -756,7 +759,7 @@ final class HTTPClient {
 
 			if (req.httpVersion == HTTPVersion.HTTP_1_0)
 				close_conn = true;
-			else  if (m_settings.proxyURL.host !is null)
+			else  if (proxyMode() == ProxyMode.forward)
 				close_conn = req.headers.get("Proxy-Connection", "keep-alive") != "keep-alive";
 			else
 				close_conn = req.headers.get("Connection", "keep-alive") != "keep-alive";
@@ -766,6 +769,116 @@ final class HTTPClient {
 			return req.method != HTTPMethod.HEAD;
 		} ();
 	}
+private void establishConnection()
+{
+	final switch (proxyMode()) {
+		case ProxyMode.none:
+			auto addr = resolveHostOrUnixPath(m_server, m_port, m_settings.dnsAddressFamily, m_settings.connectTimeout);
+			m_conn = connectTCPWithTimeout(addr, m_settings.networkInterface, m_settings.connectTimeout);
+			break;
+
+		case ProxyMode.forward:
+			NetworkAddress proxyAddr = resolveHost(m_settings.proxyURL.host, m_settings.dnsAddressFamily, true,
+				m_settings.connectTimeout);
+			proxyAddr.port = m_settings.proxyURL.port;
+			connectProxy(proxyAddr);
+			break;
+
+		case ProxyMode.tunnel:
+			NetworkAddress tproxyAddr = resolveHost(m_settings.proxyURL.host, m_settings.dnsAddressFamily, true,
+				m_settings.connectTimeout);
+			tproxyAddr.port = m_settings.proxyURL.port;
+			connectProxy(tproxyAddr);
+			performCONNECT(m_stream, m_server, m_port);
+			break;
+
+		case ProxyMode.socks5:
+			NetworkAddress spproxyAddr = resolveHost(m_settings.proxyURL.host, m_settings.dnsAddressFamily, true,
+				m_settings.connectTimeout);
+			spproxyAddr.port = m_settings.proxyURL.port ? m_settings.proxyURL.port : 1080;
+			auto proxyConn = connectTCPWithTimeout(spproxyAddr, m_settings.networkInterface, m_settings.connectTimeout);
+			if (m_settings.readTimeout != Duration.max)
+				proxyConn.readTimeout = m_settings.readTimeout;
+			m_conn = proxyConn;
+			m_stream = createSocks5Stream(m_conn, m_server, m_port, m_settings.proxyURL.username,
+				m_settings.proxyURL.password);
+			break;
+	}
+}
+
+private void connectProxy(NetworkAddress proxyAddr)
+{
+	m_conn = connectTCPWithTimeout(proxyAddr, m_settings.networkInterface, m_settings.connectTimeout);
+	if (m_settings.readTimeout != Duration.max)
+		m_conn.readTimeout = m_settings.readTimeout;
+	m_stream = m_conn;
+	if (m_settings.proxyURL.schema == "https") {
+		auto proxyTLs = createTLSStream(m_conn, m_proxyTLS, TLSStreamState.connecting,
+			m_settings.proxyURL.host, NetworkAddress.init);
+		m_proxyTLSStream = proxyTLs;
+		m_stream = m_proxyTLSStream;
+	}
+}
+
+private ProxyMode proxyMode()
+{
+	auto schema = m_settings.proxyURL.schema;
+	if (schema is null) return ProxyMode.none;
+	enforce(schema == "http" || schema == "https" || schema == "socks5" || schema == "socks5h",
+		"The proxy URL scheme must be http, https, socks5 or socks5h.");
+	if (schema == "socks5" || schema == "socks5h") return ProxyMode.socks5;
+	return m_useTLS ? ProxyMode.tunnel : ProxyMode.forward;
+}
+
+private NetworkAddress tlsPeerAddress()
+{
+	final switch (proxyMode()) {
+		case ProxyMode.none:
+			return m_conn.remoteAddress;
+		case ProxyMode.forward:
+			return m_conn.remoteAddress;
+		case ProxyMode.tunnel: // the proxy performs the name resolution on its side
+			return NetworkAddress.init;
+		case ProxyMode.socks5: // the proxy performs the name resolution on its side
+			return NetworkAddress.init;
+	}
+}
+
+private void performCONNECT(S)(S stream, string host, ushort port)
+@trusted { // scope new
+	import std.algorithm.searching : canFind;
+	import std.base64 : Base64;
+
+	auto authority = (host.canFind(':') ? "[" ~ host ~ "]" : host) ~ format(":%d", port);
+
+	string request = "CONNECT " ~ authority ~ " HTTP/1.1\r\nHost: " ~ authority ~ "\r\n";
+	auto proxy_url = m_settings.proxyURL;
+	if (proxy_url.username.length) {
+		ubyte[] user_pass = cast(ubyte[])(proxy_url.username ~ ":" ~ proxy_url.password);
+		request ~= "Proxy-Authorization: Basic " ~ cast(string)Base64.encode(user_pass) ~ "\r\n";
+	}
+	request ~= "\r\n";
+	stream.write(cast(const(ubyte)[])request);
+
+	scope request_allocator = createRequestAllocator();
+	scope (exit) freeRequestAllocator(request_allocator);
+
+	auto stln = () @trusted { return cast(string)stream.readLine(maxHeaderLineLength, "\r\n", request_allocator); } ();
+
+	auto parts = stln.split(' ');
+	enforce(parts.length >= 2 && parts[0].length >= 5 && parts[0][0 .. 5] == "HTTP/",
+		"Invalid CONNECT response from proxy: " ~ stln);
+	int status;
+	try status = parse!int(parts[1]);
+	catch (ConvException) enforce(false, "Invalid CONNECT response from proxy: " ~ stln);
+
+	InetHeaderMap headers;
+	parseRFC5322Header(stream, headers, maxHeaderLineLength, request_allocator, false);
+
+	if (status == HTTPStatus.proxyAuthenticationRequired)
+		throw new HTTPStatusException(HTTPStatus.proxyAuthenticationRequired, "Proxy authentication required for CONNECT " ~ authority ~ ".");
+	enforce(status >= 200 && status < 300, format("HTTP proxy CONNECT request to %s was rejected: %s", authority, stln));
+}
 }
 
 private auto connectTCPWithTimeout(NetworkAddress addr, NetworkAddress bind_address, Duration timeout)
@@ -1304,15 +1417,11 @@ final class HTTPClientResponse : HTTPResponse {
 /** Returns clean host string. In case of unix socket it performs urlDecode on host. */
 package auto getFilteredHost(URL url)
 {
-	version(UnixSocket)
-	{
+	if (isUnixSocketSchema(url.schema)) {
 		import vibe.textfilter.urlencode : urlDecode;
-		if (url.schema == "https+unix" || url.schema == "http+unix")
-			return urlDecode(url.host);
-		else
-			return url.host;
-	} else
-		return url.host;
+		return urlDecode(url.host);
+	}
+	return url.host;
 }
 
 // This object is a placeholder and should to never be modified.
