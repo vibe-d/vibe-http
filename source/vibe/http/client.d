@@ -191,14 +191,16 @@ auto connectHTTP(string host, ushort port = 0, bool use_tls = false, const(HTTPC
 	auto sttngs = settings ? settings : defaultSettings;
 
 	if (port == 0) port = use_tls ? 443 : 80;
-	auto ckey = ConnInfo(host, sttngs.tlsPeerName, port, use_tls, sttngs.proxyURL.host, sttngs.proxyURL.port, sttngs.networkInterface);
+
+	auto ckey = ConnInfo(host, port, use_tls, sttngs);
 
 	ConnectionPool!HTTPClient pool;
-	s_connections.opApply((ref c) @safe {
-		if (c[0] == ckey)
+	foreach (ref c; s_connections[]) {
+		if (c[0] == ckey) {
 			pool = c[1];
-		return 0;
-	});
+			break;
+		}
+	}
 
 	if (!pool) {
 		logDebug("Create HTTP client pool %s(%s):%s %s proxy %s:%d", host, sttngs.tlsPeerName, port, use_tls, sttngs.proxyURL.host, sttngs.proxyURL.port);
@@ -230,7 +232,20 @@ static ~this()
 	}
 }
 
-private struct ConnInfo { string host; string tlsPeerName; ushort port; bool useTLS; string proxyIP; ushort proxyPort; NetworkAddress bind_addr; }
+private struct ConnInfo {
+	string host;
+	ushort port;
+	bool useTLS;
+	typeof(HTTPClientSettings.tupleof) settings;
+
+	this(string host, ushort port, bool use_tls, const(HTTPClientSettings) settings)
+	{
+		this.host = host;
+		this.port = port;
+		this.useTLS = use_tls;
+		this.settings = settings.tupleof;
+	}
+}
 private static RingBuffer!(Tuple!(ConnInfo, ConnectionPool!HTTPClient), 16) s_connections;
 
 
@@ -242,7 +257,10 @@ private static RingBuffer!(Tuple!(ConnInfo, ConnectionPool!HTTPClient), 16) s_co
 	Defines an HTTP/HTTPS proxy request or a connection timeout for an HTTPClient.
 */
 class HTTPClientSettings {
+	/// Optional URL of a proxy server to use for performing the request
 	URL proxyURL;
+
+	/// Keep-alive timeout that is assumed if the server does not send an explicit timeout
 	Duration defaultKeepAliveTimeout = 10.seconds;
 
 	/// Timeout for establishing a connection to the server
@@ -281,13 +299,7 @@ class HTTPClientSettings {
 	@property HTTPClientSettings dup()
 	const @safe {
 		auto ret = new HTTPClientSettings;
-		ret.proxyURL = this.proxyURL;
-		ret.connectTimeout = this.connectTimeout;
-		ret.readTimeout = this.readTimeout;
-		ret.networkInterface = this.networkInterface;
-		ret.dnsAddressFamily = this.dnsAddressFamily;
-		ret.tlsContextSetup = this.tlsContextSetup;
-		ret.tlsPeerName = this.tlsPeerName;
+		ret.tupleof = this.tupleof;
 		return ret;
 	}
 }
