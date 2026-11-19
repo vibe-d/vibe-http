@@ -584,6 +584,11 @@ scope:
 		this(conn, request, res, null, null);
 	}
 
+	~this()
+	{
+		assert(!m_reader.running, "Attempt to destroy WebSocket without closing it first");
+	}
+
 	/**
 		Determines if the WebSocket connection is still alive and ready for sending.
 
@@ -723,6 +728,8 @@ scope:
 	*/
 	void send(scope void delegate(scope OutgoingWebSocketMessage) @safe sender, FrameOpcode frameOpcode)
 	{
+		if (!connected) throw new Exception("Attempt to send frame on closed connection");
+
 		m_writeMutex.performLocked!({
 			enforce!WebSocketException(connected, "WebSocket not connected.");
 			/*scope*/auto message = new OutgoingWebSocketMessage(m_conn, frameOpcode, m_rng);
@@ -765,23 +772,9 @@ scope:
 		}
 		if (m_pingTimer) m_pingTimer.stop();
 
-
-		if (Task.getThis() == m_ownerTask) {
-			m_writeMutex.performLocked!({
-				if (m_clientResponse) {
-					m_clientResponse.disconnect();
-					m_clientResponse = HTTPClientResponse.init;
-				}
-				if (m_serverResponse) {
-					m_serverResponse.finalize();
-					m_serverResponse = HTTPServerResponse.init;
-				}
-			});
-
-			m_reader.join();
-
-			() @trusted { destroy(m_conn); } ();
-			m_conn = ConnectionStream.init;
+		if (Task.getThis() != m_reader) {
+			try m_reader.join();
+			catch (Exception e) logException(e, "Failed to join reader after closing web socket connection");
 		}
 	}
 
@@ -904,9 +897,23 @@ scope:
 		//  of our websocket connection, set the close code to 1006.
 		if (m_closeCode == 0) m_closeCode = WebSocketCloseReason.abnormalClosure;
 
+		try {
+			if (m_clientResponse) {
+				m_clientResponse.disconnect();
+				m_clientResponse = HTTPClientResponse.init;
+			}
+			if (m_serverResponse) {
+				m_serverResponse.finalize();
+				m_serverResponse = HTTPServerResponse.init;
+			}
+		} catch (Exception e) {
+			logException(e, "Failed to finalize HTTP response while shutting down WebSocket connection");
+		}
+
 		try m_conn.close();
 		catch (Exception e) logException(e, "Failed to close WebSocket connection");
 		m_conn = ConnectionStream.init;
+
 		try m_readCondition.notifyAll();
 		catch (Exception e) assert(false, e.msg);
 	}
