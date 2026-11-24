@@ -1063,10 +1063,12 @@ final class IncomingWebSocketMessage : InputStream {
 		size_t nread = 0;
 
 		while (dst.length > 0) {
-			enforce!WebSocketException(!empty , "cannot read from empty stream");
-			enforce!WebSocketException(leastSize > 0, "no data available" );
+			if (this.empty) {
+				if (mode == IOMode.immediate)
+					return nread;
+				throw new WebSocketException("Attempt to read past end of WebSocket message");
+			}
 
-			import std.algorithm : min;
 			auto sz = cast(size_t)min(leastSize, dst.length);
 			dst[0 .. sz] = m_currentFrame.payload[0 .. sz];
 			dst = dst[sz .. $];
