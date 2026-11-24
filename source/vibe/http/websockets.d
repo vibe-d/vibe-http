@@ -39,7 +39,7 @@ import vibe.http.client;
 import vibe.core.connectionpool;
 
 import core.time;
-import std.algorithm: equal, splitter;
+import std.algorithm: equal, min, splitter;
 import std.array;
 import std.base64;
 import std.conv;
@@ -672,22 +672,14 @@ scope:
 	*/
 	void send(scope const(char)[] data)
 	{
-		send(
-			(scope message) @safe
-			{
-				auto frameSize = m_fragmentSize ? m_fragmentSize : data.length;
-				for(size_t offset = 0; offset < data.length; offset += frameSize)
-				{
-					if (data.length - offset <= frameSize)	//last frame
-						message.write(cast(const ubyte[])data[offset..$]);	//this is the last loop, finalise will send the finish frame
-					else
-					{
-						message.write(cast(const ubyte[])data[offset..offset+frameSize]);	//send a continuation frame
-						message.flush;
-					}
-				}
-			}
-		, FrameOpcode.text);
+		send((scope message) @safe {
+				do {
+					size_t n = min(data.length, m_fragmentSize ? m_fragmentSize : data.length);
+					message.write(data[0 .. n]);
+					data = data[n .. $];
+					if (data.length > 0) message.flush();
+				} while (data.length > 0);
+			}, FrameOpcode.text);
 	}
 
 	/**
@@ -699,24 +691,16 @@ scope:
 			A `WebSocketException` is thrown if the connection gets closed
 			before or during the transfer of the message.
 	*/
-	void send(in ubyte[] data)
+	void send(scope const(ubyte)[] data)
 	{
-		send(
-			(scope message) @safe
-			{
-				auto frameSize = m_fragmentSize ? m_fragmentSize : data.length;
-				for(size_t offset = 0; offset < data.length; offset += frameSize)
-				{
-					if (data.length - offset <= frameSize)	//last frame
-						message.write(cast(const ubyte[])data[offset..$]);	//this is the last loop, finalise will send the finish frame
-					else
-					{
-						message.write(cast(const ubyte[])data[offset..offset+frameSize]);	//send a continuation frame
-						message.flush;
-					}
-				}
-			}
-		, FrameOpcode.binary);
+		send((scope message) @safe {
+				do {
+					size_t n = min(data.length, m_fragmentSize ? m_fragmentSize : data.length);
+					message.write(data[0 .. n]);
+					data = data[n .. $];
+					if (data.length > 0) message.flush();
+				} while (data.length > 0);
+			}, FrameOpcode.binary);
 	}
 
 	/**
@@ -747,7 +731,6 @@ scope:
 	*/
 	void close(short code = WebSocketCloseReason.normalClosure, scope const(char)[] reason = "")
 	{
-		import std.algorithm.comparison : min;
 		if(reason !is null && reason.length == 0)
 			reason = (cast(WebSocketCloseReason)code).closeReasonString;
 
@@ -1080,10 +1063,12 @@ final class IncomingWebSocketMessage : InputStream {
 		size_t nread = 0;
 
 		while (dst.length > 0) {
-			enforce!WebSocketException(!empty , "cannot read from empty stream");
-			enforce!WebSocketException(leastSize > 0, "no data available" );
+			if (this.empty) {
+				if (mode == IOMode.immediate)
+					return nread;
+				throw new WebSocketException("Attempt to read past end of WebSocket message");
+			}
 
-			import std.algorithm : min;
 			auto sz = cast(size_t)min(leastSize, dst.length);
 			dst[0 .. sz] = m_currentFrame.payload[0 .. sz];
 			dst = dst[sz .. $];
