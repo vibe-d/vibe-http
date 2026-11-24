@@ -1,3 +1,11 @@
+1.6.1 - 2026-11-24
+==================
+
+- Fixed an assertion failure in TCPConnection that could get triggered by actively closing a WebSocket - [pull #86][issue86]
+
+[issue86]: https://github.com/vibe-d/vibe-http/issues/86
+
+
 1.6.0 - 2026-11-14
 ==================
 
