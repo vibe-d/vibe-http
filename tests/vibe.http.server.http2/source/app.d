@@ -1,7 +1,7 @@
 import vibe.core.core : runWorkerTask;
 import vibe.core.log;
 import vibe.http.server;
-import curl : curlH2, curlH2Status, curlSupportsH2c;
+import curl : curlH2, curlH2Headers, curlH2Status, curlSupportsH2c;
 import std.algorithm.searching : find;
 import std.conv : to;
 import std.range.primitives : front;
@@ -130,6 +130,15 @@ void handleRequest(scope HTTPServerRequest req, scope HTTPServerResponse res)
 		return;
 	}
 
+	// header values whose Huffman encoding fills an exact number of octets,
+	// and whose length requires more than the 7 bit prefix of the length field
+	if (path == "/hpack") {
+		res.headers["x-hpack-short"] = "abc"; // 16 bits => 2 octets
+		res.headers["x-hpack-long"] = longHpackValue; // 1197 bits => 150 octets
+		res.writeBody("Hello, HTTP/2!");
+		return;
+	}
+
 	res.statusCode = HTTPStatus.notFound;
 	res.writeBody("not found");
 }
@@ -198,6 +207,27 @@ void sendRaw(ushort port, const(ubyte)[] data)
 	} catch (Exception e) {
 		logInfo("[sendRaw] receive error: %s", e.msg);
 	}
+}
+
+/// Value whose Huffman encoding spans an exact number of octets (1197 bits =>
+/// 150 octets), so that its length no longer fits in the 7 bit length prefix.
+enum string longHpackValue = () @trusted {
+	auto buf = new char[](171);
+	buf[] = 'x';
+	return cast(string) buf;
+}();
+
+@H2Test("hpack-boundary")
+void testHpackHuffmanBoundary(ushort port)
+{
+	import std.algorithm.searching : canFind;
+	import std.array : join;
+
+	auto headers = curlH2Headers(port, "/hpack");
+	assert(headers.canFind("x-hpack-short: abc"),
+		"Huffman encoded header value mangled, headers: " ~ headers.join("\n"));
+	assert(headers.canFind("x-hpack-long: " ~ longHpackValue),
+		"Long Huffman encoded header value mangled, headers: " ~ headers.join("\n"));
 }
 
 @H2Test("bad-preface")

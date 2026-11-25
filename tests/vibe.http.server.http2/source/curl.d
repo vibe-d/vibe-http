@@ -69,6 +69,39 @@ string curlH2(ushort port, string path, string[] extraArgs = [])
 	return r.output;
 }
 
+/// Run curl and return the response headers, one (lower case) line each.
+/// Retries on connection failure to handle server startup.
+string[] curlH2Headers(ushort port, string path, string[] extraArgs = [])
+{
+	import std.process : execute;
+	import std.array : array, split;
+	import std.algorithm.iteration : map;
+	import std.string : toLower;
+	import core.thread : Thread;
+	import core.time : msecs;
+
+	auto url = urlFor(port, path);
+	auto args = ["curl", "-s", "--max-time", "5", "--http2-prior-knowledge",
+		"-o", "/dev/null", "-D", "-"]
+		~ extraArgs ~ [url];
+
+	logInfo("[curl] GET %s (headers mode)", url);
+
+	string last;
+	foreach (attempt; 0 .. 20) {
+		auto r = execute(args);
+		if (r.status == 0 || r.status == 16) {
+			logInfo("[curl] attempt %d: status=%d, headers received", attempt + 1, r.status);
+			return r.output.strip.split("\r\n").map!(l => l.toLower).array;
+		}
+		logInfo("[curl] attempt %d: status=%d, retrying...", attempt + 1, r.status);
+		last = r.output;
+		Thread.sleep(200.msecs);
+	}
+	logError("[curl] all retries exhausted: %s", last);
+	return [];
+}
+
 /// Run curl and return just the HTTP status code.
 /// Retries on "000" (connection failed) to handle server startup.
 string curlH2Status(ushort port, string path, string[] extraArgs = [])
