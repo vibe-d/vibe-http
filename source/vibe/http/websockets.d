@@ -390,8 +390,8 @@ enum WebSocketCloseReason : short
 	tlsHandshake = 1015
 }
 
-string closeReasonString(WebSocketCloseReason reason) @nogc @safe
-{
+string closeReasonString(WebSocketCloseReason reason)
+@nogc @safe nothrow {
 	import std.math : floor;
 
 	//round down to the nearest thousand to get category
@@ -746,20 +746,10 @@ scope:
 		else
 			reason = reason[0 .. min($, 123)];
 
-		if (connected) {
-			try {
-				send((scope msg) {
-					m_sentCloseFrame = true;
-					if (code != 0) {
-						msg.write(std.bitmanip.nativeToBigEndian(code));
-						msg.write(cast(const ubyte[])reason);
-					}
-				}, FrameOpcode.close);
-			} catch (Exception e) {
-				logDiagnostic("Failed to send active web socket close frame: %s", e.msg);
-			}
-		}
 		if (m_pingTimer) m_pingTimer.stop();
+
+		// notify peer
+		if (connected) sendClose(code, reason);
 
 		// ensure the read loop gets terminated after a timeout to
 		// avoid indefinite hangs if the peer doesn't ever answer with
@@ -920,6 +910,10 @@ scope:
 		//  of our websocket connection, set the close code to 1006.
 		if (m_closeCode == 0) m_closeCode = WebSocketCloseReason.abnormalClosure;
 
+		// notify peer we are done
+		if (!m_sentCloseFrame)
+			sendClose(m_closeCode, closeReasonString(cast(WebSocketCloseReason)m_closeCode));
+
 		try {
 			if (m_clientResponse) {
 				m_clientResponse.disconnect();
@@ -957,6 +951,22 @@ scope:
 			logDebugV("Ping sent");
 		} catch (Exception e) {
 			logError("Failed to send WebSocket ping frame: %s", e.msg);
+		}
+	}
+
+	private void sendClose(short code, scope const(char)[] reason)
+	nothrow {
+		assert(!m_sentCloseFrame);
+		try {
+			send((scope msg) {
+				m_sentCloseFrame = true;
+				if (code != 0) {
+					msg.write(std.bitmanip.nativeToBigEndian(code));
+					msg.write(cast(const ubyte[])reason);
+				}
+			}, FrameOpcode.close);
+		} catch (Exception e) {
+			logDiagnostic("Failed to send active web socket close frame: %s", e.msg);
 		}
 	}
 }
