@@ -390,8 +390,8 @@ enum WebSocketCloseReason : short
 	tlsHandshake = 1015
 }
 
-string closeReasonString(WebSocketCloseReason reason) @nogc @safe
-{
+string closeReasonString(WebSocketCloseReason reason)
+@nogc @safe nothrow {
 	import std.math : floor;
 
 	//round down to the nearest thousand to get category
@@ -529,6 +529,10 @@ final class WebSocket {
 		RandomNumberStream m_rng;
 		size_t m_payloadMaxLength;
 		size_t m_fragmentSize;
+		/// Maximum time to wait for the peer to acknowledge an actively sent
+		/// close frame. Initialized from the corresponding HTTP settings and
+		/// can be set to Duration.max to wait for the close frame indefinitely.
+		Duration m_closeTimeout = 30.seconds;
 	}
 
 scope:
@@ -568,6 +572,7 @@ scope:
 				}
 				m_payloadMaxLength = request.serverSettings.webSocketPayloadMaxLength;
 				m_fragmentSize = request.serverSettings.webSocketFragmentSize;
+				m_closeTimeout = request.serverSettings.webSocketCloseTimeout;
 			}
 		});
 	}
@@ -577,6 +582,7 @@ scope:
 		this(conn, null, null, rng, client_res);
 		m_payloadMaxLength = settings.webSocketPayloadMaxLength;
 		m_fragmentSize = settings.webSocketFragmentSize;
+		m_closeTimeout = settings.webSocketCloseTimeout;
 	}
 
 	private this(ConnectionStream conn, HTTPServerRequest request, HTTPServerResponse res)
@@ -626,7 +632,7 @@ scope:
 	/**
 		Checks if data is readily available for read.
 	*/
-	@property bool dataAvailableForRead() { return m_conn.dataAvailableForRead || m_nextMessage !is null; }
+	@property bool dataAvailableForRead() { return m_conn && (m_conn.dataAvailableForRead || m_nextMessage !is null); }
 
 	/** Waits until either a message arrives or until the connection is closed.
 
@@ -740,25 +746,40 @@ scope:
 		else
 			reason = reason[0 .. min($, 123)];
 
-		if (connected) {
-			try {
-				send((scope msg) {
-					m_sentCloseFrame = true;
-					if (code != 0) {
-						msg.write(std.bitmanip.nativeToBigEndian(code));
-						msg.write(cast(const ubyte[])reason);
-					}
-				}, FrameOpcode.close);
-			} catch (Exception e) {
-				logDiagnostic("Failed to send active web socket close frame: %s", e.msg);
-			}
-		}
 		if (m_pingTimer) m_pingTimer.stop();
 
-		if (Task.getThis() != m_reader) {
-			try m_reader.join();
-			catch (Exception e) logException(e, "Failed to join reader after closing web socket connection");
+		// notify peer
+		if (connected) sendClose(code, reason);
+
+		// ensure the read loop gets terminated after a timeout to
+		// avoid indefinite hangs if the peer doesn't ever answer with
+		// a close frame. using Duration.max as the timeout disables
+		// this behavior, making the read loop wait for the close frame
+		// of the peer indefinitely.
+		Timer timeout_timer;
+		Task timeout_task;
+		if (m_closeTimeout != Duration.max && m_conn && m_conn.connected) {
+			timeout_timer = setTimer(m_closeTimeout, {
+				timeout_task = Task.getThis();
+				try {
+					if (m_conn && m_conn.connected) {
+						logDebug("WebSocket close frame was not acknowledged in time, closing connection.");
+						auto c = m_conn;
+						m_conn = null;
+						c.close();
+					}
+				} catch (Exception e) {
+					logException(e, "Failed to close WebSocket connection after close-frame timeout");
+				}
+				m_readCondition.notifyAll();
+			});
 		}
+
+		assert (Task.getThis() != m_reader);
+		m_readCondition.notifyAll();
+		m_reader.joinUninterruptible();
+		if (timeout_timer) timeout_timer.stop();
+		if (timeout_task) timeout_task.joinUninterruptible();
 	}
 
 	/**
@@ -813,8 +834,12 @@ scope:
 		try m_readMutex.performLocked!({}); //Wait until initialization
 		catch (Exception e) {
 			logException(e, "WebSocket reader task failed to wait for initialization");
-			try m_conn.close();
-			catch (Exception e) logException(e, "Failed to close WebSocket connection after initialization failure");
+			if (m_conn) {
+				auto c = m_conn;
+				m_conn = null;
+				try c.close();
+				catch (Exception e) logException(e, "Failed to close WebSocket connection after initialization failure");
+			}
 			m_closeCode = WebSocketCloseReason.abnormalClosure;
 			try m_readCondition.notifyAll();
 			catch (Exception e) assert(false, e.msg);
@@ -822,9 +847,15 @@ scope:
 		}
 
 		try {
+			// NOTE: `m_conn` can be seized and closed by `close()`'s
+			//       acknowledgement timeout, or by an explicit call to `close()`,
+			//       while this task is parked in an I/O operation. Every
+			//       predicate that yields therefore has to be followed by a
+			//       re-check of `m_conn` before any further read is issued.
 			loop:
-			while (!m_conn.empty) {
+			while (m_conn) {
 				assert(!m_nextMessage);
+				if (m_conn.empty || !m_conn) break loop;
 				/*scope*/auto msg = new IncomingWebSocketMessage(m_conn, m_rng, m_payloadMaxLength);
 
 				switch (msg.frameOpcode) {
@@ -856,7 +887,8 @@ scope:
 							}
 						}
 
-						if(!m_sentCloseFrame) close();
+						if (!m_sentCloseFrame)
+							m_closeCode = WebSocketCloseReason.normalClosure;
 						logDebug("Terminating connection (%s)", m_sentCloseFrame);
 						break loop;
 					case FrameOpcode.continuation:
@@ -866,7 +898,8 @@ scope:
 						m_readMutex.performLocked!({
 							m_nextMessage = msg;
 							m_readCondition.notifyAll();
-							while (m_nextMessage) m_readCondition.wait();
+							while (m_nextMessage && m_conn && m_conn.connected)
+								m_readCondition.wait();
 						});
 						break;
 				}
@@ -879,6 +912,15 @@ scope:
 		// If no close code was passed, e.g. this was an unclean termination
 		//  of our websocket connection, set the close code to 1006.
 		if (m_closeCode == 0) m_closeCode = WebSocketCloseReason.abnormalClosure;
+
+		// notify peer we are done
+		if (!m_sentCloseFrame) {
+			sendClose(m_closeCode, closeReasonString(cast(WebSocketCloseReason)m_closeCode));
+
+			// notify readers of closed connection
+			try m_readCondition.notifyAll();
+			catch (Exception e) assert(false, e.msg);
+		}
 
 		try {
 			if (m_clientResponse) {
@@ -893,9 +935,12 @@ scope:
 			logException(e, "Failed to finalize HTTP response while shutting down WebSocket connection");
 		}
 
-		try m_conn.close();
-		catch (Exception e) logException(e, "Failed to close WebSocket connection");
-		m_conn = ConnectionStream.init;
+		if (m_conn) {
+			auto c = m_conn;
+			m_conn = null;
+			try c.close();
+			catch (Exception e) logException(e, "Failed to close WebSocket connection");
+		}
 
 		try m_readCondition.notifyAll();
 		catch (Exception e) assert(false, e.msg);
@@ -907,8 +952,6 @@ scope:
 			if (!m_pongReceived) {
 				logDebug("Pong skipped. Closing connection.");
 				close();
-				try m_readCondition.notifyAll();
-				catch (Exception e) assert(false, e.msg);
 				return;
 			}
 			m_pongReceived = false;
@@ -916,6 +959,22 @@ scope:
 			logDebugV("Ping sent");
 		} catch (Exception e) {
 			logError("Failed to send WebSocket ping frame: %s", e.msg);
+		}
+	}
+
+	private void sendClose(short code, scope const(char)[] reason)
+	nothrow {
+		assert(!m_sentCloseFrame);
+		try {
+			send((scope msg) {
+				m_sentCloseFrame = true;
+				if (code != 0) {
+					msg.write(std.bitmanip.nativeToBigEndian(code));
+					msg.write(cast(const ubyte[])reason);
+				}
+			}, FrameOpcode.close);
+		} catch (Exception e) {
+			logDiagnostic("Failed to send active web socket close frame: %s", e.msg);
 		}
 	}
 }

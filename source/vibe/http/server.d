@@ -757,6 +757,19 @@ final class HTTPServerSettings {
 	*/
 	Duration webSocketPingInterval = 60.seconds;
 
+	/** Time to wait for the peer to acknowledge a locally initiated WebSocket
+		close frame.
+
+		Once a close frame has been sent, the connection is waited for to be
+		closed by the peer's corresponding close frame. If that doesn't happen
+		within this duration, the connection is forcibly closed so that the
+		reading task can terminate.
+
+		The default value is 30 seconds; set to Duration.max to wait
+		indefinitely for the peer's close frame.
+	*/
+	Duration webSocketCloseTimeout = 30.seconds;
+
 	/** Maximum payload size to accept in websocket messages
 	 */
 	size_t webSocketPayloadMaxLength = 10_000_000;

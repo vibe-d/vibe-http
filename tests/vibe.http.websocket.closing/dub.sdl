@@ -1,0 +1,2 @@
+name "websocket_closing"
+dependency "vibe-http" path="../../"
