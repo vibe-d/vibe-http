@@ -774,10 +774,9 @@ scope:
 			});
 		}
 
-		if (Task.getThis() != m_reader) {
-			m_readCondition.notifyAll();
-			m_reader.joinUninterruptible();
-		}
+		assert (Task.getThis() != m_reader);
+		m_readCondition.notifyAll();
+		m_reader.joinUninterruptible();
 	}
 
 	/**
@@ -885,7 +884,8 @@ scope:
 							}
 						}
 
-						if(!m_sentCloseFrame) close();
+						if (!m_sentCloseFrame)
+							m_closeCode = WebSocketCloseReason.normalClosure;
 						logDebug("Terminating connection (%s)", m_sentCloseFrame);
 						break loop;
 					case FrameOpcode.continuation:
