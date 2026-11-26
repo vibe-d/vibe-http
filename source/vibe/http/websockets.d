@@ -911,8 +911,13 @@ scope:
 		if (m_closeCode == 0) m_closeCode = WebSocketCloseReason.abnormalClosure;
 
 		// notify peer we are done
-		if (!m_sentCloseFrame)
+		if (!m_sentCloseFrame) {
 			sendClose(m_closeCode, closeReasonString(cast(WebSocketCloseReason)m_closeCode));
+
+			// notify readers of closed connection
+			try m_readCondition.notifyAll();
+			catch (Exception e) assert(false, e.msg);
+		}
 
 		try {
 			if (m_clientResponse) {
