@@ -254,7 +254,7 @@ void main()
 	test("pending message", &handlePending, &clientPending);
 	test("idle", &handleIdle, &clientIdle);
 	test("double close", &handleDoubleClose, &clientDoubleClose);
-	test("peer hangup", &handlePeerHangup, &clientPeerHangup, closeTimeout: 1000.msecs);
+	test("peer hangup", &handlePeerHangup, &clientPeerHangup, Duration.zero, 1000.msecs);
 	test("peer hangup race", &handlePeerHangup, &clientPeerHangup);
 	test("pong skip", &handlePongSkip, &clientPongSkip, 250.msecs);
 
