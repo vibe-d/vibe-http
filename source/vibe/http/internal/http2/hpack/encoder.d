@@ -95,8 +95,9 @@ private void encodeLiteralField(R)(string src, ref R dst, bool huffman = true) @
 	if (huffman) {
 		encodeHuffman(src, dst);
 	} else {
-		ubyte blen = (src.length) & 127;
-		dst.put(blen);
+		// the length is an HPACK integer with a 7 bit prefix, continued in extra
+		// octets if it doesn't fit (RFC 7541, section 5.1 and 5.2)
+		writePrefixedInteger(cast(ubyte)(0), src.length, 7, dst);
 		dst.put(cast(const(ubyte)[])src);
 	}
 }

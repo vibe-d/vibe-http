@@ -1,6 +1,7 @@
 module vibe.http.internal.http2.hpack.huffman;
 
 import vibe.http.internal.http2.hpack.exception;
+import vibe.http.internal.http2.hpack.util;
 
 import std.range;
 
@@ -8,20 +9,27 @@ import std.range;
 
 	The huffman table specifications can be found at:
 	Appendix B of RFC 7541: https://tools.ietf.org/html/rfc7541#appendix-B
+
+	The length prefix of section 5.2 is emitted too, as an integer with a 7 bit
+	prefix and the H (huffman) flag set in the most significant bit.
 */
 void encodeHuffman(I, O)(I source, ref O dst) @safe
+	if (isInputRange!I && isOutputRange!(O, ubyte))
 {
 	ulong bits;
 	int bitsLeft = 40;
-	size_t len = 0;
+	size_t bitCount = 0;
 
-	// compute length
+	// compute length (in bits) of the encoded string
 	foreach (c; source) {
 		auto e = HuffEncodeCodes[c];
-		len += e.length;
+		bitCount += e.length;
 	}
 
-	dst.put(cast(ubyte)((len / 8 ^ 128) + 1));
+	// the length prefix is an HPACK integer with a 7 bit prefix and the H
+	// (huffman) flag set, counting the octets of the encoded data - the last
+	// one being padded with the EOS prefix (RFC 7541, section 5.2)
+	writePrefixedInteger(cast(ubyte)(0x80), (bitCount + 7) / 8, 7, dst);
 
 	foreach (c; source) {
 		auto e = HuffEncodeCodes[c];
@@ -52,6 +60,52 @@ void encodeHuffman(I, O)(I source, ref O dst) @safe
 	];
 	encodeHuffman(src, bres);
 	assert(bres.peekDst == expected);
+}
+
+@nogc unittest {
+	// the length prefix counts the octets of the encoded data, including the one
+	// filled with the EOS padding - no extra octet is announced when the number
+	// of bits is an exact multiple of 8 (RFC 7541, section 5.2)
+	import vibe.internal.array : BatchBuffer;
+
+	string src = "abc";
+	BatchBuffer!(ubyte, 3) bres;
+	bres.putN(3);
+	ubyte[3] expected = [
+		0x82, 0x1c, 0x64
+	];
+	encodeHuffman(src, bres);
+	assert(bres.peekDst == expected);
+}
+
+unittest {
+	// lengths which don't fit in the 7 bit prefix are continued in extra octets
+	import std.array : appender;
+
+	char[171] buf;
+	buf[] = 'x';
+	string src = buf.idup; // 1197 bits => 150 octets
+	auto bres = appender!(ubyte[])();
+	encodeHuffman(src, bres);
+
+	assert(bres.data[0 .. 2] == [0xff, 0x17]);
+	assert(bres.data.length == 152);
+}
+
+unittest {
+	// encode/decode round trip for every printable ASCII character
+	import std.array : appender;
+
+	foreach (c; ' '..'~') {
+		auto bres = appender!(ubyte[])();
+		encodeHuffman([c], bres);
+		assert(bres.data[0] & 0x80, "Huffman flag not set");
+		assert(bres.data.length == (bres.data[0] & 0x7f) + 1, "Invalid length prefix");
+
+		auto dres = appender!(char[])();
+		decodeHuffman(bres.data[1 .. $].idup, dres);
+		assert(dres.data == [c]);
+	}
 }
 
 /** Huffman decoding for HPACK header compression
