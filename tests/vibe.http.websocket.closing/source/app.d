@@ -254,7 +254,8 @@ void main()
 	test("pending message", &handlePending, &clientPending);
 	test("idle", &handleIdle, &clientIdle);
 	test("double close", &handleDoubleClose, &clientDoubleClose);
-	test("peer hangup", &handlePeerHangup, &clientPeerHangup);
+	test("peer hangup", &handlePeerHangup, &clientPeerHangup, closeTimeout: 1000.msecs);
+	test("peer hangup race", &handlePeerHangup, &clientPeerHangup);
 	test("pong skip", &handlePongSkip, &clientPongSkip, 250.msecs);
 
 	// a close timeout of Duration.max disables the forced shutdown, so both

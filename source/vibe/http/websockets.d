@@ -757,9 +757,10 @@ scope:
 		// this behavior, making the read loop wait for the close frame
 		// of the peer indefinitely.
 		Timer timeout_timer;
-		scope (exit) if (timeout_timer) timeout_timer.stop();
+		Task timeout_task;
 		if (m_closeTimeout != Duration.max && m_conn && m_conn.connected) {
 			timeout_timer = setTimer(m_closeTimeout, {
+				timeout_task = Task.getThis();
 				try {
 					if (m_conn && m_conn.connected) {
 						logDebug("WebSocket close frame was not acknowledged in time, closing connection.");
@@ -777,6 +778,8 @@ scope:
 		assert (Task.getThis() != m_reader);
 		m_readCondition.notifyAll();
 		m_reader.joinUninterruptible();
+		if (timeout_timer) timeout_timer.stop();
+		if (timeout_task) timeout_task.joinUninterruptible();
 	}
 
 	/**
