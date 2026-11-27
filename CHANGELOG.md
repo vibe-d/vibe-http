@@ -1,3 +1,18 @@
+1.6.2 - 2026-11-27
+==================
+
+- Fixes possible hangs for `WebSocket.close()` - [pull #88][issue88]
+- Fixes wrong Huffmen length encoding in the HTTP/2 server - [pull #90][issue90], [issue #43][issue43], [issue #58][issue58]
+- Fixes possible assertion failures in `WebSocket.dataAvailableForRead`  - [pull #89][issue89], [issue #39][issue39]
+
+[issue39]: https://github.com/vibe-d/vibe-http/issues/39
+[issue43]: https://github.com/vibe-d/vibe-http/issues/43
+[issue58]: https://github.com/vibe-d/vibe-http/issues/58
+[issue88]: https://github.com/vibe-d/vibe-http/issues/88
+[issue89]: https://github.com/vibe-d/vibe-http/issues/89
+[issue90]: https://github.com/vibe-d/vibe-http/issues/90
+
+
 1.6.1 - 2026-11-24
 ==================
 
