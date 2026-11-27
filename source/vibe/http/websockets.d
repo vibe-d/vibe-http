@@ -632,7 +632,7 @@ scope:
 	/**
 		Checks if data is readily available for read.
 	*/
-	@property bool dataAvailableForRead() { return m_conn && (m_conn.dataAvailableForRead || m_nextMessage !is null); }
+	@property bool dataAvailableForRead() { return m_nextMessage !is null; }
 
 	/** Waits until either a message arrives or until the connection is closed.
 
