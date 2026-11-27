@@ -762,6 +762,7 @@ scope:
 			timeout_timer = setTimer(m_closeTimeout, {
 				timeout_task = Task.getThis();
 				try {
+					auto l = scopedMutexLock(m_writeMutex);
 					if (m_conn && m_conn.connected) {
 						logDebug("WebSocket close frame was not acknowledged in time, closing connection.");
 						auto c = m_conn;
@@ -923,6 +924,7 @@ scope:
 		}
 
 		try {
+			auto l = scopedMutexLock(m_writeMutex);
 			if (m_clientResponse) {
 				m_clientResponse.disconnect();
 				m_clientResponse = HTTPClientResponse.init;
@@ -936,10 +938,12 @@ scope:
 		}
 
 		if (m_conn) {
-			auto c = m_conn;
-			m_conn = null;
-			try c.close();
-			catch (Exception e) logException(e, "Failed to close WebSocket connection");
+			try {
+				auto l = scopedMutexLock(m_writeMutex);
+				auto c = m_conn;
+				m_conn = null;
+				c.close();
+			}  catch (Exception e) logException(e, "Failed to close WebSocket connection");
 		}
 
 		try m_readCondition.notifyAll();
