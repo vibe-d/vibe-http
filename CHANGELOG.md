@@ -1,3 +1,11 @@
+1.6.3 - 2026-11-28
+==================
+
+- Fixed a possible crash for concurrent destruction and write operation on a `WebSocket` - [pull #91][issue91]
+
+[issue91]: https://github.com/vibe-d/vibe-http/issues/91
+
+
 1.6.2 - 2026-11-27
 ==================
 
